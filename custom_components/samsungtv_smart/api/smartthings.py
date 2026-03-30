@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from datetime import timedelta
 from enum import Enum
-import logging
 
 from aiohttp import ClientSession
+from homeassistant.util import Throttle
 from pysmartthings import SmartThings
 from pysmartthings.command import Command
-
-from homeassistant.util import Throttle
 
 # Capability names as strings (pysmartthings v6.0+ compatibility)
 # In older versions these were CAP_SWITCH, CAP_AUDIO_VOLUME, etc.
@@ -200,7 +199,9 @@ class SmartThingsTV:
         return source_list
 
     @staticmethod
-    async def get_devices_list(api_key: str, session: ClientSession, device_label: str = "") -> dict:
+    async def get_devices_list(
+        api_key: str, session: ClientSession, device_label: str = ""
+    ) -> dict:
         """Get list of available SmartThings devices using pysmartthings."""
         result = {}
 
@@ -231,7 +232,7 @@ class SmartThingsTV:
         return result
 
     @Throttle(timedelta(seconds=1))
-    async def async_device_update(self, use_channel_info: bool = True):
+    async def async_device_update(self, use_channel_info: bool = True):  # noqa: C901
         """Update device status using pysmartthings."""
         self._get_api_key()
 
@@ -275,7 +276,10 @@ class SmartThingsTV:
                 self._muted = main_comp["audioMute"]["mute"].value == "muted"
 
             # Update source
-            if "mediaInputSource" in main_comp and "inputSource" in main_comp["mediaInputSource"]:
+            if (
+                "mediaInputSource" in main_comp
+                and "inputSource" in main_comp["mediaInputSource"]
+            ):
                 self._source = main_comp["mediaInputSource"]["inputSource"].value
 
             # Update channel info if enabled
@@ -288,8 +292,13 @@ class SmartThingsTV:
                         self._channel_name = tv_channel["tvChannelName"].value
 
             # Update source list
-            if "mediaInputSource" in main_comp and "supportedInputSources" in main_comp["mediaInputSource"]:
-                supported_inputs = main_comp["mediaInputSource"]["supportedInputSources"].value
+            if (
+                "mediaInputSource" in main_comp
+                and "supportedInputSources" in main_comp["mediaInputSource"]
+            ):
+                supported_inputs = main_comp["mediaInputSource"][
+                    "supportedInputSources"
+                ].value
                 if supported_inputs:
                     self._source_list = {}
                     self._source_list_map = {}
@@ -314,7 +323,9 @@ class SmartThingsTV:
                 if "pictureMode" in picture_mode_cap:
                     self._picture_mode = picture_mode_cap["pictureMode"].value
                 if "supportedPictureModes" in picture_mode_cap:
-                    self._picture_mode_list = picture_mode_cap["supportedPictureModes"].value
+                    self._picture_mode_list = picture_mode_cap[
+                        "supportedPictureModes"
+                    ].value
 
         except Exception as err:
             _LOGGER.error("Error updating SmartThings status: %s", err)
@@ -335,7 +346,9 @@ class SmartThingsTV:
         """Turn device on using pysmartthings."""
         self._get_api_key()
         try:
-            cmd = Command(component_id=COMPONENT_MAIN, capability=CAP_SWITCH, command="on")
+            cmd = Command(
+                component_id=COMPONENT_MAIN, capability=CAP_SWITCH, command="on"
+            )
             await self._st.execute_device_command(self._device_id, [cmd])
             self._state = STStatus.STATE_ON
         except Exception as err:
@@ -346,7 +359,9 @@ class SmartThingsTV:
         """Turn device off using pysmartthings."""
         self._get_api_key()
         try:
-            cmd = Command(component_id=COMPONENT_MAIN, capability=CAP_SWITCH, command="off")
+            cmd = Command(
+                component_id=COMPONENT_MAIN, capability=CAP_SWITCH, command="off"
+            )
             await self._st.execute_device_command(self._device_id, [cmd])
             self._state = STStatus.STATE_OFF
         except Exception as err:
@@ -363,35 +378,35 @@ class SmartThingsTV:
                     component_id=COMPONENT_MAIN,
                     capability=CAP_AUDIO_VOLUME,
                     command="setVolume",
-                    arguments=[int(command)]
+                    arguments=[int(command)],
                 )
             elif cmd_type == "stepvolume":
                 cmd_name = "volumeUp" if command == "up" else "volumeDown"
                 cmd = Command(
                     component_id=COMPONENT_MAIN,
                     capability=CAP_AUDIO_VOLUME,
-                    command=cmd_name
+                    command=cmd_name,
                 )
             elif cmd_type == "audiomute":
                 cmd_name = "mute" if command == "on" else "unmute"
                 cmd = Command(
                     component_id=COMPONENT_MAIN,
                     capability=CAP_AUDIO_MUTE,
-                    command=cmd_name
+                    command=cmd_name,
                 )
             elif cmd_type == "selectchannel":
                 cmd = Command(
                     component_id=COMPONENT_MAIN,
                     capability=CAP_TV_CHANNEL,
                     command="setTvChannel",
-                    arguments=[command]
+                    arguments=[command],
                 )
             elif cmd_type == "stepchannel":
                 cmd_name = "channelUp" if command == "up" else "channelDown"
                 cmd = Command(
                     component_id=COMPONENT_MAIN,
                     capability=CAP_TV_CHANNEL,
-                    command=cmd_name
+                    command=cmd_name,
                 )
             else:
                 _LOGGER.warning("Unknown command type: %s", cmd_type)
@@ -411,7 +426,7 @@ class SmartThingsTV:
                 component_id=COMPONENT_MAIN,
                 capability=CAP_MEDIA_INPUT_SOURCE,
                 command="setInputSource",
-                arguments=[source]
+                arguments=[source],
             )
             await self._st.execute_device_command(self._device_id, [cmd])
             self._set_source(source)
@@ -427,7 +442,7 @@ class SmartThingsTV:
                 component_id=COMPONENT_MAIN,
                 capability="samsungvd.mediaInputSource",
                 command="setInputSource",
-                arguments=[source]
+                arguments=[source],
             )
             await self._st.execute_device_command(self._device_id, [cmd])
         except Exception as err:
@@ -447,7 +462,7 @@ class SmartThingsTV:
                 component_id=COMPONENT_MAIN,
                 capability="custom.soundmode",
                 command="setSoundMode",
-                arguments=[mode]
+                arguments=[mode],
             )
             await self._st.execute_device_command(self._device_id, [cmd])
             self._sound_mode = mode
@@ -468,7 +483,7 @@ class SmartThingsTV:
                 component_id=COMPONENT_MAIN,
                 capability="custom.picturemode",
                 command="setPictureMode",
-                arguments=[mode]
+                arguments=[mode],
             )
             await self._st.execute_device_command(self._device_id, [cmd])
             self._picture_mode = mode

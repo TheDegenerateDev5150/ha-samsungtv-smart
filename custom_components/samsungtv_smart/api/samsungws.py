@@ -24,19 +24,19 @@ Copyright (C) 2020 Ollo69
 from __future__ import annotations
 
 import base64
-from datetime import datetime
-from enum import Enum
 import json
 import logging
 import socket
 import ssl
 import subprocess
 import sys
-from threading import Lock, Thread
 import time
+import uuid
+from datetime import datetime
+from enum import Enum
+from threading import Lock, Thread
 from typing import Any
 from urllib.parse import urlencode, urljoin
-import uuid
 
 import aiohttp
 import requests
@@ -414,7 +414,10 @@ class SamsungTVWS:
         payload = json.dumps(command)
         try:
             connection.send(payload)
-        except (websocket.WebSocketConnectionClosedException, WebSocketProtocolException) as exc:
+        except (
+            websocket.WebSocketConnectionClosedException,
+            WebSocketProtocolException,
+        ) as exc:
             # Gérer à la fois les fermetures normales et les codes 1005 invalides
             if isinstance(exc, WebSocketProtocolException):
                 error_msg = str(exc)
