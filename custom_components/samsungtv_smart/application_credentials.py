@@ -18,6 +18,12 @@ from homeassistant.helpers.config_entry_oauth2_flow import AbstractOAuth2Impleme
 
 from .const import DOMAIN
 
+# Placeholders used in application_credentials translation strings
+DESCRIPTION_PLACEHOLDERS = {
+    "smartthings_portal": "https://developer.smartthings.com/",
+    "oauth_docs": "https://developer.smartthings.com/docs/connected-services/oauth-integrations",
+}
+
 _LOGGER = logging.getLogger(__name__)
 
 # SmartThings OAuth endpoints
