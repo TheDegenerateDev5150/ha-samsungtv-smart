@@ -81,13 +81,16 @@
       },
       "manual": {
         "title": "Manual Configuration",
-        "description": "Enter your TV's IP address and SmartThings credentials.\n\nTo create a Personal Access Token, visit https://account.smartthings.com/tokens",
+        "description": "Enter your TV's IP address and SmartThings credentials.\n\nTo create a Personal Access Token, visit [SmartThings Tokens]({st_tokens_url})\n",
         "data": {
           "host": "TV IP Address",
           "name": "Device Name",
           "use_ha_name_for_ws": "Use Home Assistant location name for WebSocket",
           "api_key": "SmartThings Personal Access Token (PAT)",
           "st_entry_unique_id": "Or use SmartThings Integration Token"
+        },
+        "description_placeholders": {
+          "st_tokens_url": "https://account.smartthings.com/tokens"
         }
       },
       "st_integration": {
