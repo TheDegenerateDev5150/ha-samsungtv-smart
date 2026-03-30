@@ -7,16 +7,14 @@ import logging
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (CONF_HOST, CONF_ID, CONF_NAME, CONF_PORT,
-                                 CONF_TOKEN)
+from homeassistant.const import CONF_HOST, CONF_ID, CONF_NAME, CONF_PORT, CONF_TOKEN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api.art import SamsungTVAsyncArt
-from .const import (CONF_WS_NAME, DATA_ART_API, DATA_CFG, DEFAULT_PORT, DOMAIN,
-                    WS_PREFIX)
+from .const import CONF_WS_NAME, DATA_ART_API, DATA_CFG, DEFAULT_PORT, DOMAIN, WS_PREFIX
 
 _LOGGER = logging.getLogger(__name__)
 

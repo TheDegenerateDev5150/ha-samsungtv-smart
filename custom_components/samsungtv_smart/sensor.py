@@ -3,29 +3,51 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 import logging
 import time
-from datetime import timedelta
 from typing import Any
 
-from homeassistant.components.sensor import (SensorDeviceClass, SensorEntity,
-                                             SensorStateClass)
+from pysmartthings import Attribute, Capability
+
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (CONF_HOST, CONF_ID, CONF_NAME, CONF_PORT,
-                                 CONF_TOKEN, LIGHT_LUX)
+from homeassistant.const import (
+    CONF_HOST,
+    CONF_ID,
+    CONF_NAME,
+    CONF_PORT,
+    CONF_TOKEN,
+    LIGHT_LUX,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import (CoordinatorEntity,
-                                                      DataUpdateCoordinator)
-from pysmartthings import Attribute, Capability
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
+)
 
 from . import async_get_samsungtv_api_key
 from .api.art import SamsungTVAsyncArt
-from .const import (AUTH_METHOD_OAUTH, CONF_API_KEY, CONF_AUTH_METHOD,
-                    CONF_DEVICE_ID, CONF_OAUTH_TOKEN, CONF_WS_NAME,
-                    DATA_ART_API, DATA_CFG, DEFAULT_PORT, DOMAIN, WS_PREFIX)
+from .const import (
+    AUTH_METHOD_OAUTH,
+    CONF_API_KEY,
+    CONF_AUTH_METHOD,
+    CONF_DEVICE_ID,
+    CONF_OAUTH_TOKEN,
+    CONF_WS_NAME,
+    DATA_ART_API,
+    DATA_CFG,
+    DEFAULT_PORT,
+    DOMAIN,
+    WS_PREFIX,
+)
 
 _LOGGER = logging.getLogger(__name__)
 

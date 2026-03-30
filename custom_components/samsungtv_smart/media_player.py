@@ -3,34 +3,51 @@
 from __future__ import annotations
 
 import asyncio
-import logging
-import os
-import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from enum import Enum
+import logging
+import os
 from socket import error as socketError
+import time
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from aiohttp import ClientConnectionError, ClientResponseError, ClientSession
 import async_timeout
 import voluptuous as vol
-from aiohttp import ClientConnectionError, ClientResponseError, ClientSession
+from wakeonlan import send_magic_packet
+from websocket import WebSocketTimeoutException
+
 from homeassistant.components import media_source
-from homeassistant.components.media_player import (ATTR_MEDIA_ENQUEUE,
-                                                   MediaPlayerDeviceClass,
-                                                   MediaPlayerEnqueue,
-                                                   MediaPlayerEntity,
-                                                   MediaPlayerEntityFeature,
-                                                   MediaPlayerState, MediaType)
-from homeassistant.components.media_player.browse_media import \
-    async_process_play_media_url
+from homeassistant.components.media_player import (
+    ATTR_MEDIA_ENQUEUE,
+    MediaPlayerDeviceClass,
+    MediaPlayerEnqueue,
+    MediaPlayerEntity,
+    MediaPlayerEntityFeature,
+    MediaPlayerState,
+    MediaType,
+)
+from homeassistant.components.media_player.browse_media import (
+    async_process_play_media_url,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (CONF_API_KEY, CONF_BROADCAST_ADDRESS,
-                                 CONF_DEVICE_ID, CONF_HOST, CONF_PORT,
-                                 CONF_SERVICE, CONF_SERVICE_DATA, CONF_TIMEOUT,
-                                 CONF_TOKEN, SERVICE_TURN_OFF, SERVICE_TURN_ON,
-                                 STATE_OFF, STATE_ON)
+from homeassistant.const import (
+    CONF_API_KEY,
+    CONF_BROADCAST_ADDRESS,
+    CONF_DEVICE_ID,
+    CONF_HOST,
+    CONF_PORT,
+    CONF_SERVICE,
+    CONF_SERVICE_DATA,
+    CONF_TIMEOUT,
+    CONF_TOKEN,
+    SERVICE_TURN_OFF,
+    SERVICE_TURN_ON,
+    STATE_OFF,
+    STATE_ON,
+)
 from homeassistant.core import DOMAIN as HA_DOMAIN
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
@@ -39,51 +56,97 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_platform
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.service import (CONF_SERVICE_ENTITY_ID,
-                                           async_call_from_config)
+from homeassistant.helpers.service import CONF_SERVICE_ENTITY_ID, async_call_from_config
 from homeassistant.helpers.storage import STORAGE_DIR
 from homeassistant.util import Throttle
 from homeassistant.util import dt as dt_util
 from homeassistant.util.async_ import run_callback_threadsafe
-from wakeonlan import send_magic_packet
-from websocket import WebSocketTimeoutException
 
-from . import (get_oauth_refresh_lock, get_smartthings_api_key,
-               is_oauth_refresh_in_progress, set_oauth_refresh_in_progress)
+from . import (
+    get_oauth_refresh_lock,
+    get_smartthings_api_key,
+    is_oauth_refresh_in_progress,
+    set_oauth_refresh_in_progress,
+)
 from .api.art import SamsungTVAsyncArt
 from .api.samsungcast import SamsungCastTube
 from .api.samsungws import ArtModeStatus, SamsungTVAsyncRest, SamsungTVWS
 from .api.smartthings import SmartThingsTV, STStatus
 from .api.upnp import SamsungUPnP
-from .const import (ATTR_BRIGHTNESS, ATTR_CATEGORY_ID, ATTR_CONTENT_ID,
-                    ATTR_DURATION, ATTR_ENABLED, ATTR_FILE_PATH,
-                    ATTR_FILE_TYPE, ATTR_FILTER_ID, ATTR_MATTE_ID, ATTR_SHOW,
-                    ATTR_SHUFFLE, ATTR_STATUS, AUTH_METHOD_OAUTH,
-                    AUTH_METHOD_ST_ENTRY, CONF_APP_LAUNCH_METHOD,
-                    CONF_APP_LIST, CONF_APP_LOAD_METHOD, CONF_AUTH_METHOD,
-                    CONF_CHANNEL_LIST, CONF_DUMP_APPS, CONF_EXT_POWER_ENTITY,
-                    CONF_LOGO_OPTION, CONF_OAUTH_TOKEN, CONF_PING_PORT,
-                    CONF_POWER_ON_METHOD, CONF_SHOW_CHANNEL_NR,
-                    CONF_SOURCE_LIST, CONF_ST_ENTRY_UNIQUE_ID,
-                    CONF_SYNC_TURN_OFF, CONF_SYNC_TURN_ON,
-                    CONF_TOGGLE_ART_MODE, CONF_USE_LOCAL_LOGO,
-                    CONF_USE_MUTE_CHECK, CONF_USE_ST_CHANNEL_INFO,
-                    CONF_USE_ST_STATUS_INFO, CONF_WOL_REPEAT, CONF_WS_NAME,
-                    DATA_ART_API, DATA_CFG, DATA_OPTIONS, DEFAULT_APP,
-                    DEFAULT_PORT, DEFAULT_SOURCE_LIST, DEFAULT_TIMEOUT, DOMAIN,
-                    LOCAL_LOGO_PATH, MAX_WOL_REPEAT, SERVICE_ART_AVAILABLE,
-                    SERVICE_ART_CHANGE_MATTE, SERVICE_ART_DELETE,
-                    SERVICE_ART_GET_ARTMODE, SERVICE_ART_GET_BRIGHTNESS,
-                    SERVICE_ART_GET_CURRENT, SERVICE_ART_GET_MATTE_LIST,
-                    SERVICE_ART_GET_PHOTO_FILTER_LIST,
-                    SERVICE_ART_GET_THUMBNAIL,
-                    SERVICE_ART_GET_THUMBNAILS_BATCH, SERVICE_ART_SELECT_IMAGE,
-                    SERVICE_ART_SET_ARTMODE, SERVICE_ART_SET_AUTO_ROTATION,
-                    SERVICE_ART_SET_BRIGHTNESS, SERVICE_ART_SET_FAVOURITE,
-                    SERVICE_ART_SET_PHOTO_FILTER, SERVICE_ART_SET_SLIDESHOW,
-                    SERVICE_ART_UPLOAD, SERVICE_SELECT_PICTURE_MODE,
-                    SIGNAL_CONFIG_ENTITY, STD_APP_LIST, WS_PREFIX,
-                    AppLaunchMethod, AppLoadMethod, PowerOnMethod)
+from .const import (
+    ATTR_BRIGHTNESS,
+    ATTR_CATEGORY_ID,
+    ATTR_CONTENT_ID,
+    ATTR_DURATION,
+    ATTR_ENABLED,
+    ATTR_FILE_PATH,
+    ATTR_FILE_TYPE,
+    ATTR_FILTER_ID,
+    ATTR_MATTE_ID,
+    ATTR_SHOW,
+    ATTR_SHUFFLE,
+    ATTR_STATUS,
+    AUTH_METHOD_OAUTH,
+    AUTH_METHOD_ST_ENTRY,
+    CONF_APP_LAUNCH_METHOD,
+    CONF_APP_LIST,
+    CONF_APP_LOAD_METHOD,
+    CONF_AUTH_METHOD,
+    CONF_CHANNEL_LIST,
+    CONF_DUMP_APPS,
+    CONF_EXT_POWER_ENTITY,
+    CONF_LOGO_OPTION,
+    CONF_OAUTH_TOKEN,
+    CONF_PING_PORT,
+    CONF_POWER_ON_METHOD,
+    CONF_SHOW_CHANNEL_NR,
+    CONF_SOURCE_LIST,
+    CONF_ST_ENTRY_UNIQUE_ID,
+    CONF_SYNC_TURN_OFF,
+    CONF_SYNC_TURN_ON,
+    CONF_TOGGLE_ART_MODE,
+    CONF_USE_LOCAL_LOGO,
+    CONF_USE_MUTE_CHECK,
+    CONF_USE_ST_CHANNEL_INFO,
+    CONF_USE_ST_STATUS_INFO,
+    CONF_WOL_REPEAT,
+    CONF_WS_NAME,
+    DATA_ART_API,
+    DATA_CFG,
+    DATA_OPTIONS,
+    DEFAULT_APP,
+    DEFAULT_PORT,
+    DEFAULT_SOURCE_LIST,
+    DEFAULT_TIMEOUT,
+    DOMAIN,
+    LOCAL_LOGO_PATH,
+    MAX_WOL_REPEAT,
+    SERVICE_ART_AVAILABLE,
+    SERVICE_ART_CHANGE_MATTE,
+    SERVICE_ART_DELETE,
+    SERVICE_ART_GET_ARTMODE,
+    SERVICE_ART_GET_BRIGHTNESS,
+    SERVICE_ART_GET_CURRENT,
+    SERVICE_ART_GET_MATTE_LIST,
+    SERVICE_ART_GET_PHOTO_FILTER_LIST,
+    SERVICE_ART_GET_THUMBNAIL,
+    SERVICE_ART_GET_THUMBNAILS_BATCH,
+    SERVICE_ART_SELECT_IMAGE,
+    SERVICE_ART_SET_ARTMODE,
+    SERVICE_ART_SET_AUTO_ROTATION,
+    SERVICE_ART_SET_BRIGHTNESS,
+    SERVICE_ART_SET_FAVOURITE,
+    SERVICE_ART_SET_PHOTO_FILTER,
+    SERVICE_ART_SET_SLIDESHOW,
+    SERVICE_ART_UPLOAD,
+    SERVICE_SELECT_PICTURE_MODE,
+    SIGNAL_CONFIG_ENTITY,
+    STD_APP_LIST,
+    WS_PREFIX,
+    AppLaunchMethod,
+    AppLoadMethod,
+    PowerOnMethod,
+)
 from .entity import SamsungTVEntity
 from .logo import LOGO_OPTION_DEFAULT, LocalImageUrl, Logo, LogoOption
 

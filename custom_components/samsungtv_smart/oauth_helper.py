@@ -6,17 +6,23 @@ for SmartThings API authentication.
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timedelta
+import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .const import (AUTH_METHOD_OAUTH, AUTH_METHOD_PAT, AUTH_METHOD_ST_ENTRY,
-                    CONF_API_KEY, CONF_AUTH_METHOD, CONF_OAUTH_TOKEN,
-                    CONF_ST_ENTRY_UNIQUE_ID)
+from .const import (
+    AUTH_METHOD_OAUTH,
+    AUTH_METHOD_PAT,
+    AUTH_METHOD_ST_ENTRY,
+    CONF_API_KEY,
+    CONF_AUTH_METHOD,
+    CONF_OAUTH_TOKEN,
+    CONF_ST_ENTRY_UNIQUE_ID,
+)
 
 _LOGGER = logging.getLogger(__name__)
 

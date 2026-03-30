@@ -6,45 +6,85 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 import socket
 import time
-from pathlib import Path
 
-import async_timeout
-import homeassistant.helpers.config_validation as cv
-import voluptuous as vol
 from aiohttp import ClientConnectionError, ClientResponseError, ClientSession
+import async_timeout
+import voluptuous as vol
+from websocket import WebSocketException
+
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (ATTR_DEVICE_ID, CONF_ACCESS_TOKEN,
-                                 CONF_API_KEY, CONF_BROADCAST_ADDRESS,
-                                 CONF_DEVICE_ID, CONF_HOST, CONF_ID, CONF_MAC,
-                                 CONF_NAME, CONF_PORT, CONF_TIMEOUT,
-                                 CONF_TOKEN, MAJOR_VERSION, MINOR_VERSION,
-                                 Platform, __version__)
+from homeassistant.const import (
+    ATTR_DEVICE_ID,
+    CONF_ACCESS_TOKEN,
+    CONF_API_KEY,
+    CONF_BROADCAST_ADDRESS,
+    CONF_DEVICE_ID,
+    CONF_HOST,
+    CONF_ID,
+    CONF_MAC,
+    CONF_NAME,
+    CONF_PORT,
+    CONF_TIMEOUT,
+    CONF_TOKEN,
+    MAJOR_VERSION,
+    MINOR_VERSION,
+    Platform,
+    __version__,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_entry_oauth2_flow
+import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import STORAGE_DIR
 from homeassistant.helpers.typing import ConfigType
-from websocket import WebSocketException
 
 from .api.samsungws import ConnectionFailure, SamsungTVWS
 from .api.smartthings import SmartThingsTV
-from .const import (ATTR_DEVICE_MAC, ATTR_DEVICE_MODEL, ATTR_DEVICE_NAME,
-                    ATTR_DEVICE_OS, AUTH_METHOD_OAUTH, AUTH_METHOD_ST_ENTRY,
-                    CONF_APP_LIST, CONF_AUTH_METHOD, CONF_CHANNEL_LIST,
-                    CONF_DEVICE_NAME, CONF_LOAD_ALL_APPS, CONF_OAUTH_TOKEN,
-                    CONF_SCAN_APP_HTTP, CONF_SHOW_CHANNEL_NR, CONF_SOURCE_LIST,
-                    CONF_ST_ENTRY_UNIQUE_ID, CONF_SYNC_TURN_OFF,
-                    CONF_SYNC_TURN_ON, CONF_UPDATE_CUSTOM_PING_URL,
-                    CONF_UPDATE_METHOD, CONF_USE_ST_INT_API_KEY, CONF_WS_NAME,
-                    DATA_CFG, DATA_CFG_YAML, DATA_OPTIONS, DEFAULT_PORT,
-                    DEFAULT_SOURCE_LIST, DEFAULT_TIMEOUT, DOMAIN,
-                    LOCAL_LOGO_PATH, MIN_HA_MAJ_VER, MIN_HA_MIN_VER,
-                    RESULT_NOT_SUCCESSFUL, RESULT_ST_DEVICE_NOT_FOUND,
-                    RESULT_SUCCESS, RESULT_WRONG_APIKEY, SIGNAL_CONFIG_ENTITY,
-                    WS_PREFIX, __min_ha_version__)
+from .const import (
+    ATTR_DEVICE_MAC,
+    ATTR_DEVICE_MODEL,
+    ATTR_DEVICE_NAME,
+    ATTR_DEVICE_OS,
+    AUTH_METHOD_OAUTH,
+    AUTH_METHOD_ST_ENTRY,
+    CONF_APP_LIST,
+    CONF_AUTH_METHOD,
+    CONF_CHANNEL_LIST,
+    CONF_DEVICE_NAME,
+    CONF_LOAD_ALL_APPS,
+    CONF_OAUTH_TOKEN,
+    CONF_SCAN_APP_HTTP,
+    CONF_SHOW_CHANNEL_NR,
+    CONF_SOURCE_LIST,
+    CONF_ST_ENTRY_UNIQUE_ID,
+    CONF_SYNC_TURN_OFF,
+    CONF_SYNC_TURN_ON,
+    CONF_UPDATE_CUSTOM_PING_URL,
+    CONF_UPDATE_METHOD,
+    CONF_USE_ST_INT_API_KEY,
+    CONF_WS_NAME,
+    DATA_CFG,
+    DATA_CFG_YAML,
+    DATA_OPTIONS,
+    DEFAULT_PORT,
+    DEFAULT_SOURCE_LIST,
+    DEFAULT_TIMEOUT,
+    DOMAIN,
+    LOCAL_LOGO_PATH,
+    MIN_HA_MAJ_VER,
+    MIN_HA_MIN_VER,
+    RESULT_NOT_SUCCESSFUL,
+    RESULT_ST_DEVICE_NOT_FOUND,
+    RESULT_SUCCESS,
+    RESULT_WRONG_APIKEY,
+    SIGNAL_CONFIG_ENTITY,
+    WS_PREFIX,
+    __min_ha_version__,
+)
 from .logo import CUSTOM_IMAGE_BASE_URL, STATIC_IMAGE_BASE_URL
 
 # workaroud for failing import native domain when custom integration is present

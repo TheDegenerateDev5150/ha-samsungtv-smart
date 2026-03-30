@@ -1,11 +1,11 @@
 """Smartthings TV integration UPnP implementation."""
 
 import logging
-import xml.etree.ElementTree as ET
 from typing import Optional
+import xml.etree.ElementTree as ET
 
-import async_timeout
 from aiohttp import ClientSession
+import async_timeout
 
 DEFAULT_TIMEOUT = 0.2
 

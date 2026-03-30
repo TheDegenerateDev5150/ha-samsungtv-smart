@@ -6,22 +6,37 @@ import asyncio
 import logging
 from typing import Any
 
+from pysmartthings import Capability, Command
+
 from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (CONF_HOST, CONF_ID, CONF_NAME, CONF_PORT,
-                                 CONF_TOKEN, STATE_OFF)
+from homeassistant.const import (
+    CONF_HOST,
+    CONF_ID,
+    CONF_NAME,
+    CONF_PORT,
+    CONF_TOKEN,
+    STATE_OFF,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
-from pysmartthings import Capability, Command
 
 from . import async_get_samsungtv_api_key
 from .api.art import SamsungTVAsyncArt
-from .const import (AUTH_METHOD_OAUTH, CONF_AUTH_METHOD, CONF_WS_NAME,
-                    DATA_ART_API, DATA_CFG, DEFAULT_PORT, DOMAIN, WS_PREFIX)
+from .const import (
+    AUTH_METHOD_OAUTH,
+    CONF_AUTH_METHOD,
+    CONF_WS_NAME,
+    DATA_ART_API,
+    DATA_CFG,
+    DEFAULT_PORT,
+    DOMAIN,
+    WS_PREFIX,
+)
 
 _LOGGER = logging.getLogger(__name__)
 

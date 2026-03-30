@@ -3,48 +3,94 @@
 from __future__ import annotations
 
 import logging
-import socket
 from numbers import Number
+import socket
 from typing import Any, Dict
 
 import voluptuous as vol
+
 from homeassistant.components.binary_sensor import DOMAIN as BS_DOMAIN
-from homeassistant.config_entries import (ConfigEntry, ConfigFlowResult,
-                                          OptionsFlow)
-from homeassistant.const import (ATTR_DEVICE_ID, CONF_API_KEY, CONF_BASE,
-                                 CONF_DEVICE_ID, CONF_HOST, CONF_ID, CONF_MAC,
-                                 CONF_NAME, CONF_PORT, CONF_TOKEN,
-                                 SERVICE_TURN_ON, __version__)
+from homeassistant.config_entries import ConfigEntry, ConfigFlowResult, OptionsFlow
+from homeassistant.const import (
+    ATTR_DEVICE_ID,
+    CONF_API_KEY,
+    CONF_BASE,
+    CONF_DEVICE_ID,
+    CONF_HOST,
+    CONF_ID,
+    CONF_MAC,
+    CONF_NAME,
+    CONF_PORT,
+    CONF_TOKEN,
+    SERVICE_TURN_ON,
+    __version__,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.selector import (EntitySelector,
-                                            EntitySelectorConfig,
-                                            ObjectSelector, SelectOptionDict,
-                                            SelectSelector,
-                                            SelectSelectorConfig,
-                                            SelectSelectorMode)
+from homeassistant.helpers.selector import (
+    EntitySelector,
+    EntitySelectorConfig,
+    ObjectSelector,
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 
-from . import (SamsungTVInfo, get_device_info, get_smartthings_api_key,
-               get_smartthings_entries, is_valid_ha_version)
-from .const import (ATTR_DEVICE_MAC, ATTR_DEVICE_MODEL, ATTR_DEVICE_NAME,
-                    ATTR_DEVICE_OS, AUTH_METHOD_OAUTH, AUTH_METHOD_PAT,
-                    AUTH_METHOD_ST_ENTRY, CONF_APP_LAUNCH_METHOD,
-                    CONF_APP_LIST, CONF_APP_LOAD_METHOD, CONF_AUTH_METHOD,
-                    CONF_CHANNEL_LIST, CONF_DEVICE_MODEL, CONF_DEVICE_NAME,
-                    CONF_DEVICE_OS, CONF_DUMP_APPS, CONF_EXT_POWER_ENTITY,
-                    CONF_LOGO_OPTION, CONF_OAUTH_TOKEN, CONF_PING_PORT,
-                    CONF_POWER_ON_METHOD, CONF_SHOW_CHANNEL_NR,
-                    CONF_SOURCE_LIST, CONF_ST_ENTRY_UNIQUE_ID,
-                    CONF_SYNC_TURN_OFF, CONF_SYNC_TURN_ON,
-                    CONF_TOGGLE_ART_MODE, CONF_USE_LOCAL_LOGO,
-                    CONF_USE_MUTE_CHECK, CONF_USE_ST_CHANNEL_INFO,
-                    CONF_USE_ST_STATUS_INFO, CONF_WOL_REPEAT, CONF_WS_NAME,
-                    DOMAIN, MAX_WOL_REPEAT, RESULT_ST_DEVICE_NOT_FOUND,
-                    RESULT_ST_DEVICE_USED, RESULT_SUCCESS, RESULT_WRONG_APIKEY,
-                    AppLaunchMethod, AppLoadMethod, PowerOnMethod,
-                    __min_ha_version__)
+from . import (
+    SamsungTVInfo,
+    get_device_info,
+    get_smartthings_api_key,
+    get_smartthings_entries,
+    is_valid_ha_version,
+)
+from .const import (
+    ATTR_DEVICE_MAC,
+    ATTR_DEVICE_MODEL,
+    ATTR_DEVICE_NAME,
+    ATTR_DEVICE_OS,
+    AUTH_METHOD_OAUTH,
+    AUTH_METHOD_PAT,
+    AUTH_METHOD_ST_ENTRY,
+    CONF_APP_LAUNCH_METHOD,
+    CONF_APP_LIST,
+    CONF_APP_LOAD_METHOD,
+    CONF_AUTH_METHOD,
+    CONF_CHANNEL_LIST,
+    CONF_DEVICE_MODEL,
+    CONF_DEVICE_NAME,
+    CONF_DEVICE_OS,
+    CONF_DUMP_APPS,
+    CONF_EXT_POWER_ENTITY,
+    CONF_LOGO_OPTION,
+    CONF_OAUTH_TOKEN,
+    CONF_PING_PORT,
+    CONF_POWER_ON_METHOD,
+    CONF_SHOW_CHANNEL_NR,
+    CONF_SOURCE_LIST,
+    CONF_ST_ENTRY_UNIQUE_ID,
+    CONF_SYNC_TURN_OFF,
+    CONF_SYNC_TURN_ON,
+    CONF_TOGGLE_ART_MODE,
+    CONF_USE_LOCAL_LOGO,
+    CONF_USE_MUTE_CHECK,
+    CONF_USE_ST_CHANNEL_INFO,
+    CONF_USE_ST_STATUS_INFO,
+    CONF_WOL_REPEAT,
+    CONF_WS_NAME,
+    DOMAIN,
+    MAX_WOL_REPEAT,
+    RESULT_ST_DEVICE_NOT_FOUND,
+    RESULT_ST_DEVICE_USED,
+    RESULT_SUCCESS,
+    RESULT_WRONG_APIKEY,
+    AppLaunchMethod,
+    AppLoadMethod,
+    PowerOnMethod,
+    __min_ha_version__,
+)
 from .logo import LOGO_OPTION_DEFAULT, LogoOption
 
 APP_LAUNCH_METHODS = {
