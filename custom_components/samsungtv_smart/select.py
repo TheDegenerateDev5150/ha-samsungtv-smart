@@ -7,27 +7,22 @@ import logging
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_ID, CONF_NAME, CONF_PORT, CONF_TOKEN
+from homeassistant.const import (CONF_HOST, CONF_ID, CONF_NAME, CONF_PORT,
+                                 CONF_TOKEN)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api.art import SamsungTVAsyncArt
-from .const import (
-    DATA_ART_API,
-    DATA_CFG,
-    DEFAULT_PORT,
-    DOMAIN,
-    WS_PREFIX,
-    CONF_WS_NAME,
-)
+from .const import (CONF_WS_NAME, DATA_ART_API, DATA_CFG, DEFAULT_PORT, DOMAIN,
+                    WS_PREFIX)
 
 _LOGGER = logging.getLogger(__name__)
 
 # Retry settings when TV is off at startup
-_RETRY_INTERVAL = 30   # seconds between retries
-_MAX_RETRIES = 10      # give up after 5 minutes
+_RETRY_INTERVAL = 30  # seconds between retries
+_MAX_RETRIES = 10  # give up after 5 minutes
 
 
 async def async_setup_entry(
@@ -66,7 +61,9 @@ async def async_setup_entry(
         is_supported = False
 
     if not is_supported:
-        _LOGGER.debug("Frame TV not supported on %s, skipping matte select entities", host)
+        _LOGGER.debug(
+            "Frame TV not supported on %s, skipping matte select entities", host
+        )
         return
 
     # Create the two select entities
@@ -96,16 +93,16 @@ async def _load_matte_options(
     for attempt in range(_MAX_RETRIES):
         try:
             async with asyncio.timeout(10):
-                matte_types, matte_colors = await art_api.get_matte_list(include_color=True)
+                matte_types, matte_colors = await art_api.get_matte_list(
+                    include_color=True
+                )
 
             # Extract string values from dict objects returned by the TV
             type_options = [
-                m["matte_type"] if isinstance(m, dict) else str(m)
-                for m in matte_types
+                m["matte_type"] if isinstance(m, dict) else str(m) for m in matte_types
             ]
             color_options = [
-                m["color"] if isinstance(m, dict) else str(m)
-                for m in matte_colors
+                m["color"] if isinstance(m, dict) else str(m) for m in matte_colors
             ]
 
             if type_options:
@@ -123,12 +120,16 @@ async def _load_matte_options(
         except asyncio.TimeoutError:
             _LOGGER.debug(
                 "Timeout fetching matte list (attempt %d/%d), retrying in %ds",
-                attempt + 1, _MAX_RETRIES, _RETRY_INTERVAL,
+                attempt + 1,
+                _MAX_RETRIES,
+                _RETRY_INTERVAL,
             )
         except Exception as ex:
             _LOGGER.debug(
                 "Error fetching matte list (attempt %d/%d): %s",
-                attempt + 1, _MAX_RETRIES, ex,
+                attempt + 1,
+                _MAX_RETRIES,
+                ex,
             )
 
         await asyncio.sleep(_RETRY_INTERVAL)
@@ -236,10 +237,14 @@ class SamsungTVMatteTypeSelect(SamsungTVMatteSelectBase):
 
             new_matte_id = f"{option}_{color_part}" if option != "none" else "none"
 
-            await self._art_api.change_matte(content_id=content_id, matte_id=new_matte_id)
+            await self._art_api.change_matte(
+                content_id=content_id, matte_id=new_matte_id
+            )
             self._attr_current_option = option
             self.async_write_ha_state()
-            _LOGGER.debug("Matte type changed to %s (full id: %s)", option, new_matte_id)
+            _LOGGER.debug(
+                "Matte type changed to %s (full id: %s)", option, new_matte_id
+            )
 
         except Exception as ex:
             _LOGGER.error("Error changing matte type: %s", ex)
@@ -288,10 +293,14 @@ class SamsungTVMatteColorSelect(SamsungTVMatteSelectBase):
 
             new_matte_id = f"{type_part}_{option}"
 
-            await self._art_api.change_matte(content_id=content_id, matte_id=new_matte_id)
+            await self._art_api.change_matte(
+                content_id=content_id, matte_id=new_matte_id
+            )
             self._attr_current_option = option
             self.async_write_ha_state()
-            _LOGGER.debug("Matte color changed to %s (full id: %s)", option, new_matte_id)
+            _LOGGER.debug(
+                "Matte color changed to %s (full id: %s)", option, new_matte_id
+            )
 
         except Exception as ex:
             _LOGGER.error("Error changing matte color: %s", ex)

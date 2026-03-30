@@ -1,20 +1,17 @@
 """Application credentials platform for Samsung TV Smart."""
 
-from json import JSONDecodeError
 import logging
 import time
+from json import JSONDecodeError
 from typing import cast
 
 from aiohttp import BasicAuth, ClientError
-
 from homeassistant.components.application_credentials import (
-    AuthImplementation,
-    AuthorizationServer,
-    ClientCredential,
-)
+    AuthImplementation, AuthorizationServer, ClientCredential)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.config_entry_oauth2_flow import AbstractOAuth2Implementation
+from homeassistant.helpers.config_entry_oauth2_flow import \
+    AbstractOAuth2Implementation
 
 from .const import DOMAIN
 

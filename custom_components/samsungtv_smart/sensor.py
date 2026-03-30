@@ -8,35 +8,24 @@ import time
 from datetime import timedelta
 from typing import Any
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
+from homeassistant.components.sensor import (SensorDeviceClass, SensorEntity,
+                                             SensorStateClass)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_ID, CONF_NAME, CONF_PORT, CONF_TOKEN, LIGHT_LUX
+from homeassistant.const import (CONF_HOST, CONF_ID, CONF_NAME, CONF_PORT,
+                                 CONF_TOKEN, LIGHT_LUX)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import (
-    CoordinatorEntity,
-    DataUpdateCoordinator,
-)
-
+from homeassistant.helpers.update_coordinator import (CoordinatorEntity,
+                                                      DataUpdateCoordinator)
 from pysmartthings import Attribute, Capability
 
-from .api.art import SamsungTVAsyncArt
-from .const import (
-    AUTH_METHOD_OAUTH,
-    CONF_API_KEY,
-    CONF_AUTH_METHOD,
-    CONF_DEVICE_ID,
-    CONF_OAUTH_TOKEN,
-    CONF_WS_NAME,
-    DATA_ART_API,
-    DATA_CFG,
-    DEFAULT_PORT,
-    DOMAIN,
-    WS_PREFIX,
-)
 from . import async_get_samsungtv_api_key
+from .api.art import SamsungTVAsyncArt
+from .const import (AUTH_METHOD_OAUTH, CONF_API_KEY, CONF_AUTH_METHOD,
+                    CONF_DEVICE_ID, CONF_OAUTH_TOKEN, CONF_WS_NAME,
+                    DATA_ART_API, DATA_CFG, DEFAULT_PORT, DOMAIN, WS_PREFIX)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -90,6 +79,7 @@ async def async_setup_entry(
     if is_supported:
         # Create www/frame_art directory if it doesn't exist
         import os
+
         www_path = hass.config.path("www", "frame_art")
         try:
             os.makedirs(www_path, exist_ok=True)
@@ -104,7 +94,9 @@ async def async_setup_entry(
         coordinator = FrameArtCoordinator(hass, art_api, entry)
 
         # Add Frame Art sensor
-        entities.append(FrameArtSensor(coordinator, entry, art_api, device_name, device_unique_id))
+        entities.append(
+            FrameArtSensor(coordinator, entry, art_api, device_name, device_unique_id)
+        )
 
         # Schedule first refresh in background (non-blocking)
         hass.async_create_background_task(
@@ -130,6 +122,7 @@ async def async_setup_entry(
         try:
             # Create SmartThings client for initial setup
             from pysmartthings import SmartThings
+
             st_client = SmartThings(session=session)
             st_client.authenticate(api_key)
 
@@ -156,14 +149,11 @@ async def async_setup_entry(
                     continue
 
                 # Check if it's a child device
-                is_child = (
-                    device.parent_device_id == device_id
-                    or (
-                        device.location_id == main_location_id
-                        and main_room_id
-                        and device.room_id == main_room_id
-                        and "light sensor" in device.label.lower()
-                    )
+                is_child = device.parent_device_id == device_id or (
+                    device.location_id == main_location_id
+                    and main_room_id
+                    and device.room_id == main_room_id
+                    and "light sensor" in device.label.lower()
                 )
 
                 if is_child:
@@ -184,7 +174,8 @@ async def async_setup_entry(
                     if (
                         "main" in components
                         and Capability.ILLUMINANCE_MEASUREMENT in components["main"]
-                        and Attribute.ILLUMINANCE in components["main"][Capability.ILLUMINANCE_MEASUREMENT]
+                        and Attribute.ILLUMINANCE
+                        in components["main"][Capability.ILLUMINANCE_MEASUREMENT]
                     ):
                         _LOGGER.info(
                             "Adding illuminance sensor for %s (child of %s)",
@@ -206,7 +197,8 @@ async def async_setup_entry(
                     if (
                         "main" in components
                         and Capability.RELATIVE_BRIGHTNESS in components["main"]
-                        and Attribute.BRIGHTNESS_INTENSITY in components["main"][Capability.RELATIVE_BRIGHTNESS]
+                        and Attribute.BRIGHTNESS_INTENSITY
+                        in components["main"][Capability.RELATIVE_BRIGHTNESS]
                     ):
                         _LOGGER.info(
                             "Adding brightness intensity sensor for %s (child of %s)",
@@ -224,21 +216,16 @@ async def async_setup_entry(
                             )
                         )
 
-                    if (
-                        "main" not in components
-                        or (
-                            Capability.ILLUMINANCE_MEASUREMENT not in components["main"]
-                            and Capability.RELATIVE_BRIGHTNESS not in components["main"]
-                        )
+                    if "main" not in components or (
+                        Capability.ILLUMINANCE_MEASUREMENT not in components["main"]
+                        and Capability.RELATIVE_BRIGHTNESS not in components["main"]
                     ):
                         _LOGGER.debug(
                             "Device %s does not have light sensor capabilities",
                             device.label,
                         )
                 except Exception as ex:
-                    _LOGGER.warning(
-                        "Error checking device %s: %s", device.label, ex
-                    )
+                    _LOGGER.warning("Error checking device %s: %s", device.label, ex)
 
             if not related_devices:
                 _LOGGER.debug(
@@ -282,9 +269,11 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         self._max_connection_failures = 5
         self._backoff_until: float | None = None
 
-        _LOGGER.info("Frame Art Coordinator initialized with thumbnail fetching enabled")
+        _LOGGER.info(
+            "Frame Art Coordinator initialized with thumbnail fetching enabled"
+        )
 
-    async def _async_update_data(self) -> dict[str, Any]:
+    async def _async_update_data(self) -> dict[str, Any]:  # noqa: C901
         """Fetch data from the Frame TV."""
         # Check if we're in backoff period (after multiple connection failures)
         if self._backoff_until is not None:
@@ -292,7 +281,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 # Still in backoff period, skip update
                 _LOGGER.debug(
                     "Frame Art: Skipping update due to connection backoff (%.0fs remaining)",
-                    self._backoff_until - time.time()
+                    self._backoff_until - time.time(),
                 )
                 # Return minimal data during backoff
                 return {
@@ -343,7 +332,10 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             media_player_art_mode = self._get_media_player_art_mode()
             if media_player_art_mode is not None:
                 data["art_mode"] = media_player_art_mode
-                _LOGGER.debug("Frame Art: Using media_player art_mode_status: %s", media_player_art_mode)
+                _LOGGER.debug(
+                    "Frame Art: Using media_player art_mode_status: %s",
+                    media_player_art_mode,
+                )
             else:
                 # Fallback to direct API call if media_player state not available
                 try:
@@ -380,13 +372,16 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             if (
                 self._thumbnail_fetch_enabled
                 and content_id
-                and (content_id != self._last_content_id or not self._has_current_thumbnail())
+                and (
+                    content_id != self._last_content_id
+                    or not self._has_current_thumbnail()
+                )
             ):
                 _LOGGER.info(
                     "Frame Art: Triggering thumbnail fetch for %s (changed: %s, has_thumbnail: %s)",
                     content_id,
                     content_id != self._last_content_id,
-                    self._has_current_thumbnail()
+                    self._has_current_thumbnail(),
                 )
                 # Schedule thumbnail fetch as background task (non-blocking)
                 self._hass.async_create_background_task(
@@ -395,12 +390,14 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 )
                 self._last_content_id = content_id
             elif content_id and not self._thumbnail_fetch_enabled:
-                _LOGGER.debug("Frame Art: Thumbnail fetching disabled, skipping %s", content_id)
+                _LOGGER.debug(
+                    "Frame Art: Thumbnail fetching disabled, skipping %s", content_id
+                )
             elif content_id:
                 _LOGGER.debug(
                     "Frame Art: Skipping thumbnail fetch - same content_id %s, has_thumbnail: %s",
                     content_id,
-                    self._has_current_thumbnail()
+                    self._has_current_thumbnail(),
                 )
 
             # If we have a saved thumbnail, use it
@@ -443,20 +440,30 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                     "Frame Art: Connection error (%d/%d): %s",
                     self._connection_failures,
                     self._max_connection_failures,
-                    ex
+                    ex,
                 )
 
                 # If too many consecutive failures, enter backoff period
                 if self._connection_failures >= self._max_connection_failures:
                     # Exponential backoff: 5 minutes, then 15 minutes, then 30 minutes
-                    backoff_minutes = min(5 * (2 ** (self._connection_failures - self._max_connection_failures)), 30)
+                    backoff_minutes = min(
+                        5
+                        * (
+                            2
+                            ** (
+                                self._connection_failures
+                                - self._max_connection_failures
+                            )
+                        ),
+                        30,
+                    )
                     self._backoff_until = time.time() + (backoff_minutes * 60)
                     _LOGGER.warning(
                         "Frame Art: Too many connection failures (%d), "
                         "entering %d minute backoff period. "
                         "Frame Art sensor will pause updates until backoff expires.",
                         self._connection_failures,
-                        backoff_minutes
+                        backoff_minutes,
                     )
             else:
                 _LOGGER.warning("Frame Art: Error updating data: %s", ex)
@@ -475,6 +482,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         try:
             # Find media_player entity for this config entry
             from homeassistant.helpers import entity_registry as er
+
             entity_registry = er.async_get(self._hass)
 
             for entity in entity_registry.entities.values():
@@ -496,6 +504,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         try:
             # Find media_player entity for this config entry
             from homeassistant.helpers import entity_registry as er
+
             entity_registry = er.async_get(self._hass)
 
             for entity in entity_registry.entities.values():
@@ -516,6 +525,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
     def _has_current_thumbnail(self) -> bool:
         """Check if current thumbnail file exists."""
         import os
+
         www_path = self._hass.config.path("www", "frame_art", "current.jpg")
         return os.path.isfile(www_path)
 
@@ -530,23 +540,39 @@ class FrameArtCoordinator(DataUpdateCoordinator):
 
             # Create image with PIL
             width, height = 480, 320
-            img = Image.new('RGB', (width, height), color=(30, 30, 35))
+            img = Image.new("RGB", (width, height), color=(30, 30, 35))
             draw = ImageDraw.Draw(img)
 
             # Draw border
-            draw.rectangle([10, 10, width - 10, height - 10], outline=(60, 60, 70), width=2)
+            draw.rectangle(
+                [10, 10, width - 10, height - 10], outline=(60, 60, 70), width=2
+            )
 
             # Draw lock icon (simple representation)
             lock_x, lock_y = width // 2, height // 2 - 30
             # Lock body
-            draw.rectangle([lock_x - 25, lock_y, lock_x + 25, lock_y + 40], fill=(80, 80, 90), outline=(100, 100, 110))
+            draw.rectangle(
+                [lock_x - 25, lock_y, lock_x + 25, lock_y + 40],
+                fill=(80, 80, 90),
+                outline=(100, 100, 110),
+            )
             # Lock shackle
-            draw.arc([lock_x - 18, lock_y - 25, lock_x + 18, lock_y + 5], 0, 180, fill=(100, 100, 110), width=4)
+            draw.arc(
+                [lock_x - 18, lock_y - 25, lock_x + 18, lock_y + 5],
+                0,
+                180,
+                fill=(100, 100, 110),
+                width=4,
+            )
 
             # Try to use a font, fall back to default
             try:
-                font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24)
-                font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
+                font_large = ImageFont.truetype(
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24
+                )
+                font_small = ImageFont.truetype(
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14
+                )
             except Exception:
                 font_large = ImageFont.load_default()
                 font_small = ImageFont.load_default()
@@ -567,8 +593,9 @@ class FrameArtCoordinator(DataUpdateCoordinator):
 
             # Save to bytes
             import io
+
             buffer = io.BytesIO()
-            img.save(buffer, format='JPEG', quality=85)
+            img.save(buffer, format="JPEG", quality=85)
             return buffer.getvalue()
 
         except ImportError:
@@ -579,17 +606,22 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             width, height = 400, 300
 
             # PNG signature
-            signature = b'\x89PNG\r\n\x1a\n'
+            signature = b"\x89PNG\r\n\x1a\n"
 
             # IHDR chunk
-            ihdr_data = struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)
-            ihdr_crc = zlib.crc32(b'IHDR' + ihdr_data) & 0xffffffff
-            ihdr = struct.pack('>I', 13) + b'IHDR' + ihdr_data + struct.pack('>I', ihdr_crc)
+            ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+            ihdr_crc = zlib.crc32(b"IHDR" + ihdr_data) & 0xFFFFFFFF
+            ihdr = (
+                struct.pack(">I", 13)
+                + b"IHDR"
+                + ihdr_data
+                + struct.pack(">I", ihdr_crc)
+            )
 
             # IDAT chunk - create simple dark image with lighter center
-            raw_data = b''
+            raw_data = b""
             for y in range(height):
-                raw_data += b'\x00'  # filter byte
+                raw_data += b"\x00"  # filter byte
                 for x in range(width):
                     # Dark background
                     gray = 35
@@ -602,12 +634,17 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                     raw_data += bytes([gray, gray, gray + 5])
 
             compressed = zlib.compress(raw_data, 9)
-            idat_crc = zlib.crc32(b'IDAT' + compressed) & 0xffffffff
-            idat = struct.pack('>I', len(compressed)) + b'IDAT' + compressed + struct.pack('>I', idat_crc)
+            idat_crc = zlib.crc32(b"IDAT" + compressed) & 0xFFFFFFFF
+            idat = (
+                struct.pack(">I", len(compressed))
+                + b"IDAT"
+                + compressed
+                + struct.pack(">I", idat_crc)
+            )
 
             # IEND chunk
-            iend_crc = zlib.crc32(b'IEND') & 0xffffffff
-            iend = struct.pack('>I', 0) + b'IEND' + struct.pack('>I', iend_crc)
+            iend_crc = zlib.crc32(b"IEND") & 0xFFFFFFFF
+            iend = struct.pack(">I", 0) + b"IEND" + struct.pack(">I", iend_crc)
 
             return signature + ihdr + idat + iend
 
@@ -615,6 +652,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         """Save a DRM placeholder image when thumbnail fetch fails due to DRM."""
         try:
             import os
+
             www_path = self._hass.config.path("www", "frame_art")
 
             def _write_placeholder():
@@ -651,7 +689,9 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         # Check if this is a Store image (SAM-S*) - these are DRM protected
         is_store_image = content_id.startswith("SAM-S")
         if is_store_image:
-            _LOGGER.debug("Frame Art: %s is a Store image (may be DRM protected)", content_id)
+            _LOGGER.debug(
+                "Frame Art: %s is a Store image (may be DRM protected)", content_id
+            )
 
         try:
             async with asyncio.timeout(20):  # Longer timeout for thumbnails
@@ -661,7 +701,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 _LOGGER.info(
                     "Frame Art: get_thumbnail returned %d bytes for %s",
                     len(thumbnail_data) if thumbnail_data else 0,
-                    content_id
+                    content_id,
                 )
 
                 if thumbnail_data and len(thumbnail_data) > 1:
@@ -692,7 +732,9 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                     # Run file I/O in executor to avoid blocking
                     await self._hass.async_add_executor_job(_write_thumbnails)
 
-                    _LOGGER.info("Frame Art: Successfully saved thumbnail for %s", content_id)
+                    _LOGGER.info(
+                        "Frame Art: Successfully saved thumbnail for %s", content_id
+                    )
                     self._thumbnail_failures = 0
 
                     # Trigger state update
@@ -702,7 +744,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                     _LOGGER.info(
                         "Frame Art: No thumbnail data for %s (got %d bytes, DRM protected?)",
                         content_id,
-                        len(thumbnail_data) if thumbnail_data else 0
+                        len(thumbnail_data) if thumbnail_data else 0,
                     )
                     await self._save_drm_placeholder(content_id)
 
@@ -726,7 +768,9 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 self._thumbnail_fetch_enabled = False
 
         except Exception as ex:
-            _LOGGER.warning("Frame Art: Error fetching thumbnail for %s: %s", content_id, ex)
+            _LOGGER.warning(
+                "Frame Art: Error fetching thumbnail for %s: %s", content_id, ex
+            )
             # For store images, assume DRM and save placeholder
             if is_store_image:
                 await self._save_drm_placeholder(content_id)
@@ -792,7 +836,9 @@ class FrameArtSensor(CoordinatorEntity, SensorEntity):
                 # Add indicator that TV is off
                 attrs["tv_power_state"] = "off"
                 # Thumbnail auto-fetch status
-                attrs["thumbnail_auto_fetch"] = self.coordinator._thumbnail_fetch_enabled
+                attrs["thumbnail_auto_fetch"] = (
+                    self.coordinator._thumbnail_fetch_enabled
+                )
                 return attrs
 
             # TV is on - return full attributes
@@ -1052,6 +1098,7 @@ class FrameArtSensor(CoordinatorEntity, SensorEntity):
             thumbnail_data = await self._art_api.get_thumbnail(content_id, timeout=30)
             if thumbnail_data:
                 import os
+
                 www_path = self.hass.config.path("www", "frame_art")
 
                 def _write_thumbnail():
@@ -1166,9 +1213,12 @@ class SmartThingsIlluminanceSensor(SensorEntity):
             if (
                 "main" in components
                 and Capability.ILLUMINANCE_MEASUREMENT in components["main"]
-                and Attribute.ILLUMINANCE in components["main"][Capability.ILLUMINANCE_MEASUREMENT]
+                and Attribute.ILLUMINANCE
+                in components["main"][Capability.ILLUMINANCE_MEASUREMENT]
             ):
-                illuminance_status = components["main"][Capability.ILLUMINANCE_MEASUREMENT][Attribute.ILLUMINANCE]
+                illuminance_status = components["main"][
+                    Capability.ILLUMINANCE_MEASUREMENT
+                ][Attribute.ILLUMINANCE]
                 self._attr_native_value = illuminance_status.value
                 _LOGGER.debug(
                     "Updated illuminance sensor for %s: %s lux",
@@ -1176,7 +1226,9 @@ class SmartThingsIlluminanceSensor(SensorEntity):
                     self._attr_native_value,
                 )
             else:
-                _LOGGER.debug("Illuminance data not available for %s", self._device_name)
+                _LOGGER.debug(
+                    "Illuminance data not available for %s", self._device_name
+                )
         except Exception as ex:
             _LOGGER.warning("Error updating illuminance sensor: %s", ex)
 
@@ -1255,9 +1307,12 @@ class SmartThingsBrightnessIntensitySensor(SensorEntity):
             if (
                 "main" in components
                 and Capability.RELATIVE_BRIGHTNESS in components["main"]
-                and Attribute.BRIGHTNESS_INTENSITY in components["main"][Capability.RELATIVE_BRIGHTNESS]
+                and Attribute.BRIGHTNESS_INTENSITY
+                in components["main"][Capability.RELATIVE_BRIGHTNESS]
             ):
-                brightness_status = components["main"][Capability.RELATIVE_BRIGHTNESS][Attribute.BRIGHTNESS_INTENSITY]
+                brightness_status = components["main"][Capability.RELATIVE_BRIGHTNESS][
+                    Attribute.BRIGHTNESS_INTENSITY
+                ]
                 self._attr_native_value = brightness_status.value
                 _LOGGER.debug(
                     "Updated brightness intensity sensor for %s: %s",
@@ -1265,6 +1320,8 @@ class SmartThingsBrightnessIntensitySensor(SensorEntity):
                     self._attr_native_value,
                 )
             else:
-                _LOGGER.debug("Brightness intensity data not available for %s", self._device_name)
+                _LOGGER.debug(
+                    "Brightness intensity data not available for %s", self._device_name
+                )
         except Exception as ex:
             _LOGGER.warning("Error updating brightness intensity sensor: %s", ex)

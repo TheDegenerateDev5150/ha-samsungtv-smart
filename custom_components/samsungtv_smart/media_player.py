@@ -3,141 +3,87 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
+import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from enum import Enum
-import logging
-import os
 from socket import error as socketError
-import time
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from aiohttp import ClientConnectionError, ClientResponseError, ClientSession
 import async_timeout
 import voluptuous as vol
+from aiohttp import ClientConnectionError, ClientResponseError, ClientSession
+from homeassistant.components import media_source
+from homeassistant.components.media_player import (ATTR_MEDIA_ENQUEUE,
+                                                   MediaPlayerDeviceClass,
+                                                   MediaPlayerEnqueue,
+                                                   MediaPlayerEntity,
+                                                   MediaPlayerEntityFeature,
+                                                   MediaPlayerState, MediaType)
+from homeassistant.components.media_player.browse_media import \
+    async_process_play_media_url
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import (CONF_API_KEY, CONF_BROADCAST_ADDRESS,
+                                 CONF_DEVICE_ID, CONF_HOST, CONF_PORT,
+                                 CONF_SERVICE, CONF_SERVICE_DATA, CONF_TIMEOUT,
+                                 CONF_TOKEN, SERVICE_TURN_OFF, SERVICE_TURN_ON,
+                                 STATE_OFF, STATE_ON)
+from homeassistant.core import DOMAIN as HA_DOMAIN
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import config_entry_oauth2_flow
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_platform
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.service import (CONF_SERVICE_ENTITY_ID,
+                                           async_call_from_config)
+from homeassistant.helpers.storage import STORAGE_DIR
+from homeassistant.util import Throttle
+from homeassistant.util import dt as dt_util
+from homeassistant.util.async_ import run_callback_threadsafe
 from wakeonlan import send_magic_packet
 from websocket import WebSocketTimeoutException
 
-from homeassistant.components import media_source
-from homeassistant.components.media_player import (
-    ATTR_MEDIA_ENQUEUE,
-    MediaPlayerDeviceClass,
-    MediaPlayerEnqueue,
-    MediaPlayerEntity,
-    MediaPlayerEntityFeature,
-    MediaPlayerState,
-    MediaType,
-)
-from homeassistant.components.media_player.browse_media import (
-    async_process_play_media_url,
-)
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    CONF_API_KEY,
-    CONF_BROADCAST_ADDRESS,
-    CONF_DEVICE_ID,
-    CONF_HOST,
-    CONF_PORT,
-    CONF_SERVICE,
-    CONF_SERVICE_DATA,
-    CONF_TIMEOUT,
-    CONF_TOKEN,
-    SERVICE_TURN_OFF,
-    SERVICE_TURN_ON,
-    STATE_OFF,
-    STATE_ON,
-)
-from homeassistant.core import DOMAIN as HA_DOMAIN, HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import config_validation as cv, entity_platform, config_entry_oauth2_flow
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.service import CONF_SERVICE_ENTITY_ID, async_call_from_config
-from homeassistant.helpers.storage import STORAGE_DIR
-from homeassistant.util import Throttle, dt as dt_util
-from homeassistant.util.async_ import run_callback_threadsafe
-
-from . import get_smartthings_api_key, get_oauth_refresh_lock, is_oauth_refresh_in_progress, set_oauth_refresh_in_progress
+from . import (get_oauth_refresh_lock, get_smartthings_api_key,
+               is_oauth_refresh_in_progress, set_oauth_refresh_in_progress)
+from .api.art import SamsungTVAsyncArt
 from .api.samsungcast import SamsungCastTube
 from .api.samsungws import ArtModeStatus, SamsungTVAsyncRest, SamsungTVWS
 from .api.smartthings import SmartThingsTV, STStatus
 from .api.upnp import SamsungUPnP
-from .api.art import SamsungTVAsyncArt
-from .const import (
-    ATTR_BRIGHTNESS,
-    ATTR_CATEGORY_ID,
-    ATTR_CONTENT_ID,
-    ATTR_DURATION,
-    ATTR_ENABLED,
-    ATTR_FILE_PATH,
-    ATTR_FILE_TYPE,
-    ATTR_FILTER_ID,
-    ATTR_MATTE_ID,
-    ATTR_SHOW,
-    ATTR_SHUFFLE,
-    ATTR_STATUS,
-    AUTH_METHOD_OAUTH,
-    AUTH_METHOD_ST_ENTRY,
-    CONF_APP_LAUNCH_METHOD,
-    CONF_APP_LIST,
-    CONF_APP_LOAD_METHOD,
-    CONF_AUTH_METHOD,
-    CONF_CHANNEL_LIST,
-    CONF_DUMP_APPS,
-    CONF_EXT_POWER_ENTITY,
-    CONF_LOGO_OPTION,
-    CONF_OAUTH_TOKEN,
-    CONF_PING_PORT,
-    CONF_POWER_ON_METHOD,
-    CONF_SHOW_CHANNEL_NR,
-    CONF_SOURCE_LIST,
-    CONF_ST_ENTRY_UNIQUE_ID,
-    CONF_SYNC_TURN_OFF,
-    CONF_SYNC_TURN_ON,
-    CONF_TOGGLE_ART_MODE,
-    CONF_USE_LOCAL_LOGO,
-    CONF_USE_MUTE_CHECK,
-    CONF_USE_ST_CHANNEL_INFO,
-    CONF_USE_ST_STATUS_INFO,
-    CONF_WOL_REPEAT,
-    CONF_WS_NAME,
-    DATA_ART_API,
-    DATA_CFG,
-    DATA_OPTIONS,
-    DEFAULT_APP,
-    DEFAULT_PORT,
-    DEFAULT_SOURCE_LIST,
-    DEFAULT_TIMEOUT,
-    DOMAIN,
-    LOCAL_LOGO_PATH,
-    MAX_WOL_REPEAT,
-    SERVICE_ART_AVAILABLE,
-    SERVICE_ART_CHANGE_MATTE,
-    SERVICE_ART_DELETE,
-    SERVICE_ART_GET_ARTMODE,
-    SERVICE_ART_GET_BRIGHTNESS,
-    SERVICE_ART_GET_CURRENT,
-    SERVICE_ART_GET_MATTE_LIST,
-    SERVICE_ART_GET_PHOTO_FILTER_LIST,
-    SERVICE_ART_GET_THUMBNAIL,
-    SERVICE_ART_GET_THUMBNAILS_BATCH,
-    SERVICE_ART_SELECT_IMAGE,
-    SERVICE_ART_SET_ARTMODE,
-    SERVICE_ART_SET_AUTO_ROTATION,
-    SERVICE_ART_SET_BRIGHTNESS,
-    SERVICE_ART_SET_FAVOURITE,
-    SERVICE_ART_SET_PHOTO_FILTER,
-    SERVICE_ART_SET_SLIDESHOW,
-    SERVICE_ART_UPLOAD,
-    SERVICE_SELECT_PICTURE_MODE,
-    SIGNAL_CONFIG_ENTITY,
-    STD_APP_LIST,
-    WS_PREFIX,
-    AppLaunchMethod,
-    AppLoadMethod,
-    PowerOnMethod,
-)
+from .const import (ATTR_BRIGHTNESS, ATTR_CATEGORY_ID, ATTR_CONTENT_ID,
+                    ATTR_DURATION, ATTR_ENABLED, ATTR_FILE_PATH,
+                    ATTR_FILE_TYPE, ATTR_FILTER_ID, ATTR_MATTE_ID, ATTR_SHOW,
+                    ATTR_SHUFFLE, ATTR_STATUS, AUTH_METHOD_OAUTH,
+                    AUTH_METHOD_ST_ENTRY, CONF_APP_LAUNCH_METHOD,
+                    CONF_APP_LIST, CONF_APP_LOAD_METHOD, CONF_AUTH_METHOD,
+                    CONF_CHANNEL_LIST, CONF_DUMP_APPS, CONF_EXT_POWER_ENTITY,
+                    CONF_LOGO_OPTION, CONF_OAUTH_TOKEN, CONF_PING_PORT,
+                    CONF_POWER_ON_METHOD, CONF_SHOW_CHANNEL_NR,
+                    CONF_SOURCE_LIST, CONF_ST_ENTRY_UNIQUE_ID,
+                    CONF_SYNC_TURN_OFF, CONF_SYNC_TURN_ON,
+                    CONF_TOGGLE_ART_MODE, CONF_USE_LOCAL_LOGO,
+                    CONF_USE_MUTE_CHECK, CONF_USE_ST_CHANNEL_INFO,
+                    CONF_USE_ST_STATUS_INFO, CONF_WOL_REPEAT, CONF_WS_NAME,
+                    DATA_ART_API, DATA_CFG, DATA_OPTIONS, DEFAULT_APP,
+                    DEFAULT_PORT, DEFAULT_SOURCE_LIST, DEFAULT_TIMEOUT, DOMAIN,
+                    LOCAL_LOGO_PATH, MAX_WOL_REPEAT, SERVICE_ART_AVAILABLE,
+                    SERVICE_ART_CHANGE_MATTE, SERVICE_ART_DELETE,
+                    SERVICE_ART_GET_ARTMODE, SERVICE_ART_GET_BRIGHTNESS,
+                    SERVICE_ART_GET_CURRENT, SERVICE_ART_GET_MATTE_LIST,
+                    SERVICE_ART_GET_PHOTO_FILTER_LIST,
+                    SERVICE_ART_GET_THUMBNAIL,
+                    SERVICE_ART_GET_THUMBNAILS_BATCH, SERVICE_ART_SELECT_IMAGE,
+                    SERVICE_ART_SET_ARTMODE, SERVICE_ART_SET_AUTO_ROTATION,
+                    SERVICE_ART_SET_BRIGHTNESS, SERVICE_ART_SET_FAVOURITE,
+                    SERVICE_ART_SET_PHOTO_FILTER, SERVICE_ART_SET_SLIDESHOW,
+                    SERVICE_ART_UPLOAD, SERVICE_SELECT_PICTURE_MODE,
+                    SIGNAL_CONFIG_ENTITY, STD_APP_LIST, WS_PREFIX,
+                    AppLaunchMethod, AppLoadMethod, PowerOnMethod)
 from .entity import SamsungTVEntity
 from .logo import LOGO_OPTION_DEFAULT, LocalImageUrl, Logo, LogoOption
 
@@ -343,18 +289,26 @@ async def async_setup_entry(
     platform.async_register_entity_service(
         SERVICE_ART_SET_SLIDESHOW,
         {
-            vol.Required(ATTR_DURATION): vol.In(["3min", "15min", "1h", "12h", "1d", "7d"]),
+            vol.Required(ATTR_DURATION): vol.In(
+                ["3min", "15min", "1h", "12h", "1d", "7d"]
+            ),
             vol.Optional(ATTR_SHUFFLE, default=True): cv.boolean,
-            vol.Optional(ATTR_CATEGORY_ID, default=2): vol.All(vol.Coerce(int), vol.Range(2, 8)),
+            vol.Optional(ATTR_CATEGORY_ID, default=2): vol.All(
+                vol.Coerce(int), vol.Range(2, 8)
+            ),
         },
         "async_art_set_slideshow",
     )
     platform.async_register_entity_service(
         SERVICE_ART_SET_AUTO_ROTATION,
         {
-            vol.Required(ATTR_DURATION): vol.In(["3min", "15min", "1h", "12h", "1d", "7d"]),
+            vol.Required(ATTR_DURATION): vol.In(
+                ["3min", "15min", "1h", "12h", "1d", "7d"]
+            ),
             vol.Optional(ATTR_SHUFFLE, default=True): cv.boolean,
-            vol.Optional(ATTR_CATEGORY_ID, default=2): vol.All(vol.Coerce(int), vol.Range(2, 8)),
+            vol.Optional(ATTR_CATEGORY_ID, default=2): vol.All(
+                vol.Coerce(int), vol.Range(2, 8)
+            ),
         },
         "async_art_set_auto_rotation",
     )
@@ -538,9 +492,8 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         if self._st_api_key and device_id:
             # Use callback for both ST_ENTRY and OAuth methods
             use_callbck: bool = (
-                (auth_method == AUTH_METHOD_ST_ENTRY and st_entry_uniqueid is not None)
-                or auth_method == AUTH_METHOD_OAUTH
-            )
+                auth_method == AUTH_METHOD_ST_ENTRY and st_entry_uniqueid is not None
+            ) or auth_method == AUTH_METHOD_OAUTH
             self._st = SmartThingsTV(
                 api_key=self._st_api_key,
                 device_id=device_id,
@@ -608,7 +561,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         # Check if another refresh is already in progress (global check)
         if is_oauth_refresh_in_progress(self._entry_id):
-            _LOGGER.debug("OAuth refresh already in progress (global), waiting for result")
+            _LOGGER.debug(
+                "OAuth refresh already in progress (global), waiting for result"
+            )
             # Wait a bit and then check if token was refreshed
             await asyncio.sleep(0.5)
             # Re-read token from entry
@@ -636,7 +591,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                     # Token was refreshed by another entity
                     new_token = oauth_token.get("access_token")
                     if new_token and new_token != self._st_api_key:
-                        _LOGGER.debug("Token was refreshed by another entity, using new token")
+                        _LOGGER.debug(
+                            "Token was refreshed by another entity, using new token"
+                        )
                         self._st_api_key = new_token
                         if self._st:
                             self._st._api_key = new_token
@@ -683,7 +640,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         _LOGGER.warning(
             "OAuth token %s (expires in %.0f seconds), attempting refresh",
             "expired" if time_until_expiry <= 0 else "expiring soon",
-            time_until_expiry
+            time_until_expiry,
         )
 
         try:
@@ -700,13 +657,18 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             if not implementation:
                 _LOGGER.debug("Attempting to get OAuth implementation directly")
                 try:
-                    implementations = await config_entry_oauth2_flow.async_get_implementations(
-                        self.hass, DOMAIN
+                    implementations = (
+                        await config_entry_oauth2_flow.async_get_implementations(
+                            self.hass, DOMAIN
+                        )
                     )
                     if implementations:
                         # Use the first available implementation
                         implementation = list(implementations.values())[0]
-                        _LOGGER.debug("Found OAuth implementation: %s", type(implementation).__name__)
+                        _LOGGER.debug(
+                            "Found OAuth implementation: %s",
+                            type(implementation).__name__,
+                        )
                 except Exception as impl_ex:
                     _LOGGER.debug("Could not get implementations: %s", impl_ex)
 
@@ -740,15 +702,17 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 self._st._st.authenticate(self._st_api_key)
                 _LOGGER.debug("Updated SmartThingsTV with new OAuth token")
 
-            _LOGGER.info("OAuth token refreshed successfully, new expiration in %.0f seconds",
-                         new_token.get("expires_at", 0) - time.time())
+            _LOGGER.info(
+                "OAuth token refreshed successfully, new expiration in %.0f seconds",
+                new_token.get("expires_at", 0) - time.time(),
+            )
             return True
 
         except Exception as ex:
             _LOGGER.error(
                 "Failed to refresh OAuth token: %s. "
                 "You may need to reconfigure the integration with OAuth.",
-                ex
+                ex,
             )
             return False
 
@@ -940,9 +904,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
     def _get_st_sources(self):
         """Get sources from SmartThings."""
         if not self._st:
-            _LOGGER.debug(
-                "SmartThings not configured, _get_st_sources not executed"
-            )
+            _LOGGER.debug("SmartThings not configured, _get_st_sources not executed")
             return
 
         st_source_list = {}
@@ -1384,7 +1346,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             if self._st and self._st.state != STStatus.STATE_OFF:
                 if self._st.source in ["digitalTv", "TV"]:
                     if self._st.channel_name and self._st.channel_name != "":
-                        if self._show_channel_number and self._st.channel and self._st.channel != "":
+                        if (
+                            self._show_channel_number
+                            and self._st.channel
+                            and self._st.channel != ""
+                        ):
                             return self._st.channel_name + " (" + self._st.channel + ")"
                         return self._st.channel_name
                     if self._st.channel and self._st.channel != "":
@@ -2153,7 +2119,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             result = {
                 "service": "art_available",
                 "count": len(artwork_list),
-                "artwork": artwork_list
+                "artwork": artwork_list,
             }
             self._store_art_result(result)
             return result
@@ -2202,7 +2168,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
             except Exception as ex:
                 # WebSocket failed, try SmartThings fallback
-                if "1005" in str(ex) or "saturated" in str(ex).lower() or "closed" in str(ex).lower():
+                if (
+                    "1005" in str(ex)
+                    or "saturated" in str(ex).lower()
+                    or "closed" in str(ex).lower()
+                ):
                     _LOGGER.warning(
                         "Frame Art: WebSocket connection failed (TV may be in sleep mode), "
                         "trying SmartThings fallback..."
@@ -2218,13 +2188,19 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                             _LOGGER.debug("Frame Art: Waiting for TV to wake up...")
                             await asyncio.sleep(15)
 
-                            _LOGGER.info("Frame Art: TV should now be on (via SmartThings)")
+                            _LOGGER.info(
+                                "Frame Art: TV should now be on (via SmartThings)"
+                            )
 
                         except Exception as st_ex:
-                            _LOGGER.error("Frame Art: SmartThings fallback also failed: %s", st_ex)
+                            _LOGGER.error(
+                                "Frame Art: SmartThings fallback also failed: %s", st_ex
+                            )
                             return False
                     else:
-                        _LOGGER.error("Frame Art: SmartThings not configured, cannot use fallback")
+                        _LOGGER.error(
+                            "Frame Art: SmartThings not configured, cannot use fallback"
+                        )
                         return False
                 else:
                     _LOGGER.error("Frame Art: Failed to turn on TV: %s", ex)
@@ -2266,7 +2242,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
     async def _force_art_coordinator_refresh(self):
         """Force immediate refresh of Frame Art coordinator after artwork changes."""
         try:
-            coordinator = self.hass.data[DOMAIN][self._entry_id].get("frame_art_coordinator")
+            coordinator = self.hass.data[DOMAIN][self._entry_id].get(
+                "frame_art_coordinator"
+            )
             if coordinator:
                 await coordinator.async_request_refresh()
                 _LOGGER.debug("Forced Frame Art coordinator refresh")
@@ -2330,8 +2308,12 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             file_size = await self.hass.async_add_executor_job(
                 lambda: __import__("os").path.getsize(file_path)
             )
-            _LOGGER.info("Frame Art: Uploading file %s (%d bytes) with matte=%s",
-                         file_path, file_size, matte_id)
+            _LOGGER.info(
+                "Frame Art: Uploading file %s (%d bytes) with matte=%s",
+                file_path,
+                file_size,
+                matte_id,
+            )
 
             content_id = await self._art_api.upload(
                 file_path,
@@ -2352,6 +2334,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         except Exception as ex:
             _LOGGER.error("Error uploading artwork: %s", ex)
             import traceback
+
             _LOGGER.debug("Frame Art: Upload traceback: %s", traceback.format_exc())
             return {"error": str(ex)}
 
@@ -2373,7 +2356,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             _LOGGER.error("Error deleting artwork: %s", ex)
             return {"error": str(ex)}
 
-    async def async_art_get_thumbnail(self, content_id: str, save_to_file: bool = True, force_download: bool = False) -> dict:
+    async def async_art_get_thumbnail(
+        self, content_id: str, save_to_file: bool = True, force_download: bool = False
+    ) -> dict:
         """Get thumbnail for a specific piece of artwork.
 
         If save_to_file is True, saves the thumbnail to:
@@ -2407,13 +2392,16 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
             # Check if file already exists (unless force_download=True)
             if save_to_file and not force_download:
+
                 def _check_file_exists():
                     return os.path.isfile(file_path)
 
                 file_exists = await self.hass.async_add_executor_job(_check_file_exists)
 
                 if file_exists:
-                    _LOGGER.info("Thumbnail already exists for %s, skipping download", content_id)
+                    _LOGGER.info(
+                        "Thumbnail already exists for %s, skipping download", content_id
+                    )
                     result = {
                         "service": "art_get_thumbnail",
                         "content_id": content_id,
@@ -2421,7 +2409,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                         "thumbnail_path": file_path,
                         "subdirectory": subdir,
                         "cached": True,
-                        "message": "File already exists"
+                        "message": "File already exists",
                     }
                     self._store_art_result(result)
                     return result
@@ -2434,18 +2422,34 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
             for attempt in range(max_retries):
                 try:
-                    _LOGGER.debug("Downloading thumbnail for %s (attempt %d/%d)", content_id, attempt + 1, max_retries)
+                    _LOGGER.debug(
+                        "Downloading thumbnail for %s (attempt %d/%d)",
+                        content_id,
+                        attempt + 1,
+                        max_retries,
+                    )
                     thumbnail_data = await self._art_api.get_thumbnail(content_id)
 
                     if thumbnail_data and len(thumbnail_data) > 0:
-                        _LOGGER.debug("Successfully downloaded thumbnail for %s (%d bytes)", content_id, len(thumbnail_data))
+                        _LOGGER.debug(
+                            "Successfully downloaded thumbnail for %s (%d bytes)",
+                            content_id,
+                            len(thumbnail_data),
+                        )
                         break
                     else:
                         last_error = "No thumbnail data received"
-                        _LOGGER.debug("No data for %s on attempt %d", content_id, attempt + 1)
+                        _LOGGER.debug(
+                            "No data for %s on attempt %d", content_id, attempt + 1
+                        )
                 except Exception as retry_ex:
                     last_error = str(retry_ex)
-                    _LOGGER.debug("Error downloading %s on attempt %d: %s", content_id, attempt + 1, retry_ex)
+                    _LOGGER.debug(
+                        "Error downloading %s on attempt %d: %s",
+                        content_id,
+                        attempt + 1,
+                        retry_ex,
+                    )
 
                 # Wait before retry (except on last attempt)
                 if attempt < max_retries - 1:
@@ -2453,6 +2457,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
             if thumbnail_data and len(thumbnail_data) > 0:
                 import base64
+
                 encoded = base64.b64encode(thumbnail_data).decode("utf-8")
                 result = {
                     "service": "art_get_thumbnail",
@@ -2464,6 +2469,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 # Save to file for Lovelace access
                 if save_to_file:
                     try:
+
                         def _write_thumbnail():
                             os.makedirs(www_path, exist_ok=True)
                             with open(file_path, "wb") as f:
@@ -2471,10 +2477,14 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                             return file_name, file_path, subdir
 
                         # Run file I/O in executor to avoid blocking
-                        file_name, file_path, subdir = await self.hass.async_add_executor_job(_write_thumbnail)
+                        file_name, file_path, subdir = (
+                            await self.hass.async_add_executor_job(_write_thumbnail)
+                        )
 
                         # Add URL to result
-                        result["thumbnail_url"] = f"/local/frame_art/{subdir}/{file_name}"
+                        result["thumbnail_url"] = (
+                            f"/local/frame_art/{subdir}/{file_name}"
+                        )
                         result["thumbnail_path"] = file_path
                         result["subdirectory"] = subdir
                         _LOGGER.debug("Saved thumbnail to %s", file_path)
@@ -2486,7 +2496,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
             # All retries failed
             error_msg = f"Failed after {max_retries} attempts: {last_error}"
-            _LOGGER.warning("Could not download thumbnail for %s: %s", content_id, error_msg)
+            _LOGGER.warning(
+                "Could not download thumbnail for %s: %s", content_id, error_msg
+            )
             result = {"error": error_msg, "content_id": content_id}
             self._store_art_result(result)
             return result
@@ -2568,14 +2580,20 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                             file_path = os.path.join(dir_path, filename)
                             try:
                                 os.remove(file_path)
-                                removed.append({
-                                    "content_id": content_id,
-                                    "path": file_path,
-                                    "subdirectory": subdir_name,
-                                })
+                                removed.append(
+                                    {
+                                        "content_id": content_id,
+                                        "path": file_path,
+                                        "subdirectory": subdir_name,
+                                    }
+                                )
                                 _LOGGER.info("Removed orphan thumbnail: %s", file_path)
                             except OSError as ex:
-                                _LOGGER.warning("Failed to remove orphan thumbnail %s: %s", file_path, ex)
+                                _LOGGER.warning(
+                                    "Failed to remove orphan thumbnail %s: %s",
+                                    file_path,
+                                    ex,
+                                )
                 except OSError as ex:
                     _LOGGER.warning("Error scanning directory %s: %s", dir_path, ex)
 
@@ -2648,12 +2666,18 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 return result
 
             # Build set of valid content IDs
-            valid_content_ids = {artwork.get("content_id") for artwork in artwork_list if artwork.get("content_id")}
+            valid_content_ids = {
+                artwork.get("content_id")
+                for artwork in artwork_list
+                if artwork.get("content_id")
+            }
 
             # Cleanup orphans if requested
             removed_files = []
             if cleanup_orphans:
-                removed_files = await self._cleanup_orphan_thumbnails(valid_content_ids, favorites_only, personal_only, category_id)
+                removed_files = await self._cleanup_orphan_thumbnails(
+                    valid_content_ids, favorites_only, personal_only, category_id
+                )
 
             # Download thumbnails with progress tracking
             downloaded = []
@@ -2664,7 +2688,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             _LOGGER.info(
                 "Starting batch thumbnail download for %d artworks "
                 "(force_download=%s, cleanup_orphans=%s)",
-                total, force_download, cleanup_orphans,
+                total,
+                force_download,
+                cleanup_orphans,
             )
 
             for idx, artwork in enumerate(artwork_list, 1):
@@ -2673,42 +2699,47 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                     continue
 
                 try:
-                    _LOGGER.debug("Processing thumbnail %d/%d: %s", idx, total, content_id)
+                    _LOGGER.debug(
+                        "Processing thumbnail %d/%d: %s", idx, total, content_id
+                    )
 
                     # Download with file existence check (unless force_download)
                     result = await self.async_art_get_thumbnail(
-                        content_id,
-                        save_to_file=True,
-                        force_download=force_download
+                        content_id, save_to_file=True, force_download=force_download
                     )
 
                     if "error" in result:
-                        failed.append({
-                            "content_id": content_id,
-                            "error": result.get("error")
-                        })
+                        failed.append(
+                            {"content_id": content_id, "error": result.get("error")}
+                        )
                     elif result.get("cached"):
-                        skipped.append({
-                            "content_id": content_id,
-                            "url": result.get("thumbnail_url"),
-                            "path": result.get("thumbnail_path"),
-                            "subdirectory": result.get("subdirectory"),
-                            "reason": "Already exists"
-                        })
+                        skipped.append(
+                            {
+                                "content_id": content_id,
+                                "url": result.get("thumbnail_url"),
+                                "path": result.get("thumbnail_path"),
+                                "subdirectory": result.get("subdirectory"),
+                                "reason": "Already exists",
+                            }
+                        )
                     else:
-                        downloaded.append({
-                            "content_id": content_id,
-                            "url": result.get("thumbnail_url"),
-                            "path": result.get("thumbnail_path"),
-                            "subdirectory": result.get("subdirectory"),
-                            "size": result.get("size")
-                        })
+                        downloaded.append(
+                            {
+                                "content_id": content_id,
+                                "url": result.get("thumbnail_url"),
+                                "path": result.get("thumbnail_path"),
+                                "subdirectory": result.get("subdirectory"),
+                                "size": result.get("size"),
+                            }
+                        )
 
                     # Shorter delay between downloads
                     await asyncio.sleep(0.05)
 
                 except Exception as ex:
-                    _LOGGER.warning("Failed to process thumbnail for %s: %s", content_id, ex)
+                    _LOGGER.warning(
+                        "Failed to process thumbnail for %s: %s", content_id, ex
+                    )
                     failed.append({"content_id": content_id, "error": str(ex)})
 
             # Build summary with metadata
@@ -2772,16 +2803,31 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         try:
             # Convert 0-100 scale to 1-10 scale for the TV API
             # 0-10 -> 1, 11-20 -> 2, ..., 91-100 -> 10
-            tv_brightness = max(1, min(10, (brightness // 10) + (1 if brightness % 10 > 0 or brightness == 0 else 0)))
+            tv_brightness = max(
+                1,
+                min(
+                    10,
+                    (brightness // 10)
+                    + (1 if brightness % 10 > 0 or brightness == 0 else 0),
+                ),
+            )
             # Simpler: map 0->1, 10->1, 20->2, ..., 100->10
             if brightness == 0:
                 tv_brightness = 0
             else:
                 tv_brightness = max(1, min(10, round(brightness / 10)))
 
-            _LOGGER.debug("Frame Art: Converting brightness %d -> %d (TV scale)", brightness, tv_brightness)
+            _LOGGER.debug(
+                "Frame Art: Converting brightness %d -> %d (TV scale)",
+                brightness,
+                tv_brightness,
+            )
             await self._art_api.set_brightness(tv_brightness)
-            return {"success": True, "brightness_ui": brightness, "brightness_tv": tv_brightness}
+            return {
+                "success": True,
+                "brightness_ui": brightness,
+                "brightness_tv": tv_brightness,
+            }
         except Exception as ex:
             _LOGGER.error("Error setting brightness: %s", ex)
             return {"error": str(ex)}
@@ -2859,7 +2905,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             _LOGGER.warning("Frame TV art mode is not supported on this device")
             return {"error": "Frame TV not supported"}
         try:
-            matte_types, matte_colors = await self._art_api.get_matte_list(include_color=True)
+            matte_types, matte_colors = await self._art_api.get_matte_list(
+                include_color=True
+            )
             result = {"matte_types": matte_types, "matte_colors": matte_colors}
             _LOGGER.info(
                 "%s - Available matte types: %s | Available matte colors: %s",
@@ -2918,17 +2966,30 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             try:
                 duration_minutes = int(duration)
             except (ValueError, TypeError):
-                return {"error": f"Invalid duration: {duration}. Valid values: 3min, 15min, 1h, 12h, 1d, 7d"}
+                return {
+                    "error": f"Invalid duration: {duration}. Valid values: 3min, 15min, 1h, 12h, 1d, 7d"
+                }
 
         # Ensure TV is on and in Art Mode
         if not await self._ensure_art_mode_ready():
             return {"error": "Failed to turn on TV"}
 
         try:
-            _LOGGER.debug("Frame Art: Setting slideshow duration=%s (%d min), shuffle=%s, category=%d",
-                          duration, duration_minutes, shuffle, category_id)
-            await self._art_api.set_slideshow_status(duration_minutes, shuffle, category_id)
-            return {"success": True, "duration": duration, "duration_minutes": duration_minutes}
+            _LOGGER.debug(
+                "Frame Art: Setting slideshow duration=%s (%d min), shuffle=%s, category=%d",
+                duration,
+                duration_minutes,
+                shuffle,
+                category_id,
+            )
+            await self._art_api.set_slideshow_status(
+                duration_minutes, shuffle, category_id
+            )
+            return {
+                "success": True,
+                "duration": duration,
+                "duration_minutes": duration_minutes,
+            }
         except Exception as ex:
             _LOGGER.error("Error setting slideshow: %s", ex)
             return {"error": str(ex)}
@@ -2962,17 +3023,30 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             try:
                 duration_minutes = int(duration)
             except (ValueError, TypeError):
-                return {"error": f"Invalid duration: {duration}. Valid values: 3min, 15min, h, 12h, 1d, 7d"}
+                return {
+                    "error": f"Invalid duration: {duration}. Valid values: 3min, 15min, h, 12h, 1d, 7d"
+                }
 
         # Ensure TV is on and in Art Mode
         if not await self._ensure_art_mode_ready():
             return {"error": "Failed to turn on TV"}
 
         try:
-            _LOGGER.debug("Frame Art: Setting auto rotation duration=%s (%d min), shuffle=%s, category=%d",
-                          duration, duration_minutes, shuffle, category_id)
-            await self._art_api.set_auto_rotation_status(duration_minutes, shuffle, category_id)
-            return {"success": True, "duration": duration, "duration_minutes": duration_minutes}
+            _LOGGER.debug(
+                "Frame Art: Setting auto rotation duration=%s (%d min), shuffle=%s, category=%d",
+                duration,
+                duration_minutes,
+                shuffle,
+                category_id,
+            )
+            await self._art_api.set_auto_rotation_status(
+                duration_minutes, shuffle, category_id
+            )
+            return {
+                "success": True,
+                "duration": duration,
+                "duration_minutes": duration_minutes,
+            }
         except Exception as ex:
             _LOGGER.error("Error setting auto rotation: %s", ex)
             return {"error": str(ex)}

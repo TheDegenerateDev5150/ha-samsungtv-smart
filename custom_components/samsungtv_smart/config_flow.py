@@ -3,97 +3,48 @@
 from __future__ import annotations
 
 import logging
-from numbers import Number
 import socket
+from numbers import Number
 from typing import Any, Dict
 
 import voluptuous as vol
-
 from homeassistant.components.binary_sensor import DOMAIN as BS_DOMAIN
-from homeassistant.config_entries import (
-    ConfigEntry,
-    ConfigFlowResult,
-    OptionsFlow,
-)
-from homeassistant.const import (
-    ATTR_DEVICE_ID,
-    CONF_API_KEY,
-    CONF_BASE,
-    CONF_DEVICE_ID,
-    CONF_HOST,
-    CONF_ID,
-    CONF_MAC,
-    CONF_NAME,
-    CONF_PORT,
-    CONF_TOKEN,
-    SERVICE_TURN_ON,
-    __version__,
-)
+from homeassistant.config_entries import (ConfigEntry, ConfigFlowResult,
+                                          OptionsFlow)
+from homeassistant.const import (ATTR_DEVICE_ID, CONF_API_KEY, CONF_BASE,
+                                 CONF_DEVICE_ID, CONF_HOST, CONF_ID, CONF_MAC,
+                                 CONF_NAME, CONF_PORT, CONF_TOKEN,
+                                 SERVICE_TURN_ON, __version__)
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import config_entry_oauth2_flow, entity_registry as er
+from homeassistant.helpers import config_entry_oauth2_flow
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.selector import (
-    EntitySelector,
-    EntitySelectorConfig,
-    ObjectSelector,
-    SelectOptionDict,
-    SelectSelector,
-    SelectSelectorConfig,
-    SelectSelectorMode,
-)
+from homeassistant.helpers.selector import (EntitySelector,
+                                            EntitySelectorConfig,
+                                            ObjectSelector, SelectOptionDict,
+                                            SelectSelector,
+                                            SelectSelectorConfig,
+                                            SelectSelectorMode)
 
-from . import (
-    SamsungTVInfo,
-    get_device_info,
-    get_smartthings_api_key,
-    get_smartthings_entries,
-    is_valid_ha_version,
-)
-from .const import (
-    ATTR_DEVICE_MAC,
-    ATTR_DEVICE_MODEL,
-    ATTR_DEVICE_NAME,
-    ATTR_DEVICE_OS,
-    CONF_APP_LAUNCH_METHOD,
-    CONF_APP_LIST,
-    CONF_APP_LOAD_METHOD,
-    CONF_AUTH_METHOD,
-    CONF_CHANNEL_LIST,
-    CONF_DEVICE_MODEL,
-    CONF_DEVICE_NAME,
-    CONF_DEVICE_OS,
-    CONF_DUMP_APPS,
-    CONF_EXT_POWER_ENTITY,
-    CONF_LOGO_OPTION,
-    CONF_OAUTH_TOKEN,
-    CONF_PING_PORT,
-    CONF_POWER_ON_METHOD,
-    CONF_SHOW_CHANNEL_NR,
-    CONF_SOURCE_LIST,
-    CONF_ST_ENTRY_UNIQUE_ID,
-    CONF_SYNC_TURN_OFF,
-    CONF_SYNC_TURN_ON,
-    CONF_TOGGLE_ART_MODE,
-    CONF_USE_LOCAL_LOGO,
-    CONF_USE_MUTE_CHECK,
-    CONF_USE_ST_CHANNEL_INFO,
-    CONF_USE_ST_STATUS_INFO,
-    CONF_WOL_REPEAT,
-    CONF_WS_NAME,
-    DOMAIN,
-    MAX_WOL_REPEAT,
-    RESULT_ST_DEVICE_NOT_FOUND,
-    RESULT_ST_DEVICE_USED,
-    RESULT_SUCCESS,
-    RESULT_WRONG_APIKEY,
-    AUTH_METHOD_OAUTH,
-    AUTH_METHOD_PAT,
-    AUTH_METHOD_ST_ENTRY,
-    AppLaunchMethod,
-    AppLoadMethod,
-    PowerOnMethod,
-    __min_ha_version__,
-)
+from . import (SamsungTVInfo, get_device_info, get_smartthings_api_key,
+               get_smartthings_entries, is_valid_ha_version)
+from .const import (ATTR_DEVICE_MAC, ATTR_DEVICE_MODEL, ATTR_DEVICE_NAME,
+                    ATTR_DEVICE_OS, AUTH_METHOD_OAUTH, AUTH_METHOD_PAT,
+                    AUTH_METHOD_ST_ENTRY, CONF_APP_LAUNCH_METHOD,
+                    CONF_APP_LIST, CONF_APP_LOAD_METHOD, CONF_AUTH_METHOD,
+                    CONF_CHANNEL_LIST, CONF_DEVICE_MODEL, CONF_DEVICE_NAME,
+                    CONF_DEVICE_OS, CONF_DUMP_APPS, CONF_EXT_POWER_ENTITY,
+                    CONF_LOGO_OPTION, CONF_OAUTH_TOKEN, CONF_PING_PORT,
+                    CONF_POWER_ON_METHOD, CONF_SHOW_CHANNEL_NR,
+                    CONF_SOURCE_LIST, CONF_ST_ENTRY_UNIQUE_ID,
+                    CONF_SYNC_TURN_OFF, CONF_SYNC_TURN_ON,
+                    CONF_TOGGLE_ART_MODE, CONF_USE_LOCAL_LOGO,
+                    CONF_USE_MUTE_CHECK, CONF_USE_ST_CHANNEL_INFO,
+                    CONF_USE_ST_STATUS_INFO, CONF_WOL_REPEAT, CONF_WS_NAME,
+                    DOMAIN, MAX_WOL_REPEAT, RESULT_ST_DEVICE_NOT_FOUND,
+                    RESULT_ST_DEVICE_USED, RESULT_SUCCESS, RESULT_WRONG_APIKEY,
+                    AppLaunchMethod, AppLoadMethod, PowerOnMethod,
+                    __min_ha_version__)
 from .logo import LOGO_OPTION_DEFAULT, LogoOption
 
 APP_LAUNCH_METHODS = {
@@ -352,21 +303,27 @@ class SamsungTVSmartOAuth2FlowHandler(
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema({
-                vol.Required(
-                    CONF_AUTH_METHOD_SELECT, default=default_method
-                ): SelectSelector(
-                    SelectSelectorConfig(
-                        options=[
-                            SelectOptionDict(value=k, label=v)
-                            for k, v in auth_options.items()
-                        ],
-                        mode=SelectSelectorMode.LIST,
-                    )
-                ),
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_AUTH_METHOD_SELECT, default=default_method
+                    ): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                SelectOptionDict(value=k, label=v)
+                                for k, v in auth_options.items()
+                            ],
+                            mode=SelectSelectorMode.LIST,
+                        )
+                    ),
+                }
+            ),
             description_placeholders={
-                "oauth_status": "✓ Configured" if oauth_available else "✗ Not configured - Add credentials in Settings → Application Credentials",
+                "oauth_status": (
+                    "✓ Configured"
+                    if oauth_available
+                    else "✗ Not configured - Add credentials in Settings → Application Credentials"
+                ),
             },
         )
 
@@ -426,11 +383,13 @@ class SamsungTVSmartOAuth2FlowHandler(
 
         return self.async_show_form(
             step_id="host",
-            data_schema=vol.Schema({
-                vol.Required(CONF_HOST): str,
-                vol.Required(CONF_NAME): str,
-                vol.Optional(CONF_USE_HA_NAME, default=False): bool,
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_HOST): str,
+                    vol.Required(CONF_NAME): str,
+                    vol.Optional(CONF_USE_HA_NAME, default=False): bool,
+                }
+            ),
             errors=errors if errors else None,
         )
 
@@ -553,19 +512,21 @@ class SamsungTVSmartOAuth2FlowHandler(
 
     def _get_st_integration_schema(self, st_entries: dict) -> vol.Schema:
         """Return schema for ST integration selection."""
-        return vol.Schema({
-            vol.Required("st_entry"): SelectSelector(
-                SelectSelectorConfig(
-                    options=[
-                        SelectOptionDict(value=k, label=v)
-                        for k, v in st_entries.items()
-                    ],
-                    mode=SelectSelectorMode.DROPDOWN,
-                )
-            ),
-            vol.Required(CONF_HOST): str,
-            vol.Required(CONF_NAME): str,
-        })
+        return vol.Schema(
+            {
+                vol.Required("st_entry"): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            SelectOptionDict(value=k, label=v)
+                            for k, v in st_entries.items()
+                        ],
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Required(CONF_HOST): str,
+                vol.Required(CONF_NAME): str,
+            }
+        )
 
     async def async_step_stdevice(
         self, user_input: dict[str, Any] | None = None
@@ -673,9 +634,7 @@ class SamsungTVSmartOAuth2FlowHandler(
         )
         return self._manage_reconfigure(result)
 
-    async def async_step_reauth(
-        self, entry_data: dict[str, Any]
-    ) -> ConfigFlowResult:
+    async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
         """Handle re-authentication."""
         self._reauth_entry = self.hass.config_entries.async_get_entry(
             self.context["entry_id"]
@@ -841,12 +800,14 @@ class SamsungTVSmartOAuth2FlowHandler(
         if st_entries:
             st_unique_id = data.get(CONF_ST_ENTRY_UNIQUE_ID)
             sugg_val = st_unique_id if st_unique_id in st_entries else None
-            init_schema.update({
-                vol.Optional(
-                    CONF_ST_ENTRY_UNIQUE_ID,
-                    description={"suggested_value": sugg_val},
-                ): SelectSelector(_dict_to_select(st_entries)),
-            })
+            init_schema.update(
+                {
+                    vol.Optional(
+                        CONF_ST_ENTRY_UNIQUE_ID,
+                        description={"suggested_value": sugg_val},
+                    ): SelectSelector(_dict_to_select(st_entries)),
+                }
+            )
 
         return self.async_show_form(
             step_id="manual",
@@ -888,16 +849,18 @@ class SamsungTVSmartOAuth2FlowHandler(
         # Don't show API key field if using OAuth
         if current_auth != AUTH_METHOD_OAUTH:
             sugg_val = data.get(CONF_API_KEY, "") if not use_st_key else ""
-            init_schema[vol.Optional(
-                CONF_API_KEY, description={"suggested_value": sugg_val}
-            )] = str
+            init_schema[
+                vol.Optional(CONF_API_KEY, description={"suggested_value": sugg_val})
+            ] = str
 
             if st_entries:
                 sugg_val = st_unique_id if use_st_key else None
-                init_schema[vol.Optional(
-                    CONF_ST_ENTRY_UNIQUE_ID,
-                    description={"suggested_value": sugg_val},
-                )] = SelectSelector(_dict_to_select(st_entries))
+                init_schema[
+                    vol.Optional(
+                        CONF_ST_ENTRY_UNIQUE_ID,
+                        description={"suggested_value": sugg_val},
+                    )
+                ] = SelectSelector(_dict_to_select(st_entries))
 
         return self.async_show_form(
             step_id="reconfigure",
@@ -984,45 +947,51 @@ class OptionsFlowHandler(OptionsFlow):
         }
 
         if not self._app_list:
-            opt_schema.update({
-                vol.Required(
-                    CONF_APP_LOAD_METHOD,
-                    default=options.get(
-                        CONF_APP_LOAD_METHOD, str(AppLoadMethod.All.value)
-                    ),
-                ): SelectSelector(_dict_to_select(APP_LOAD_METHODS)),
-            })
+            opt_schema.update(
+                {
+                    vol.Required(
+                        CONF_APP_LOAD_METHOD,
+                        default=options.get(
+                            CONF_APP_LOAD_METHOD, str(AppLoadMethod.All.value)
+                        ),
+                    ): SelectSelector(_dict_to_select(APP_LOAD_METHODS)),
+                }
+            )
 
         if self._use_st:
-            data_schema = vol.Schema({
-                vol.Required(
-                    CONF_USE_ST_STATUS_INFO,
-                    default=options.get(CONF_USE_ST_STATUS_INFO, True),
-                ): bool,
-                vol.Required(
-                    CONF_USE_ST_CHANNEL_INFO,
-                    default=options.get(CONF_USE_ST_CHANNEL_INFO, True),
-                ): bool,
-                vol.Required(
-                    CONF_SHOW_CHANNEL_NR,
-                    default=options.get(CONF_SHOW_CHANNEL_NR, False),
-                ): bool,
-            }).extend(opt_schema)
-            data_schema = data_schema.extend({
-                vol.Required(
-                    CONF_POWER_ON_METHOD,
-                    default=options.get(
-                        CONF_POWER_ON_METHOD, str(PowerOnMethod.WOL.value)
-                    ),
-                ): SelectSelector(_dict_to_select(POWER_ON_METHODS)),
-            })
+            data_schema = vol.Schema(
+                {
+                    vol.Required(
+                        CONF_USE_ST_STATUS_INFO,
+                        default=options.get(CONF_USE_ST_STATUS_INFO, True),
+                    ): bool,
+                    vol.Required(
+                        CONF_USE_ST_CHANNEL_INFO,
+                        default=options.get(CONF_USE_ST_CHANNEL_INFO, True),
+                    ): bool,
+                    vol.Required(
+                        CONF_SHOW_CHANNEL_NR,
+                        default=options.get(CONF_SHOW_CHANNEL_NR, False),
+                    ): bool,
+                }
+            ).extend(opt_schema)
+            data_schema = data_schema.extend(
+                {
+                    vol.Required(
+                        CONF_POWER_ON_METHOD,
+                        default=options.get(
+                            CONF_POWER_ON_METHOD, str(PowerOnMethod.WOL.value)
+                        ),
+                    ): SelectSelector(_dict_to_select(POWER_ON_METHODS)),
+                }
+            )
         else:
             data_schema = vol.Schema(opt_schema)
 
         if not self._adv_chk:
-            data_schema = data_schema.extend({
-                vol.Required(CONF_SHOW_ADV_OPT, default=False): bool
-            })
+            data_schema = data_schema.extend(
+                {vol.Required(CONF_SHOW_ADV_OPT, default=False): bool}
+            )
 
         return self.async_show_form(step_id="init", data_schema=data_schema)
 
@@ -1055,11 +1024,13 @@ class OptionsFlowHandler(OptionsFlow):
                 return await self.async_step_menu()
             errors = {CONF_BASE: "invalid_tv_list"}
 
-        data_schema = vol.Schema({
-            vol.Optional(
-                CONF_SOURCE_LIST, default=self._source_list
-            ): ObjectSelector()
-        })
+        data_schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_SOURCE_LIST, default=self._source_list
+                ): ObjectSelector()
+            }
+        )
         return self.async_show_form(
             step_id="source_list", data_schema=data_schema, errors=errors
         )
@@ -1074,9 +1045,9 @@ class OptionsFlowHandler(OptionsFlow):
                 return await self.async_step_menu()
             errors = {CONF_BASE: "invalid_tv_list"}
 
-        data_schema = vol.Schema({
-            vol.Optional(CONF_APP_LIST, default=self._app_list): ObjectSelector()
-        })
+        data_schema = vol.Schema(
+            {vol.Optional(CONF_APP_LIST, default=self._app_list): ObjectSelector()}
+        )
         return self.async_show_form(
             step_id="app_list", data_schema=data_schema, errors=errors
         )
@@ -1091,11 +1062,13 @@ class OptionsFlowHandler(OptionsFlow):
                 return await self.async_step_menu()
             errors = {CONF_BASE: "invalid_tv_list"}
 
-        data_schema = vol.Schema({
-            vol.Optional(
-                CONF_CHANNEL_LIST, default=self._channel_list
-            ): ObjectSelector()
-        })
+        data_schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_CHANNEL_LIST, default=self._channel_list
+                ): ObjectSelector()
+            }
+        )
         return self.async_show_form(
             step_id="channel_list", data_schema=data_schema, errors=errors
         )
@@ -1117,16 +1090,20 @@ class OptionsFlowHandler(OptionsFlow):
         )
         options = _validate_options(self._sync_ent_opt)
 
-        data_schema = vol.Schema({
-            vol.Optional(
-                CONF_SYNC_TURN_OFF,
-                description={"suggested_value": options.get(CONF_SYNC_TURN_OFF, [])},
-            ): EntitySelector(select_entities),
-            vol.Optional(
-                CONF_SYNC_TURN_ON,
-                description={"suggested_value": options.get(CONF_SYNC_TURN_ON, [])},
-            ): EntitySelector(select_entities),
-        })
+        data_schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_SYNC_TURN_OFF,
+                    description={
+                        "suggested_value": options.get(CONF_SYNC_TURN_OFF, [])
+                    },
+                ): EntitySelector(select_entities),
+                vol.Optional(
+                    CONF_SYNC_TURN_ON,
+                    description={"suggested_value": options.get(CONF_SYNC_TURN_ON, [])},
+                ): EntitySelector(select_entities),
+            }
+        )
         return self.async_show_form(step_id="sync_ent", data_schema=data_schema)
 
     async def async_step_adv_opt(self, user_input=None) -> ConfigFlowResult:
@@ -1142,43 +1119,48 @@ class OptionsFlowHandler(OptionsFlow):
         select_entities = EntitySelectorConfig(domain=BS_DOMAIN)
         options = _validate_options(self._adv_options)
 
-        data_schema = vol.Schema({
-            vol.Required(
-                CONF_APP_LAUNCH_METHOD,
-                default=options.get(
-                    CONF_APP_LAUNCH_METHOD, str(AppLaunchMethod.Standard.value)
-                ),
-            ): SelectSelector(_dict_to_select(APP_LAUNCH_METHODS)),
-            vol.Required(
-                CONF_WOL_REPEAT,
-                default=min(options.get(CONF_WOL_REPEAT, 1), MAX_WOL_REPEAT),
-            ): vol.All(vol.Coerce(int), vol.Clamp(min=1, max=MAX_WOL_REPEAT)),
-            vol.Required(
-                CONF_PING_PORT, default=options.get(CONF_PING_PORT, 0)
-            ): vol.All(vol.Coerce(int), vol.Clamp(min=0, max=65535)),
-            vol.Optional(
-                CONF_EXT_POWER_ENTITY,
-                description={"suggested_value": options.get(CONF_EXT_POWER_ENTITY, "")},
-            ): EntitySelector(select_entities),
-            vol.Required(
-                CONF_USE_MUTE_CHECK,
-                default=options.get(CONF_USE_MUTE_CHECK, False),
-            ): bool,
-            vol.Required(
-                CONF_DUMP_APPS,
-                default=options.get(CONF_DUMP_APPS, False),
-            ): bool,
-            vol.Required(
-                CONF_TOGGLE_ART_MODE,
-                default=options.get(CONF_TOGGLE_ART_MODE, False),
-            ): bool,
-        })
+        data_schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_APP_LAUNCH_METHOD,
+                    default=options.get(
+                        CONF_APP_LAUNCH_METHOD, str(AppLaunchMethod.Standard.value)
+                    ),
+                ): SelectSelector(_dict_to_select(APP_LAUNCH_METHODS)),
+                vol.Required(
+                    CONF_WOL_REPEAT,
+                    default=min(options.get(CONF_WOL_REPEAT, 1), MAX_WOL_REPEAT),
+                ): vol.All(vol.Coerce(int), vol.Clamp(min=1, max=MAX_WOL_REPEAT)),
+                vol.Required(
+                    CONF_PING_PORT, default=options.get(CONF_PING_PORT, 0)
+                ): vol.All(vol.Coerce(int), vol.Clamp(min=0, max=65535)),
+                vol.Optional(
+                    CONF_EXT_POWER_ENTITY,
+                    description={
+                        "suggested_value": options.get(CONF_EXT_POWER_ENTITY, "")
+                    },
+                ): EntitySelector(select_entities),
+                vol.Required(
+                    CONF_USE_MUTE_CHECK,
+                    default=options.get(CONF_USE_MUTE_CHECK, False),
+                ): bool,
+                vol.Required(
+                    CONF_DUMP_APPS,
+                    default=options.get(CONF_DUMP_APPS, False),
+                ): bool,
+                vol.Required(
+                    CONF_TOGGLE_ART_MODE,
+                    default=options.get(CONF_TOGGLE_ART_MODE, False),
+                ): bool,
+            }
+        )
         return self.async_show_form(step_id="adv_opt", data_schema=data_schema)
 
 
 # =========================================================================
 # Helper functions
 # =========================================================================
+
 
 def _validate_options(options: dict) -> dict:
     """Validate options format."""

@@ -2,31 +2,26 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from datetime import datetime
-import logging
 from typing import Any
 
 from homeassistant.components.media_player.const import (
-    ATTR_MEDIA_CONTENT_ID,
-    ATTR_MEDIA_CONTENT_TYPE,
-    DOMAIN as MP_DOMAIN,
-    SERVICE_PLAY_MEDIA,
-)
+    ATTR_MEDIA_CONTENT_ID, ATTR_MEDIA_CONTENT_TYPE)
+from homeassistant.components.media_player.const import DOMAIN as MP_DOMAIN
+from homeassistant.components.media_player.const import SERVICE_PLAY_MEDIA
 from homeassistant.components.remote import ATTR_NUM_REPEATS, RemoteEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    CONF_SERVICE,
-    CONF_SERVICE_DATA,
-    SERVICE_TURN_OFF,
-    SERVICE_TURN_ON,
-)
+from homeassistant.const import (CONF_SERVICE, CONF_SERVICE_DATA,
+                                 SERVICE_TURN_OFF, SERVICE_TURN_ON)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_call_later
-from homeassistant.helpers.service import CONF_SERVICE_ENTITY_ID, async_call_from_config
+from homeassistant.helpers.service import (CONF_SERVICE_ENTITY_ID,
+                                           async_call_from_config)
 
 from .const import DATA_CFG, DOMAIN
 from .entity import SamsungTVEntity

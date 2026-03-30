@@ -6,86 +6,45 @@ import asyncio
 import json
 import logging
 import os
-from pathlib import Path
 import socket
 import time
+from pathlib import Path
 
-from aiohttp import ClientConnectionError, ClientResponseError, ClientSession
 import async_timeout
+import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
-from websocket import WebSocketException
-
+from aiohttp import ClientConnectionError, ClientResponseError, ClientSession
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import (
-    ATTR_DEVICE_ID,
-    CONF_ACCESS_TOKEN,
-    CONF_API_KEY,
-    CONF_BROADCAST_ADDRESS,
-    CONF_DEVICE_ID,
-    CONF_HOST,
-    CONF_ID,
-    CONF_MAC,
-    CONF_NAME,
-    CONF_PORT,
-    CONF_TIMEOUT,
-    CONF_TOKEN,
-    MAJOR_VERSION,
-    MINOR_VERSION,
-    Platform,
-    __version__,
-)
+from homeassistant.const import (ATTR_DEVICE_ID, CONF_ACCESS_TOKEN,
+                                 CONF_API_KEY, CONF_BROADCAST_ADDRESS,
+                                 CONF_DEVICE_ID, CONF_HOST, CONF_ID, CONF_MAC,
+                                 CONF_NAME, CONF_PORT, CONF_TIMEOUT,
+                                 CONF_TOKEN, MAJOR_VERSION, MINOR_VERSION,
+                                 Platform, __version__)
 from homeassistant.core import HomeAssistant, callback
-import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import STORAGE_DIR
 from homeassistant.helpers.typing import ConfigType
+from websocket import WebSocketException
 
 from .api.samsungws import ConnectionFailure, SamsungTVWS
 from .api.smartthings import SmartThingsTV
-from .const import (
-    ATTR_DEVICE_MAC,
-    ATTR_DEVICE_MODEL,
-    ATTR_DEVICE_NAME,
-    ATTR_DEVICE_OS,
-    CONF_APP_LIST,
-    CONF_AUTH_METHOD,
-    CONF_CHANNEL_LIST,
-    CONF_DEVICE_NAME,
-    CONF_LOAD_ALL_APPS,
-    CONF_OAUTH_TOKEN,
-    CONF_SCAN_APP_HTTP,
-    CONF_SHOW_CHANNEL_NR,
-    CONF_SOURCE_LIST,
-    CONF_ST_ENTRY_UNIQUE_ID,
-    CONF_SYNC_TURN_OFF,
-    CONF_SYNC_TURN_ON,
-    CONF_UPDATE_CUSTOM_PING_URL,
-    CONF_UPDATE_METHOD,
-    CONF_USE_ST_INT_API_KEY,
-    CONF_WS_NAME,
-    DATA_CFG,
-    DATA_CFG_YAML,
-    DATA_OPTIONS,
-    DEFAULT_PORT,
-    DEFAULT_SOURCE_LIST,
-    DEFAULT_TIMEOUT,
-    DOMAIN,
-    LOCAL_LOGO_PATH,
-    MIN_HA_MAJ_VER,
-    MIN_HA_MIN_VER,
-    RESULT_NOT_SUCCESSFUL,
-    RESULT_ST_DEVICE_NOT_FOUND,
-    RESULT_SUCCESS,
-    RESULT_WRONG_APIKEY,
-    SIGNAL_CONFIG_ENTITY,
-    WS_PREFIX,
-    AUTH_METHOD_OAUTH,
-
-    AUTH_METHOD_ST_ENTRY,
-    __min_ha_version__,
-)
+from .const import (ATTR_DEVICE_MAC, ATTR_DEVICE_MODEL, ATTR_DEVICE_NAME,
+                    ATTR_DEVICE_OS, AUTH_METHOD_OAUTH, AUTH_METHOD_ST_ENTRY,
+                    CONF_APP_LIST, CONF_AUTH_METHOD, CONF_CHANNEL_LIST,
+                    CONF_DEVICE_NAME, CONF_LOAD_ALL_APPS, CONF_OAUTH_TOKEN,
+                    CONF_SCAN_APP_HTTP, CONF_SHOW_CHANNEL_NR, CONF_SOURCE_LIST,
+                    CONF_ST_ENTRY_UNIQUE_ID, CONF_SYNC_TURN_OFF,
+                    CONF_SYNC_TURN_ON, CONF_UPDATE_CUSTOM_PING_URL,
+                    CONF_UPDATE_METHOD, CONF_USE_ST_INT_API_KEY, CONF_WS_NAME,
+                    DATA_CFG, DATA_CFG_YAML, DATA_OPTIONS, DEFAULT_PORT,
+                    DEFAULT_SOURCE_LIST, DEFAULT_TIMEOUT, DOMAIN,
+                    LOCAL_LOGO_PATH, MIN_HA_MAJ_VER, MIN_HA_MIN_VER,
+                    RESULT_NOT_SUCCESSFUL, RESULT_ST_DEVICE_NOT_FOUND,
+                    RESULT_SUCCESS, RESULT_WRONG_APIKEY, SIGNAL_CONFIG_ENTITY,
+                    WS_PREFIX, __min_ha_version__)
 from .logo import CUSTOM_IMAGE_BASE_URL, STATIC_IMAGE_BASE_URL
 
 # workaroud for failing import native domain when custom integration is present
@@ -102,7 +61,13 @@ DEVICE_INFO = {
     ATTR_DEVICE_OS: "OS",
 }
 
-SAMSMART_PLATFORM = [Platform.SENSOR, Platform.MEDIA_PLAYER, Platform.REMOTE, Platform.SWITCH, Platform.SELECT]
+SAMSMART_PLATFORM = [
+    Platform.SENSOR,
+    Platform.MEDIA_PLAYER,
+    Platform.REMOTE,
+    Platform.SWITCH,
+    Platform.SELECT,
+]
 
 SAMSMART_SCHEMA = {
     vol.Optional(CONF_SOURCE_LIST, default=DEFAULT_SOURCE_LIST): cv.string,
@@ -402,38 +367,37 @@ def get_smartthings_api_key(hass: HomeAssistant, st_unique_id: str) -> str | Non
                 if isinstance(token_data, dict):
                     if CONF_ACCESS_TOKEN in token_data:
                         _LOGGER.debug(
-                            "SmartThings: Found OAuth access_token for %s",
-                            st_unique_id
+                            "SmartThings: Found OAuth access_token for %s", st_unique_id
                         )
                         return token_data[CONF_ACCESS_TOKEN]
 
                 # Legacy PAT: token is a string directly
                 elif isinstance(token_data, str):
                     _LOGGER.debug(
-                        "SmartThings: Found legacy PAT token for %s",
-                        st_unique_id
+                        "SmartThings: Found legacy PAT token for %s", st_unique_id
                     )
                     return token_data
 
             # Also try direct access_token key (alternative OAuth structure)
             if CONF_ACCESS_TOKEN in config_data:
                 _LOGGER.debug(
-                    "SmartThings: Found direct access_token for %s",
-                    st_unique_id
+                    "SmartThings: Found direct access_token for %s", st_unique_id
                 )
                 return config_data[CONF_ACCESS_TOKEN]
 
             _LOGGER.warning(
                 "SmartThings: No valid token found for %s in entry data keys: %s",
                 st_unique_id,
-                list(config_data.keys())
+                list(config_data.keys()),
             )
             return None
 
     return None
 
 
-async def async_get_samsungtv_api_key(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
+async def async_get_samsungtv_api_key(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> str | None:  # noqa: C901
     """Get API key based on authentication method configured for this entry.
 
     This function handles all three auth methods:
@@ -467,9 +431,13 @@ async def async_get_samsungtv_api_key(hass: HomeAssistant, entry: ConfigEntry) -
 
                     # Check if another refresh is already in progress
                     if is_oauth_refresh_in_progress(entry.entry_id):
-                        _LOGGER.debug("OAuth refresh already in progress, using current token")
+                        _LOGGER.debug(
+                            "OAuth refresh already in progress, using current token"
+                        )
                         # Re-read from entry in case it was just refreshed
-                        updated_entry = hass.config_entries.async_get_entry(entry.entry_id)
+                        updated_entry = hass.config_entries.async_get_entry(
+                            entry.entry_id
+                        )
                         if updated_entry:
                             updated_token = updated_entry.data.get(CONF_OAUTH_TOKEN, {})
                             return updated_token.get("access_token", access_token)
@@ -479,19 +447,27 @@ async def async_get_samsungtv_api_key(hass: HomeAssistant, entry: ConfigEntry) -
                     lock = get_oauth_refresh_lock(entry.entry_id)
                     async with lock:
                         # Double-check after acquiring lock - token might have been refreshed
-                        updated_entry = hass.config_entries.async_get_entry(entry.entry_id)
+                        updated_entry = hass.config_entries.async_get_entry(
+                            entry.entry_id
+                        )
                         if updated_entry:
                             updated_token = updated_entry.data.get(CONF_OAUTH_TOKEN, {})
                             updated_expires = updated_token.get("expires_at", 0)
                             if updated_expires > current_time + 300:
-                                _LOGGER.debug("Token was refreshed by another entity, using new token")
+                                _LOGGER.debug(
+                                    "Token was refreshed by another entity, using new token"
+                                )
                                 return updated_token.get("access_token")
 
                         set_oauth_refresh_in_progress(entry.entry_id, True)
                         try:
                             _LOGGER.warning(
                                 "OAuth token %s, attempting refresh",
-                                "expired" if current_time > expires_at else "expiring soon"
+                                (
+                                    "expired"
+                                    if current_time > expires_at
+                                    else "expiring soon"
+                                ),
                             )
 
                             # Try to get implementation from entry
@@ -501,31 +477,47 @@ async def async_get_samsungtv_api_key(hass: HomeAssistant, entry: ConfigEntry) -
                                     hass, entry
                                 )
                             except Exception as ex:
-                                _LOGGER.debug("Could not get implementation from entry: %s", ex)
+                                _LOGGER.debug(
+                                    "Could not get implementation from entry: %s", ex
+                                )
 
                             # If not found, try to create it directly from application credentials
                             if not implementation:
-                                _LOGGER.debug("Attempting to create OAuth implementation directly")
+                                _LOGGER.debug(
+                                    "Attempting to create OAuth implementation directly"
+                                )
                                 try:
                                     implementations = await config_entry_oauth2_flow.async_get_implementations(
                                         hass, DOMAIN
                                     )
                                     if implementations:
                                         # Use the first available implementation
-                                        implementation = list(implementations.values())[0]
-                                        _LOGGER.debug("Found OAuth implementation: %s", type(implementation).__name__)
+                                        implementation = list(implementations.values())[
+                                            0
+                                        ]
+                                        _LOGGER.debug(
+                                            "Found OAuth implementation: %s",
+                                            type(implementation).__name__,
+                                        )
 
                                         # Update entry with auth_implementation for future refreshes
                                         if "auth_implementation" not in entry.data:
                                             hass.config_entries.async_update_entry(
                                                 entry,
-                                                data={**entry.data, "auth_implementation": DOMAIN},
+                                                data={
+                                                    **entry.data,
+                                                    "auth_implementation": DOMAIN,
+                                                },
                                             )
                                 except Exception as impl_ex:
-                                    _LOGGER.debug("Could not get implementations: %s", impl_ex)
+                                    _LOGGER.debug(
+                                        "Could not get implementations: %s", impl_ex
+                                    )
 
                             if implementation:
-                                new_token = await implementation.async_refresh_token(oauth_token)
+                                new_token = await implementation.async_refresh_token(
+                                    oauth_token
+                                )
                                 # Update entry with new token
                                 hass.config_entries.async_update_entry(
                                     entry,
@@ -564,7 +556,9 @@ async def async_get_samsungtv_api_key(hass: HomeAssistant, entry: ConfigEntry) -
             if api_key:
                 _LOGGER.debug("Using SmartThings integration token")
                 return api_key
-            _LOGGER.warning("Failed to retrieve SmartThings integration access token, using last available")
+            _LOGGER.warning(
+                "Failed to retrieve SmartThings integration access token, using last available"
+            )
         return entry.data.get(CONF_API_KEY)
 
     # Method 3: PAT (default/legacy) - also handles old configs without auth_method
@@ -578,7 +572,9 @@ async def async_get_samsungtv_api_key(hass: HomeAssistant, entry: ConfigEntry) -
             if api_key:
                 _LOGGER.debug("Using SmartThings integration token (legacy config)")
                 return api_key
-            _LOGGER.warning("Failed to retrieve SmartThings integration access token, using last available")
+            _LOGGER.warning(
+                "Failed to retrieve SmartThings integration access token, using last available"
+            )
         return entry.data.get(CONF_API_KEY)
 
     if api_key:
