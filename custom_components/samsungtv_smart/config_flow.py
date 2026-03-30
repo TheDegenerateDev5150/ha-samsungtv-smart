@@ -852,6 +852,9 @@ class SamsungTVSmartOAuth2FlowHandler(
             step_id="manual",
             data_schema=vol.Schema(init_schema),
             errors={CONF_BASE: base_err} if base_err else None,
+            description_placeholders={
+                "st_tokens_url": "https://account.smartthings.com/tokens",
+            },
         )
 
     @callback
