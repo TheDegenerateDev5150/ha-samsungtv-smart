@@ -1,11 +1,13 @@
 [flake8]
-max-line-length = 150
+max-line-length = 88
 max-complexity = 35
 extend-ignore =
-    # E203: whitespace before ':' (false positive with slice notation)
+    # E203: whitespace before ':' (false positive with black's slice notation)
     E203,
     # W503: line break before binary operator (conflicts with black)
     W503,
+    # E501: line too long (black handles this)
+    E501,
 exclude =
     .git,
     __pycache__,
