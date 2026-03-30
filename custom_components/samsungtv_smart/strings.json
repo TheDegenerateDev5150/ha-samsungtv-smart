@@ -172,7 +172,7 @@
     }
   },
   "application_credentials": {
-    "description": "To use OAuth2 authentication with Samsung TV Smart, you need to create SmartThings developer credentials.\n\n**Setup Instructions:**\n\n1. Go to [SmartThings Developer Portal](https://developer.smartthings.com/)\n2. Sign in with your Samsung account\n3. Click **New Project** → Select **Automation for the Home**\n4. Give your project a name (e.g., 'Home Assistant TV')\n5. Click **Register App** in the sidebar\n6. Select **OAuth2 / Credentials**\n7. Fill in the form:\n   - **App Name**: Home Assistant Samsung TV\n   - **Redirect URI**: `{callback_url}`\n   - **Scopes**: Select `r:devices:*` and `x:devices:*`\n8. Click **Save** and copy your credentials below\n\n[SmartThings OAuth Documentation](https://developer.smartthings.com/docs/connected-services/oauth-integrations)"
+    "description": "To use OAuth2 authentication with Samsung TV Smart, you need to create SmartThings developer credentials.\n\n**Setup Instructions:**\n\n1. Go to [SmartThings Developer Portal]({smartthings_portal})\n2. Sign in with your Samsung account\n3. Click **New Project** → Select **Automation for the Home**\n4. Give your project a name (e.g., 'Home Assistant TV')\n5. Click **Register App** in the sidebar\n6. Select **OAuth2 / Credentials**\n7. Fill in the form:\n   - **App Name**: Home Assistant Samsung TV\n   - **Redirect URI**: `{callback_url}`\n   - **Scopes**: Select `r:devices:*` and `x:devices:*`\n8. Click **Save** and copy your credentials below\n\n[SmartThings OAuth Documentation]({oauth_docs})"
   },
   "exceptions": {
     "oauth2_implementation_unavailable": {
