@@ -2661,7 +2661,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             failed = []
             total = len(artwork_list)
 
-            _LOGGER.info("Starting batch thumbnail download for %d artworks (force_download=%s, cleanup_orphans=%s)", total, force_download, cleanup_orphans)
+            _LOGGER.info(
+                "Starting batch thumbnail download for %d artworks "
+                "(force_download=%s, cleanup_orphans=%s)",
+                total, force_download, cleanup_orphans,
+            )
 
             for idx, artwork in enumerate(artwork_list, 1):
                 content_id = artwork.get("content_id")
