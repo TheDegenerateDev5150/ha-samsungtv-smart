@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from asyncio import TimeoutError as AsyncTimeoutError
 from collections.abc import Callable
 from datetime import timedelta
 from enum import Enum
@@ -12,6 +11,8 @@ from aiohttp import ClientSession
 from pysmartthings import SmartThings
 from pysmartthings.command import Command
 
+from homeassistant.util import Throttle
+
 # Capability names as strings (pysmartthings v6.0+ compatibility)
 # In older versions these were CAP_SWITCH, CAP_AUDIO_VOLUME, etc.
 CAP_SWITCH = "switch"
@@ -19,8 +20,6 @@ CAP_AUDIO_VOLUME = "audioVolume"
 CAP_AUDIO_MUTE = "audioMute"
 CAP_TV_CHANNEL = "tvChannel"
 CAP_MEDIA_INPUT_SOURCE = "mediaInputSource"
-
-from homeassistant.util import Throttle
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -204,43 +203,43 @@ class SmartThingsTV:
     async def get_devices_list(api_key: str, session: ClientSession, device_label: str = "") -> dict:
         """Get list of available SmartThings devices using pysmartthings."""
         result = {}
-        
+
         try:
             st = SmartThings(session=session)
             st.authenticate(api_key)
             devices = await st.get_devices()
-            
+
             for dev in devices:
                 if dev.type != DEVICE_TYPE_OCF:
                     continue
-                
+
                 if device_label and dev.label != device_label:
                     continue
                 elif not device_label and dev.device_type_name not in DEVICE_TYPE_NAMES:
                     continue
-                
+
                 result[dev.device_id] = {
                     "name": dev.name or f"TV ID {dev.device_id}",
                     "label": dev.label or "",
                 }
-            
+
             _LOGGER.info("SmartThings discovered TV devices: %s", str(result))
-            
+
         except Exception as err:
             _LOGGER.error("Error getting devices list: %s", err)
-        
+
         return result
 
     @Throttle(timedelta(seconds=1))
     async def async_device_update(self, use_channel_info: bool = True):
         """Update device status using pysmartthings."""
         self._get_api_key()
-        
+
         try:
             # Get device status using pysmartthings
             # Note: get_device_status() returns .components directly (dict, not DeviceStatus object)
             components = await self._st.get_device_status(self._device_id)
-            
+
             if COMPONENT_MAIN not in components:
                 _LOGGER.warning("Main component not found in device status")
                 return
@@ -324,7 +323,7 @@ class SmartThingsTV:
     async def async_device_health(self) -> str:
         """Get device health status using pysmartthings."""
         self._get_api_key()
-        
+
         try:
             health = await self._st.get_device_health(self._device_id)
             return health.state
@@ -357,7 +356,7 @@ class SmartThingsTV:
     async def async_send_command(self, cmd_type: str, command: str = ""):
         """Send a command to the device using pysmartthings."""
         self._get_api_key()
-        
+
         try:
             if cmd_type == "setvolume":
                 cmd = Command(
@@ -399,7 +398,7 @@ class SmartThingsTV:
                 return
 
             await self._st.execute_device_command(self._device_id, [cmd])
-            
+
         except Exception as err:
             _LOGGER.error("Error sending command %s: %s", cmd_type, err)
             raise
@@ -441,7 +440,7 @@ class SmartThingsTV:
             return
         if self._sound_mode_list and mode not in self._sound_mode_list:
             raise InvalidSmartThingsSoundMode()
-        
+
         self._get_api_key()
         try:
             cmd = Command(
@@ -462,7 +461,7 @@ class SmartThingsTV:
             return
         if self._picture_mode_list and mode not in self._picture_mode_list:
             raise InvalidSmartThingsPictureMode()
-        
+
         self._get_api_key()
         try:
             cmd = Command(

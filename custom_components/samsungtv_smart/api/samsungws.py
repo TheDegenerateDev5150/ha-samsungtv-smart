@@ -1039,7 +1039,7 @@ class SamsungTVWS:
             except Exception as ex:
                 _LOGGING.debug("Error closing ws_remote: %s", ex)
             self._ws_remote = None
-        
+
         # Nettoyer aussi la connexion simple pour éviter la saturation
         if self.connection:
             try:
@@ -1081,7 +1081,7 @@ class SamsungTVWS:
                         connection.close()
                     except Exception:
                         pass
-                    
+
                     # Forcer l'arrêt de la connexion persistante si elle existe
                     if self._ws_remote:
                         try:
@@ -1089,15 +1089,15 @@ class SamsungTVWS:
                         except Exception:
                             pass
                         self._ws_remote = None
-                    
+
                     self.connection = None
-                    
+
                     raise ConnectionFailure(
                         "Connection closed by TV with code 1005 - TV may be saturated with connections. "
                         "All connections have been cleaned up."
                     )
                 raise
-            
+
             _LOGGING.debug(response)
             event = response.get("event", "-")
             if event != "ms.channel.connect":
