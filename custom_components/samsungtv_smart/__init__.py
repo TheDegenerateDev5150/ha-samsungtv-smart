@@ -395,9 +395,9 @@ def get_smartthings_api_key(hass: HomeAssistant, st_unique_id: str) -> str | Non
     return None
 
 
-async def async_get_samsungtv_api_key(
+async def async_get_samsungtv_api_key(  # noqa: C901
     hass: HomeAssistant, entry: ConfigEntry
-) -> str | None:  # noqa: C901
+) -> str | None:
     """Get API key based on authentication method configured for this entry.
 
     This function handles all three auth methods:
