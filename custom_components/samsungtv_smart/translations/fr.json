@@ -177,7 +177,7 @@
     }
   },
   "application_credentials": {
-    "description": "Pour utiliser l'authentification OAuth2 avec SamsungTV Smart, vous devez créer des identifiants développeur SmartThings.\n\n**Instructions de configuration :**\n\n1. Installez le [SmartThings CLI]({smartthings_cli})\n2. Exécutez `smartthings apps:create` et suivez les instructions :\n   - Nom d'affichage : `Home Assistant Samsung TV`\n   - URI de redirection : `{callback_url}`\n   - Portées : `r:devices:*` et `x:devices:*`\n3. Copiez le **OAuth Client Id** et le **Client Secret** ci-dessous\n\n⚠️ Utilisez le **OAuth Client Id**, PAS l'App Id !"
+    "description": "Pour utiliser l'authentification OAuth2 avec SamsungTV Smart, vous devez créer des identifiants développeur SmartThings.\n\n**Instructions de configuration :**\n\n1. Rendez-vous sur le [Portail Développeur SmartThings]({smartthings_portal})\n2. Connectez-vous avec votre compte Samsung\n3. Cliquez sur **Nouveau Projet** → Sélectionnez **Automation for the Home**\n4. Donnez un nom à votre projet (ex. 'Home Assistant TV')\n5. Cliquez sur **Register App** dans la barre latérale\n6. Sélectionnez **OAuth2 / Credentials**\n7. Remplissez le formulaire :\n   - **Nom de l'application** : Home Assistant Samsung TV\n   - **URI de redirection** : `{callback_url}`\n   - **Portées** : Sélectionnez `r:devices:*` et `x:devices:*`\n8. Cliquez sur **Save** et copiez vos identifiants ci-dessous\n\n[Documentation OAuth SmartThings]({oauth_docs})"
   },
   "exceptions": {
     "oauth2_implementation_unavailable": {
