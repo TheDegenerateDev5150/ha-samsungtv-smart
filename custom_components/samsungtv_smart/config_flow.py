@@ -11,9 +11,6 @@ import voluptuous as vol
 
 from homeassistant.components.binary_sensor import DOMAIN as BS_DOMAIN
 from homeassistant.config_entries import (
-    SOURCE_RECONFIGURE,
-    SOURCE_REAUTH,
-    SOURCE_USER,
     ConfigEntry,
     ConfigFlowResult,
     OptionsFlow,
@@ -461,7 +458,7 @@ class SamsungTVSmartOAuth2FlowHandler(
         self._name = user_input[CONF_NAME]
         api_key = user_input.get(CONF_API_KEY)
         st_entry_unique_id = user_input.get(CONF_ST_ENTRY_UNIQUE_ID)
-        
+
         if api_key and st_entry_unique_id:
             return self._show_manual_form(errors="only_key_or_st")
 
@@ -509,7 +506,7 @@ class SamsungTVSmartOAuth2FlowHandler(
             ip_address = await self.hass.async_add_executor_job(
                 _get_ip, user_input[CONF_HOST]
             )
-            
+
             if not ip_address:
                 return self.async_show_form(
                     step_id="st_integration",

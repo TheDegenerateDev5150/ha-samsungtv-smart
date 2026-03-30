@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
@@ -23,7 +22,6 @@ from .const import (
     AUTH_METHOD_OAUTH,
     AUTH_METHOD_PAT,
     AUTH_METHOD_ST_ENTRY,
-    DOMAIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -115,14 +113,14 @@ class OAuth2TokenManager:
 
 async def async_get_api_key(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
     """Get the API key/access token based on authentication method.
-    
+
     This function abstracts the different auth methods and returns
     a valid access token for SmartThings API calls.
-    
+
     Args:
         hass: Home Assistant instance
         entry: Config entry for the integration
-        
+
     Returns:
         Access token string if available, None otherwise
     """
@@ -156,11 +154,11 @@ async def async_get_api_key(hass: HomeAssistant, entry: ConfigEntry) -> str | No
 
 async def async_validate_token(hass: HomeAssistant, token: str) -> bool:
     """Validate a SmartThings API token.
-    
+
     Args:
         hass: Home Assistant instance
         token: The access token to validate
-        
+
     Returns:
         True if token is valid, False otherwise
     """
