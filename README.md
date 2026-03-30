@@ -59,11 +59,13 @@ This fork brings improved WebSocket stability, full Samsung Frame TV Art Mode su
 
 ### HACS (recommended)
 
-1. In Home Assistant, open **HACS → Integrations**.
-2. Click the three-dot menu **⋮ → Custom repositories**.
-3. Add the repository URL and set category to **Integration**.
-4. Search for **SamsungTV Smart** and click **Download**.
-5. Restart Home Assistant.
+[![Open your Home Assistant instance and add a custom repository.](https://my.home-assistant.io/badges/hacs_custom_repository.svg)](https://my.home-assistant.io/redirect/hacs_custom_repository/?owner=TheFab21&repository=ha-samsungtv-smart&category=integration)
+
+Or manually add the custom repository in HACS:
+1. Go to **HACS → Integrations → ⋮ → Custom repositories**
+2. Add `https://github.com/TheFab21/ha-samsungtv-smart` as **Integration**
+3. Search for **SamsungTV Smart** and install
+
 
 ### Manual
 
