@@ -49,7 +49,7 @@
       },
       "manual": {
         "title": "Configuration manuelle",
-        "description": "Entrez l'adresse IP de votre TV et vos identifiants SmartThings.\n\nPour créer un token d'accès personnel, rendez-vous sur https://account.smartthings.com/tokens",
+        "description": "Entrez l'adresse IP de votre TV et vos identifiants SmartThings.\n\nPour créer un token d'accès personnel, rendez-vous sur {st_tokens_url}",
         "data": {
           "host": "Adresse IP de la TV",
           "name": "Nom de l'appareil",
@@ -177,7 +177,7 @@
     }
   },
   "application_credentials": {
-    "description": "Pour utiliser l'authentification OAuth2 avec SamsungTV Smart, vous devez créer des identifiants développeur SmartThings.\n\n**Instructions de configuration :**\n\n1. Installez le [SmartThings CLI](https://github.com/SmartThingsCommunity/smartthings-cli)\n2. Exécutez `smartthings apps:create` et suivez les instructions :\n   - Nom d'affichage : `Home Assistant Samsung TV`\n   - URI de redirection : `{callback_url}`\n   - Portées : `r:devices:*` et `x:devices:*`\n3. Copiez le **OAuth Client Id** et le **Client Secret** ci-dessous\n\n⚠️ Utilisez le **OAuth Client Id**, PAS l'App Id !"
+    "description": "Pour utiliser l'authentification OAuth2 avec SamsungTV Smart, vous devez créer des identifiants développeur SmartThings.\n\n**Instructions de configuration :**\n\n1. Installez le [SmartThings CLI]({smartthings_cli})\n2. Exécutez `smartthings apps:create` et suivez les instructions :\n   - Nom d'affichage : `Home Assistant Samsung TV`\n   - URI de redirection : `{callback_url}`\n   - Portées : `r:devices:*` et `x:devices:*`\n3. Copiez le **OAuth Client Id** et le **Client Secret** ci-dessous\n\n⚠️ Utilisez le **OAuth Client Id**, PAS l'App Id !"
   },
   "exceptions": {
     "oauth2_implementation_unavailable": {
