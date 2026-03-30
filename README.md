@@ -467,7 +467,7 @@ Mitigations built into this fork:
 
 ## Credits
 
-This project is a fork of [ollo69/ha-samsungtv-smart](https://github.com/ollo69/ha-samsungtv-smart), itself based on work by [@jaruba](https://github.com/jaruba) and [@screwdgeh](https://github.com/screwdgeh).
+This project was a fork of [ollo69/ha-samsungtv-smart](https://github.com/ollo69/ha-samsungtv-smart), itself based on work by [@jaruba](https://github.com/jaruba) and [@screwdgeh](https://github.com/screwdgeh).
 
 Frame Art API based on [xchwarze/samsung-tv-ws-api](https://github.com/xchwarze/samsung-tv-ws-api) (art-updates branch), with contributions from Matthew Garrett and Nick Waterton.
 
