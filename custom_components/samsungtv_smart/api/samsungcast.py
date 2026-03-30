@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 import xml.etree.ElementTree as ET
 
-import requests
 from casttube import YouTubeSession
+import requests
 
 _LOGGER = logging.getLogger(__name__)
 

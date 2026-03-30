@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 from datetime import timedelta
 from enum import Enum
+import logging
 
 from aiohttp import ClientSession
-from homeassistant.util import Throttle
 from pysmartthings import SmartThings
 from pysmartthings.command import Command
+
+from homeassistant.util import Throttle
 
 # Capability names as strings (pysmartthings v6.0+ compatibility)
 # In older versions these were CAP_SWITCH, CAP_AUDIO_VOLUME, etc.

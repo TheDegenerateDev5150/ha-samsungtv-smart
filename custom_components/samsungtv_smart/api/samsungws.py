@@ -24,19 +24,19 @@ Copyright (C) 2020 Ollo69
 from __future__ import annotations
 
 import base64
+from datetime import datetime
+from enum import Enum
 import json
 import logging
 import socket
 import ssl
 import subprocess
 import sys
-import time
-import uuid
-from datetime import datetime
-from enum import Enum
 from threading import Lock, Thread
+import time
 from typing import Any
 from urllib.parse import urlencode, urljoin
+import uuid
 
 import aiohttp
 import requests
