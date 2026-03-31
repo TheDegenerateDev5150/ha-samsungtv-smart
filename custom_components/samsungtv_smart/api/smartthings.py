@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from asyncio import TimeoutError as AsyncTimeoutError
 from collections.abc import Callable
 from datetime import timedelta
 from enum import Enum
@@ -12,14 +11,14 @@ from aiohttp import ClientSession
 from pysmartthings import SmartThings
 from pysmartthings.command import Command
 
+from homeassistant.util import Throttle
+
 # Capability names as strings (pysmartthings v6.0+ compatibility)
 CAP_SWITCH = "switch"
 CAP_AUDIO_VOLUME = "audioVolume"
 CAP_AUDIO_MUTE = "audioMute"
 CAP_TV_CHANNEL = "tvChannel"
 CAP_MEDIA_INPUT_SOURCE = "mediaInputSource"
-
-from homeassistant.util import Throttle
 
 _LOGGER = logging.getLogger(__name__)
 
