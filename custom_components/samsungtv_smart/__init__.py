@@ -679,7 +679,19 @@ async def _register_gallery_card(hass: HomeAssistant) -> None:
     # Defer Lovelace resource registration until HA is fully started
     async def _register_lovelace_resource(event: Event) -> None:
         try:
-            resources = hass.data["lovelace"]["resources"]
+            lovelace_data = hass.data.get("lovelace")
+            if lovelace_data is None:
+                _LOGGER.warning(
+                    "SamsungTV Smart: Lovelace not available, cannot register folder-gallery-card"
+                )
+                return
+            # In recent HA versions, lovelace is a LovelaceData object (not a dict)
+            resources = getattr(lovelace_data, "resources", None)
+            if resources is None:
+                _LOGGER.warning(
+                    "SamsungTV Smart: Lovelace resources not available"
+                )
+                return
             await resources.async_get_info()
             existing_urls = [r["url"] for r in resources.async_items()]
             if url not in existing_urls:
