@@ -652,6 +652,47 @@ async def _register_logo_paths(hass: HomeAssistant) -> str | None:
     return url_logo_path
 
 
+async def _register_gallery_card(hass: HomeAssistant) -> None:
+    """Register folder-gallery-card.js as a static path and Lovelace resource.
+
+    The JS file is served directly from the integration directory — no copy
+    to www/ needed.  The Lovelace resource is registered automatically so
+    users don't have to add it manually.
+    """
+    js_file = Path(__file__).parent / "www" / "folder-gallery-card.js"
+    if not js_file.exists():
+        _LOGGER.warning(
+            "SamsungTV Smart: folder-gallery-card.js not found at %s, skipping",
+            js_file,
+        )
+        return
+
+    url = f"/api/{DOMAIN}/folder-gallery-card.js"
+
+    # Serve the JS file via a static path
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(url, str(js_file), cache_headers=False)]
+    )
+
+    # Register as a Lovelace resource (silently skip if Lovelace not ready)
+    try:
+        resources = hass.data["lovelace"]["resources"]
+        await resources.async_get_info()
+        existing_urls = [r["url"] for r in resources.async_items()]
+        if url not in existing_urls:
+            await resources.async_create_item({"res_type": "module", "url": url})
+            _LOGGER.info(
+                "SamsungTV Smart: folder-gallery-card registered as Lovelace resource"
+            )
+        else:
+            _LOGGER.debug("SamsungTV Smart: folder-gallery-card already registered")
+    except Exception:  # pylint: disable=broad-except
+        _LOGGER.debug(
+            "SamsungTV Smart: could not auto-register Lovelace resource "
+            "(normal on first HA start — resource will be registered on next restart)"
+        )
+
+
 async def get_device_info(hostname: str, session: ClientSession) -> dict:
     """Try retrieve device information"""
     try:
@@ -870,6 +911,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # Register path for local logo
     if local_logo_path := await _register_logo_paths(hass):
         hass.data.setdefault(DOMAIN, {})[LOCAL_LOGO_PATH] = local_logo_path
+
+    # Register folder-gallery-card as Lovelace resource
+    await _register_gallery_card(hass)
 
     return True
 
