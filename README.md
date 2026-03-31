@@ -50,7 +50,7 @@ This fork brings improved WebSocket stability, full Samsung Frame TV Art Mode su
 ## Requirements
 
 - Home Assistant **≥ 2025.6.0**
-- Python packages (installed automatically): `websocket-client`, `wakeonlan`, `aiofiles`, `casttube`, `pysmartthings==3.5.0`
+- Python packages (installed automatically): `websocket-client`, `wakeonlan`, `aiofiles`, `casttube`, `pysmartthings>=6.0`
 - A Samsung Smart TV running **Tizen OS** (2016+), reachable on the local network
 - For SmartThings features: a Samsung account and a SmartThings-registered TV
 
@@ -194,6 +194,8 @@ Each configured TV creates the following entities:
 | `switch.<tv_name>_art_mode` | Switch | Toggle Art Mode on/off (Frame TVs only) |
 | `sensor.<tv_name>_frame_art` | Sensor | Currently displayed artwork info (Frame TVs only) |
 
+> **Note:** The `folder-gallery-card` Lovelace card is bundled with this integration and registered automatically. No manual installation or resource configuration required.
+
 ### Media Player Attributes
 
 In addition to standard media player attributes, the following are available:
@@ -331,18 +333,16 @@ Artworks are identified by content IDs:
 | Prefix | Source |
 |---|---|
 | `SAM-*` | Samsung Art Store content |
-| `MY-F*` | User-uploaded photos |
+| `MY_F*` | User-uploaded photos |
 | `MY-C*` | Categories (MY-C0002=My Photos, MY-C0004=Favorites, MY-C0008=All) |
 
 ### Matte Styles
 
 Format: `type_color`
 
-**Types**: `none`, `modernthin`, `modern`, `modernwide`, `shadowboxthin`, `shadowbox`, `shadowboxwide`, `panoramic`, `flexible`
+> ⚠️ Available matte types and colors are **retrieved dynamically from your TV** at startup and vary by model and firmware. The `select.samsung_*_matte_type` and `select.samsung_*_matte_color` entities are populated automatically with the options your TV actually supports. Call `samsungtv_smart.art_get_matte_list` to see the full list for your device.
 
-**Colors**: `black`, `neutral`, `antique`, `warm`, `polar`, `sand`, `seafoam`, `sage`, `burgandy`, `navy`, `apricot`, `byzantine`, `lavender`, `redorange`
-
-**Example**: `modern_apricot`, `shadowbox_polar`
+**Example** (QE55LS03D 2024): `modern_apricot`, `shadowbox_polar`
 
 ### Photo Filters
 

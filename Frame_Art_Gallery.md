@@ -53,9 +53,9 @@ Frame Art Gallery transforms your Home Assistant dashboard into an interactive a
 4. **Gallery Card** (choose one):
 
    **Option A: folder-gallery-card** ⭐ **RECOMMENDED**
-   - Included with this integration
+   - **Bundled with this integration** — no installation needed
+   - Registered automatically as a Lovelace resource on startup
    - Faster and cleaner than auto-entities
-   - Better performance with large galleries
    - Built-in lightbox and actions
 
    **Option B: auto-entities**
@@ -105,9 +105,9 @@ sensor:
     scan_interval: 30
 ```
 
-### Step 4: Install Gallery Card
+### Step 4: Use the Gallery Card
 
-See [Folder Gallery Card](#folder-gallery-card-recommended) section below.
+The `folder-gallery-card` is already available — no installation needed. Jump straight to the [configuration examples](#basic-configuration) below.
 
 ---
 
@@ -117,16 +117,11 @@ The custom `folder-gallery-card` provides the best experience for Frame Art gall
 
 ### Installation
 
-1. Copy `folder-gallery-card.js` to `/config/www/community/folder-gallery-card/`
+**No installation required.** The card is bundled with the SamsungTV Smart integration and registered automatically as a Lovelace resource on startup.
 
-2. Add to Lovelace resources:
-   ```yaml
-   resources:
-     - url: /local/community/folder-gallery-card/folder-gallery-card.js
-       type: module
-   ```
+The card is served from `/api/samsungtv_smart/folder-gallery-card.js` — you don't need to copy any files or add any resources manually.
 
-3. Restart Home Assistant
+> If for some reason the card doesn't appear after installing the integration, restart Home Assistant once.
 
 ### Basic Configuration
 

@@ -238,26 +238,25 @@ data:
   matte_id: shadowbox_polar
 ```
 
-**Available Matte Types:**
-| Type | Description |
-|------|-------------|
-| `none` | No matte |
-| `modernthin` | Thin modern frame |
-| `modern` | Modern frame |
-| `modernwide` | Wide modern frame |
-| `flexible` | Flexible format |
-| `shadowbox` | Classic shadowbox |
-| `panoramic` | Panoramic format |
-| `triptych` | Triptych style |
-| `mix` | Mixed style |
-| `squares` | Square grid |
+**Available Matte Types and Colors:**
 
-**Available Colors:**
-- `black`, `neutral`, `antique`, `warm`, `polar`
-- `sand`, `seafoam`, `sage`, `burgandy`, `navy`
-- `apricot`, `byzantine`, `lavender`, `redorange`, `ink`, `peach`
+> ⚠️ Available mattes and colors are **retrieved dynamically from your TV** at startup and depend on your model and firmware version. The `select.samsung_*_matte_type` and `select.samsung_*_matte_color` entities are populated automatically with the options your TV actually supports.
+
+To see the full list supported by your TV, call:
+
+```yaml
+service: samsungtv_smart.art_get_matte_list
+target:
+  entity_id: media_player.samsung_frame
+```
+
+Results are logged at INFO level.
 
 **Format:** `{type}_{color}` (e.g., `shadowbox_polar`, `modern_black`)
+
+**Examples observed on QE55LS03D (2024):**
+- Types: `none`, `modernthin`, `modern`, `modernwide`, `flexible`, `shadowbox`, `panoramic`, `triptych`, `mix`, `squares`
+- Colors: `black`, `neutral`, `antique`, `warm`, `polar`, `sand`, `seafoam`, `sage`, `burgandy`, `navy`, `apricot`, `byzantine`, `lavender`, `redorange`, `skyblue`, `turquoise`
 
 #### `samsungtv_smart.art_get_matte_list`
 
@@ -538,6 +537,8 @@ input_number:
 input_select:
   frame_matte_type:
     name: Frame Matte Type
+    # These options are examples — actual options depend on your TV model/firmware.
+    # Check select.samsung_*_matte_type for the real list populated from your TV.
     options:
       - none
       - modernthin
@@ -553,6 +554,8 @@ input_select:
 
   frame_matte_color:
     name: Frame Matte Color
+    # These options are examples — actual options depend on your TV model/firmware.
+    # Check select.samsung_*_matte_color for the real list populated from your TV.
     options:
       - black
       - neutral
@@ -568,6 +571,8 @@ input_select:
       - byzantine
       - lavender
       - redorange
+      - skyblue
+      - turquoise
     initial: polar
 
   frame_slideshow_duration:
