@@ -1,10 +1,17 @@
 {
   "domain": "samsungtv_smart",
   "name": "SamsungTV Smart and Art",
-  "after_dependencies": ["smartthings"],
-  "codeowners": ["@TheFab21"],
+  "after_dependencies": [
+    "smartthings"
+  ],
+  "codeowners": [
+    "@TheFab21"
+  ],
   "config_flow": true,
-  "dependencies": ["http", "application_credentials"],
+  "dependencies": [
+    "http",
+    "application_credentials"
+  ],
   "documentation": "https://github.com/TheFab21/ha-samsungtv-smart",
   "integration_type": "device",
   "iot_class": "cloud_polling",
@@ -16,5 +23,5 @@
     "casttube>=0.2.1",
     "pysmartthings==3.5.0"
   ],
-  "version": "6.5.4"
+  "version": "6.5.5.6"
 }
