@@ -30,12 +30,12 @@ from homeassistant.const import (
     CONF_PORT,
     CONF_TIMEOUT,
     CONF_TOKEN,
+    EVENT_HOMEASSISTANT_STARTED,
     MAJOR_VERSION,
     MINOR_VERSION,
     Platform,
     __version__,
 )
-from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import config_entry_oauth2_flow
 import homeassistant.helpers.config_validation as cv
