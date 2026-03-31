@@ -363,6 +363,9 @@ These are then accessible via Home Assistant's `/local/` URL path, making them d
 
 **Smart caching**: thumbnails are only downloaded once. Subsequent calls to `art_get_thumbnail` or `art_get_thumbnails_batch` skip files that already exist, making batch operations fast on repeat runs. Use `force_download: true` to override.
 
+## See Also
+
+- **[Frame Art Gallery Guide](Frame_Art_Gallery.md)** - Interactive Lovelace galleries
 ---
 
 ## Automations & Tips
