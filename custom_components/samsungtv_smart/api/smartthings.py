@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from asyncio import TimeoutError as AsyncTimeoutError
 from collections.abc import Callable
 from datetime import timedelta
 from enum import Enum
@@ -11,23 +12,25 @@ from aiohttp import ClientSession
 from pysmartthings import SmartThings
 from pysmartthings.command import Command
 
-from homeassistant.util import Throttle
-
 # Capability names as strings (pysmartthings v6.0+ compatibility)
-# In older versions these were CAP_SWITCH, CAP_AUDIO_VOLUME, etc.
 CAP_SWITCH = "switch"
 CAP_AUDIO_VOLUME = "audioVolume"
 CAP_AUDIO_MUTE = "audioMute"
 CAP_TV_CHANNEL = "tvChannel"
 CAP_MEDIA_INPUT_SOURCE = "mediaInputSource"
 
+from homeassistant.util import Throttle
+
 _LOGGER = logging.getLogger(__name__)
+
+# SmartThings REST API
+API_BASEURL = "https://api.smartthings.com/v1"
+API_DEVICES = f"{API_BASEURL}/devices"
 
 # Device types
 DEVICE_TYPE_OCF = "OCF"
 DEVICE_TYPE_NAME_TV = "Samsung OCF TV"
 DEVICE_TYPE_NAMES = ["Samsung OCF TV", "x.com.st.d.monitor"]
-
 
 # Component name
 COMPONENT_MAIN = "main"
@@ -58,7 +61,10 @@ class SmartThingsTV:
         self._use_channel_info = use_channel_info
         self._api_key_callback = api_key_callback
 
-        # Initialize pysmartthings
+        # Store session for direct REST API calls (source selection)
+        self._session = session
+
+        # Initialize pysmartthings for status reading
         self._st = SmartThings(session=session)
         self._st.authenticate(api_key)
 
@@ -89,7 +95,10 @@ class SmartThingsTV:
                 self._st.authenticate(api_key)
         return self._api_key
 
+    # ──────────────────────────────────────────────────────────────────────────
     # Properties
+    # ──────────────────────────────────────────────────────────────────────────
+
     @property
     def api_key(self) -> str:
         """Return current api_key."""
@@ -171,7 +180,10 @@ class SmartThingsTV:
             return source_key
         return self._source_list_map[source_key]
 
+    # ──────────────────────────────────────────────────────────────────────────
     # Helper methods
+    # ──────────────────────────────────────────────────────────────────────────
+
     def _set_source(self, source: str):
         """Set source value."""
         if self._state != STStatus.STATE_OFF:
@@ -194,14 +206,54 @@ class SmartThingsTV:
         """Return source list from source map."""
         if not self._source_list_map:
             return []
-        source_list = []
-        for source_id in self._source_list_map:
-            source_list.append(source_id)
-        return source_list
+        return list(self._source_list_map.keys())
+
+    async def _send_rest_command(
+        self,
+        capability: str,
+        command: str,
+        arguments: list | None = None,
+    ) -> None:
+        """Send a command via direct REST API.
+
+        Used for source selection only (pysmartthings Command class is an
+        Enum in v6.x and cannot be instantiated with keyword arguments).
+        """
+        if not self._device_id or not self._session:
+            _LOGGER.error("Cannot send REST command: device_id or session missing")
+            return
+
+        api_key = self._get_api_key()
+        url = f"{API_DEVICES}/{self._device_id}/commands"
+        cmd: dict = {
+            "component": COMPONENT_MAIN,
+            "capability": capability,
+            "command": command,
+        }
+        if arguments:
+            cmd["arguments"] = arguments
+
+        async with self._session.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            json={"commands": [cmd]},
+            raise_for_status=True,
+        ) as resp:
+            await resp.json()
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Device discovery
+    # ──────────────────────────────────────────────────────────────────────────
 
     @staticmethod
     async def get_devices_list(
-        api_key: str, session: ClientSession, device_label: str = ""
+        api_key: str,
+        session: ClientSession,
+        device_label: str = "",
     ) -> dict:
         """Get list of available SmartThings devices using pysmartthings."""
         result = {}
@@ -232,14 +284,17 @@ class SmartThingsTV:
 
         return result
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # Status update (uses pysmartthings for reading — untouched)
+    # ──────────────────────────────────────────────────────────────────────────
+
     @Throttle(timedelta(seconds=1))
-    async def async_device_update(self, use_channel_info: bool = True):  # noqa: C901
+    async def async_device_update(self, use_channel_info: bool = True):
         """Update device status using pysmartthings."""
         self._get_api_key()
 
         try:
-            # Get device status using pysmartthings
-            # Note: get_device_status() returns .components directly (dict, not DeviceStatus object)
+            # get_device_status() returns .components (dict, not DeviceStatus object)
             components = await self._st.get_device_status(self._device_id)
 
             if COMPONENT_MAIN not in components:
@@ -248,7 +303,7 @@ class SmartThingsTV:
 
             main_comp = components[COMPONENT_MAIN]
 
-            # Update device name
+            # Update device name (once)
             if not self._device_name:
                 try:
                     device = await self._st.get_device(self._device_id)
@@ -256,7 +311,7 @@ class SmartThingsTV:
                 except Exception as err:
                     _LOGGER.debug("Could not get device name: %s", err)
 
-            # Update state - pysmartthings returns Status objects with .value attribute
+            # Update state
             self._prev_state = self._state
             if "switch" in main_comp and "switch" in main_comp["switch"]:
                 switch_value = main_comp["switch"]["switch"].value
@@ -293,22 +348,38 @@ class SmartThingsTV:
                         self._channel_name = tv_channel["tvChannelName"].value
 
             # Update source list
+            # FIX: Samsung SmartThings returns supportedInputSources as a plain
+            # list of strings (e.g. ["digitalTv", "HDMI1", "HDMI2", "HDMI3"]),
+            # NOT a list of dicts.  Handle both formats defensively.
             if (
                 "mediaInputSource" in main_comp
                 and "supportedInputSources" in main_comp["mediaInputSource"]
             ):
-                supported_inputs = main_comp["mediaInputSource"][
-                    "supportedInputSources"
-                ].value
+                supported_inputs = (
+                    main_comp["mediaInputSource"]["supportedInputSources"].value
+                )
                 if supported_inputs:
                     self._source_list = {}
                     self._source_list_map = {}
                     for source in supported_inputs:
-                        source_id = source.get("id", "")
-                        source_name = source.get("name", source_id)
+                        if isinstance(source, str):
+                            # Typical Samsung API response: plain string
+                            source_id = source
+                            source_name = source
+                        elif isinstance(source, dict):
+                            # Defensive: some devices may return dicts
+                            source_id = source.get("id", "")
+                            source_name = source.get("name", source_id)
+                        else:
+                            continue
                         if source_id:
                             self._source_list[source_id] = source_name
                             self._source_list_map[source_id] = source_name
+
+                    _LOGGER.info(
+                        "Samsung TV: loaded sources list from SmartThings: %s",
+                        list(self._source_list.keys()),
+                    )
 
             # Update sound mode
             if "custom.soundmode" in main_comp:
@@ -324,18 +395,21 @@ class SmartThingsTV:
                 if "pictureMode" in picture_mode_cap:
                     self._picture_mode = picture_mode_cap["pictureMode"].value
                 if "supportedPictureModes" in picture_mode_cap:
-                    self._picture_mode_list = picture_mode_cap[
-                        "supportedPictureModes"
-                    ].value
+                    self._picture_mode_list = (
+                        picture_mode_cap["supportedPictureModes"].value
+                    )
 
         except Exception as err:
             _LOGGER.error("Error updating SmartThings status: %s", err)
             raise
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # Device health
+    # ──────────────────────────────────────────────────────────────────────────
+
     async def async_device_health(self) -> str:
         """Get device health status using pysmartthings."""
         self._get_api_key()
-
         try:
             health = await self._st.get_device_health(self._device_id)
             return health.state
@@ -343,13 +417,15 @@ class SmartThingsTV:
             _LOGGER.error("Error getting device health: %s", err)
             return "UNKNOWN"
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # Power commands (pysmartthings — unchanged)
+    # ──────────────────────────────────────────────────────────────────────────
+
     async def async_turn_on(self):
         """Turn device on using pysmartthings."""
         self._get_api_key()
         try:
-            cmd = Command(
-                component_id=COMPONENT_MAIN, capability=CAP_SWITCH, command="on"
-            )
+            cmd = Command(component_id=COMPONENT_MAIN, capability=CAP_SWITCH, command="on")
             await self._st.execute_device_command(self._device_id, [cmd])
             self._state = STStatus.STATE_ON
         except Exception as err:
@@ -360,14 +436,16 @@ class SmartThingsTV:
         """Turn device off using pysmartthings."""
         self._get_api_key()
         try:
-            cmd = Command(
-                component_id=COMPONENT_MAIN, capability=CAP_SWITCH, command="off"
-            )
+            cmd = Command(component_id=COMPONENT_MAIN, capability=CAP_SWITCH, command="off")
             await self._st.execute_device_command(self._device_id, [cmd])
             self._state = STStatus.STATE_OFF
         except Exception as err:
             _LOGGER.error("Error turning off device: %s", err)
             raise
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Other commands (pysmartthings — unchanged)
+    # ──────────────────────────────────────────────────────────────────────────
 
     async def async_send_command(self, cmd_type: str, command: str = ""):
         """Send a command to the device using pysmartthings."""
@@ -419,36 +497,45 @@ class SmartThingsTV:
             _LOGGER.error("Error sending command %s: %s", cmd_type, err)
             raise
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # Source selection — REST API (fixes EnumType / component_id bug)
+    # ──────────────────────────────────────────────────────────────────────────
+
     async def async_select_source(self, source: str):
-        """Select source using pysmartthings."""
+        """Select input source via direct REST API.
+
+        The pysmartthings Command class is an Enum in v6.x and cannot be
+        instantiated with keyword arguments (component_id=...).  We bypass
+        it here and call the SmartThings REST API directly.
+        """
         self._get_api_key()
         try:
-            cmd = Command(
-                component_id=COMPONENT_MAIN,
+            await self._send_rest_command(
                 capability=CAP_MEDIA_INPUT_SOURCE,
                 command="setInputSource",
                 arguments=[source],
             )
-            await self._st.execute_device_command(self._device_id, [cmd])
             self._set_source(source)
         except Exception as err:
             _LOGGER.error("Error selecting source: %s", err)
             raise
 
     async def async_select_vd_source(self, source: str):
-        """Select VD source using pysmartthings."""
+        """Select Samsung VD source via direct REST API."""
         self._get_api_key()
         try:
-            cmd = Command(
-                component_id=COMPONENT_MAIN,
+            await self._send_rest_command(
                 capability="samsungvd.mediaInputSource",
                 command="setInputSource",
                 arguments=[source],
             )
-            await self._st.execute_device_command(self._device_id, [cmd])
         except Exception as err:
             _LOGGER.error("Error selecting VD source: %s", err)
             raise
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Sound / picture mode (pysmartthings — unchanged)
+    # ──────────────────────────────────────────────────────────────────────────
 
     async def async_set_sound_mode(self, mode: str):
         """Select sound mode using pysmartthings."""
