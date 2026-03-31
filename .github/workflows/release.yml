@@ -5,25 +5,52 @@ on:
     types:
       - "published"
 
-permissions: {}
+permissions:
+  contents: write
 
 jobs:
+  update-manifest:
+    name: "Update manifest version"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout master branch"
+        uses: actions/checkout@v4
+        with:
+          ref: refs/heads/master
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Update manifest.json"
+        run: |
+          jq '.version = "${{ github.event.release.tag_name }}"' \
+            custom_components/samsungtv_smart/manifest.json > tmp.json
+          mv tmp.json custom_components/samsungtv_smart/manifest.json
+
+      - name: "Commit and push"
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add custom_components/samsungtv_smart/manifest.json
+          git diff --staged --quiet || git commit -m "chore: bump manifest version to ${{ github.event.release.tag_name }}"
+          git push origin refs/heads/master
+
   release:
     name: "Release"
-    runs-on: "ubuntu-latest"
-    permissions:
-      contents: write
+    runs-on: ubuntu-latest
+    needs: update-manifest
     steps:
       - name: "Checkout the repository"
-        uses: "actions/checkout@v4.1.7"
+        uses: actions/checkout@v4
+        with:
+          ref: refs/heads/master
 
       - name: "ZIP the integration directory"
-        shell: "bash"
+        shell: bash
         run: |
           cd "${{ github.workspace }}/custom_components/samsungtv_smart"
           zip samsungtv_smart.zip -r ./
 
       - name: "Upload the ZIP file to the release"
-        uses: "softprops/action-gh-release@v2.0.8"
+        uses: softprops/action-gh-release@v2.0.8
         with:
           files: ${{ github.workspace }}/custom_components/samsungtv_smart/samsungtv_smart.zip
