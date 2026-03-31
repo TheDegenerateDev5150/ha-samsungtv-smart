@@ -35,7 +35,8 @@ from homeassistant.const import (
     Platform,
     __version__,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import config_entry_oauth2_flow
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -655,9 +656,9 @@ async def _register_logo_paths(hass: HomeAssistant) -> str | None:
 async def _register_gallery_card(hass: HomeAssistant) -> None:
     """Register folder-gallery-card.js as a static path and Lovelace resource.
 
-    The JS file is served directly from the integration directory — no copy
-    to www/ needed.  The Lovelace resource is registered automatically so
-    users don't have to add it manually.
+    The static path is registered immediately so the file can be served.
+    The Lovelace resource registration is deferred until HA is fully started,
+    because the Lovelace frontend is not ready during async_setup.
     """
     js_file = Path(__file__).parent / "www" / "folder-gallery-card.js"
     if not js_file.exists():
@@ -669,28 +670,34 @@ async def _register_gallery_card(hass: HomeAssistant) -> None:
 
     url = f"/api/{DOMAIN}/folder-gallery-card.js"
 
-    # Serve the JS file via a static path
+    # Register static path immediately (needed to serve the file)
     await hass.http.async_register_static_paths(
         [StaticPathConfig(url, str(js_file), cache_headers=False)]
     )
+    _LOGGER.debug("SamsungTV Smart: folder-gallery-card.js registered at %s", url)
 
-    # Register as a Lovelace resource (silently skip if Lovelace not ready)
-    try:
-        resources = hass.data["lovelace"]["resources"]
-        await resources.async_get_info()
-        existing_urls = [r["url"] for r in resources.async_items()]
-        if url not in existing_urls:
-            await resources.async_create_item({"res_type": "module", "url": url})
-            _LOGGER.info(
-                "SamsungTV Smart: folder-gallery-card registered as Lovelace resource"
+    # Defer Lovelace resource registration until HA is fully started
+    async def _register_lovelace_resource(event: Event) -> None:
+        try:
+            resources = hass.data["lovelace"]["resources"]
+            await resources.async_get_info()
+            existing_urls = [r["url"] for r in resources.async_items()]
+            if url not in existing_urls:
+                await resources.async_create_item({"res_type": "module", "url": url})
+                _LOGGER.info(
+                    "SamsungTV Smart: folder-gallery-card registered as Lovelace resource"
+                )
+            else:
+                _LOGGER.debug(
+                    "SamsungTV Smart: folder-gallery-card already registered as Lovelace resource"
+                )
+        except Exception as err:  # pylint: disable=broad-except
+            _LOGGER.warning(
+                "SamsungTV Smart: could not register folder-gallery-card as Lovelace resource: %s",
+                err,
             )
-        else:
-            _LOGGER.debug("SamsungTV Smart: folder-gallery-card already registered")
-    except Exception:  # pylint: disable=broad-except
-        _LOGGER.debug(
-            "SamsungTV Smart: could not auto-register Lovelace resource "
-            "(normal on first HA start — resource will be registered on next restart)"
-        )
+
+    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _register_lovelace_resource)
 
 
 async def get_device_info(hostname: str, session: ClientSession) -> dict:
