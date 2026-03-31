@@ -130,7 +130,7 @@ When adding the integration, select **OAuth2 (Sign in with Samsung)** and follow
 
 #### Option 2 — Personal Access Token (PAT)
 
-> ⚠️ **Not recommended.** SmartThings Personal Access Tokens have a limited lifetime (maximum 50 years, but typically set much shorter). When the token expires, SmartThings features will stop working silently and you will need to manually generate a new token and reconfigure the integration. Consider using **OAuth2** or **SmartThings Integration Link** for a maintenance-free setup.
+> ⚠️ **Not recommended.** SmartThings Personal Access Tokens have a limited lifetime (24 hours). When the token expires, SmartThings features will stop working silently and you will need to manually generate a new token and reconfigure the integration. Consider using **OAuth2** or **SmartThings Integration Link** for a maintenance-free setup.
 
 1. Go to [https://account.smartthings.com/tokens](https://account.smartthings.com/tokens).
 2. Create a new token with at least **Devices** permissions.
