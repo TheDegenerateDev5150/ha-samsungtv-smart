@@ -688,9 +688,7 @@ async def _register_gallery_card(hass: HomeAssistant) -> None:
             # In recent HA versions, lovelace is a LovelaceData object (not a dict)
             resources = getattr(lovelace_data, "resources", None)
             if resources is None:
-                _LOGGER.warning(
-                    "SamsungTV Smart: Lovelace resources not available"
-                )
+                _LOGGER.warning("SamsungTV Smart: Lovelace resources not available")
                 return
             await resources.async_get_info()
             existing_urls = [r["url"] for r in resources.async_items()]
