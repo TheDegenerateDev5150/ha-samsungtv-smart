@@ -285,7 +285,7 @@ After installation:
 ## Support
 
 - 📚 [Documentation](../../docs/)
-- 🐛 [Report Issues](https://github.com/ollo69/ha-samsungtv-smart/issues)
+- 🐛 [Report Issues](https://github.com/TheFab21/ha-samsungtv-smart/issues)
 - 💬 [Community Forum](https://community.home-assistant.io/)
 
 ---
