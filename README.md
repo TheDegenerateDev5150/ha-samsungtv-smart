@@ -366,6 +366,7 @@ These are then accessible via Home Assistant's `/local/` URL path, making them d
 ## See Also
 
 - **[Frame Art Gallery Guide](Frame_Art_Gallery.md)** - Interactive Lovelace galleries
+- **[Frame Art Guide](Frame_Art.md)** - Complete service documentation
 ---
 
 ## Automations & Tips
