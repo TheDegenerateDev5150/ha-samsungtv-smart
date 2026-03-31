@@ -1,6 +1,6 @@
 {
   "domain": "samsungtv_smart",
-  "name": "SamsungTV Smart and Art",
+  "name": "SamsungTV Smart and Art Mode",
   "after_dependencies": [
     "smartthings"
   ],
