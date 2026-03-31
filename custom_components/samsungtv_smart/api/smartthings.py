@@ -354,9 +354,9 @@ class SmartThingsTV:
                 "mediaInputSource" in main_comp
                 and "supportedInputSources" in main_comp["mediaInputSource"]
             ):
-                supported_inputs = (
-                    main_comp["mediaInputSource"]["supportedInputSources"].value
-                )
+                supported_inputs = main_comp["mediaInputSource"][
+                    "supportedInputSources"
+                ].value
                 if supported_inputs:
                     self._source_list = {}
                     self._source_list_map = {}
@@ -394,9 +394,9 @@ class SmartThingsTV:
                 if "pictureMode" in picture_mode_cap:
                     self._picture_mode = picture_mode_cap["pictureMode"].value
                 if "supportedPictureModes" in picture_mode_cap:
-                    self._picture_mode_list = (
-                        picture_mode_cap["supportedPictureModes"].value
-                    )
+                    self._picture_mode_list = picture_mode_cap[
+                        "supportedPictureModes"
+                    ].value
 
         except Exception as err:
             _LOGGER.error("Error updating SmartThings status: %s", err)
@@ -424,7 +424,9 @@ class SmartThingsTV:
         """Turn device on using pysmartthings."""
         self._get_api_key()
         try:
-            cmd = Command(component_id=COMPONENT_MAIN, capability=CAP_SWITCH, command="on")
+            cmd = Command(
+                component_id=COMPONENT_MAIN, capability=CAP_SWITCH, command="on"
+            )
             await self._st.execute_device_command(self._device_id, [cmd])
             self._state = STStatus.STATE_ON
         except Exception as err:
@@ -435,7 +437,9 @@ class SmartThingsTV:
         """Turn device off using pysmartthings."""
         self._get_api_key()
         try:
-            cmd = Command(component_id=COMPONENT_MAIN, capability=CAP_SWITCH, command="off")
+            cmd = Command(
+                component_id=COMPONENT_MAIN, capability=CAP_SWITCH, command="off"
+            )
             await self._st.execute_device_command(self._device_id, [cmd])
             self._state = STStatus.STATE_OFF
         except Exception as err:
