@@ -246,7 +246,14 @@ class SmartThingsTV:
             json={"commands": [cmd]},
             raise_for_status=True,
         ) as resp:
-            await resp.json()
+            result = await resp.json()
+            _LOGGER.debug(
+                "REST command %s/%s sent, status: %s, response: %s",
+                capability,
+                command,
+                resp.status,
+                result,
+            )
 
     # ──────────────────────────────────────────────────────────────────────────
     # Device discovery
@@ -556,6 +563,7 @@ class SmartThingsTV:
     async def async_set_sound_mode(self, mode: str):
         """Select sound mode using direct REST API."""
         if self._state != STStatus.STATE_ON:
+            _LOGGER.debug("Cannot set sound mode: TV state is %s (not ON)", self._state)
             return
         if self._sound_mode_list and mode not in self._sound_mode_list:
             raise InvalidSmartThingsSoundMode()
@@ -575,6 +583,9 @@ class SmartThingsTV:
     async def async_set_picture_mode(self, mode: str):
         """Select picture mode using direct REST API."""
         if self._state != STStatus.STATE_ON:
+            _LOGGER.debug(
+                "Cannot set picture mode: TV state is %s (not ON)", self._state
+            )
             return
         if self._picture_mode_list and mode not in self._picture_mode_list:
             raise InvalidSmartThingsPictureMode()
