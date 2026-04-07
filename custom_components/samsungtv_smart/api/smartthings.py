@@ -82,6 +82,9 @@ class SmartThingsTV:
         self._sound_mode_list = None
         self._picture_mode = None
         self._picture_mode_list = None
+        # Bidirectional mapping between display names and API ids for picture modes
+        # e.g. {"Standard": "modeStandard", "Éco": "modeEco", ...}
+        self._picture_mode_map: dict[str, str] = {}
         # Track which SmartThings capability the TV uses for picture/sound mode
         # (varies by model: some use custom.picturemode, others samsungvd.pictureMode)
         self._picture_mode_capability = None
@@ -406,16 +409,54 @@ class SmartThingsTV:
 
             # Update picture mode — support both capability names
             # (samsungvd.pictureMode on newer models, custom.picturemode on older ones)
+            # FIX: Samsung SmartThings uses two attributes:
+            #   - supportedPictureModesMap: [{"id":"modeStandard","name":"Standard"}, ...]
+            #   - supportedPictureModes: ["Standard", "Eco"] (localized names only)
+            #   - pictureMode: current mode as an id (e.g. "modeStandard")
+            # We use the Map to build a name<->id mapping so that:
+            #   - _picture_mode_list shows localized names to the user
+            #   - _picture_mode stores the localized name (not the raw id)
+            #   - async_set_picture_mode resolves name -> id before sending
             for _pic_cap in ("samsungvd.pictureMode", "custom.picturemode"):
                 if _pic_cap in main_comp:
                     self._picture_mode_capability = _pic_cap
                     picture_mode_cap = main_comp[_pic_cap]
+
+                    # Build name<->id map from supportedPictureModesMap if available
+                    _mk = "supportedPictureModesMap"
+                    if _mk in picture_mode_cap:
+                        modes_map_raw = picture_mode_cap[_mk].value
+                        if modes_map_raw:
+                            new_map: dict[str, str] = {}
+                            for entry in modes_map_raw:
+                                if isinstance(entry, dict):
+                                    m_id = entry.get("id", "")
+                                    m_name = entry.get("name", m_id)
+                                elif isinstance(entry, str):
+                                    m_id = m_name = entry
+                                else:
+                                    continue
+                                if m_id:
+                                    new_map[m_name] = m_id
+                            if new_map:
+                                self._picture_mode_map = new_map
+                                self._picture_mode_list = list(new_map.keys())
+
+                    # Fallback: use supportedPictureModes (names only, no id mapping)
+                    if not self._picture_mode_list:
+                        _sk = "supportedPictureModes"
+                        if _sk in picture_mode_cap:
+                            self._picture_mode_list = picture_mode_cap[_sk].value
+
+                    # Current mode: convert raw id -> display name if map available
                     _pk = "pictureMode"
-                    _sk = "supportedPictureModes"
                     if _pk in picture_mode_cap:
-                        self._picture_mode = picture_mode_cap[_pk].value
-                    if _sk in picture_mode_cap:
-                        self._picture_mode_list = picture_mode_cap[_sk].value
+                        raw_mode = picture_mode_cap[_pk].value
+                        if self._picture_mode_map:
+                            reverse = {v: k for k, v in self._picture_mode_map.items()}
+                            self._picture_mode = reverse.get(raw_mode, raw_mode)
+                        else:
+                            self._picture_mode = raw_mode
                     break
 
         except Exception as err:
@@ -591,10 +632,11 @@ class SmartThingsTV:
                 "Cannot set picture mode: TV state is %s (not ON)", self._state
             )
             return
-        # Note: picture_mode_list may contain localized display names while
-        # the TV expects internal API values (e.g. 'modeEco' not 'Eco').
-        # We log a warning but do not block — SmartThings will reject truly
-        # invalid values at the API level.
+
+        # Resolve display name -> internal API id using the map.
+        # If the caller already passes an id (no map, or unknown name), pass through.
+        mode_id = self._picture_mode_map.get(mode, mode)
+
         if self._picture_mode_list and mode not in self._picture_mode_list:
             _LOGGER.warning(
                 "Picture mode '%s' not in known list %s — sending anyway",
@@ -607,8 +649,9 @@ class SmartThingsTV:
             await self._send_rest_command(
                 capability=capability,
                 command="setPictureMode",
-                arguments=[mode],
+                arguments=[mode_id],
             )
+            # Store the display name (not the id) so the entity reflects the list
             self._picture_mode = mode
         except Exception as err:
             _LOGGER.error("Error setting picture mode: %s", err)
