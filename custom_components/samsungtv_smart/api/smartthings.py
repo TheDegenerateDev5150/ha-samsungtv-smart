@@ -566,7 +566,11 @@ class SmartThingsTV:
             _LOGGER.debug("Cannot set sound mode: TV state is %s (not ON)", self._state)
             return
         if self._sound_mode_list and mode not in self._sound_mode_list:
-            raise InvalidSmartThingsSoundMode()
+            _LOGGER.warning(
+                "Sound mode '%s' not in known list %s — sending anyway",
+                mode,
+                self._sound_mode_list,
+            )
 
         capability = self._sound_mode_capability or "custom.soundmode"
         try:
@@ -587,8 +591,16 @@ class SmartThingsTV:
                 "Cannot set picture mode: TV state is %s (not ON)", self._state
             )
             return
+        # Note: picture_mode_list may contain localized display names while
+        # the TV expects internal API values (e.g. 'modeEco' not 'Eco').
+        # We log a warning but do not block — SmartThings will reject truly
+        # invalid values at the API level.
         if self._picture_mode_list and mode not in self._picture_mode_list:
-            raise InvalidSmartThingsPictureMode()
+            _LOGGER.warning(
+                "Picture mode '%s' not in known list %s — sending anyway",
+                mode,
+                self._picture_mode_list,
+            )
 
         capability = self._picture_mode_capability or "custom.picturemode"
         try:
