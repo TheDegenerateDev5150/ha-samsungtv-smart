@@ -872,7 +872,12 @@ class SmartThingsTV:
             raise
 
     async def async_set_picture_mode(self, mode: str):
-        """Select picture mode using direct REST API."""
+        """Select picture mode using direct REST API.
+
+        Tries both capability variants: some Samsung TVs accept commands
+        on custom.picturemode but not samsungvd.pictureMode, or vice versa.
+        We try the detected capability first, then fall back to the other.
+        """
         if self._state != STStatus.STATE_ON:
             _LOGGER.debug(
                 "Cannot set picture mode: TV state is %s (not ON)", self._state
@@ -880,7 +885,6 @@ class SmartThingsTV:
             return
 
         # Resolve display name -> internal API id using the map.
-        # If the caller already passes an id (no map, or unknown name), pass through.
         mode_id = self._picture_mode_map.get(mode, mode)
 
         if self._picture_mode_list and mode not in self._picture_mode_list:
@@ -890,18 +894,37 @@ class SmartThingsTV:
                 self._picture_mode_list,
             )
 
-        capability = self._picture_mode_capability or "custom.picturemode"
-        try:
-            await self._send_rest_command(
-                capability=capability,
-                command="setPictureMode",
-                arguments=[mode_id],
-            )
-            # Store the display name (not the id) so the entity reflects the list
-            self._picture_mode = mode
-        except Exception as err:
-            _LOGGER.error("Error setting picture mode: %s", err)
-            raise
+        # Try both capabilities — detected one first, then the other
+        primary = self._picture_mode_capability or "custom.picturemode"
+        fallback = (
+            "custom.picturemode"
+            if primary == "samsungvd.pictureMode"
+            else "samsungvd.pictureMode"
+        )
+
+        for capability in (primary, fallback):
+            try:
+                await self._send_rest_command(
+                    capability=capability,
+                    command="setPictureMode",
+                    arguments=[mode_id],
+                )
+                _LOGGER.debug(
+                    "Picture mode '%s' (id: %s) sent via %s",
+                    mode,
+                    mode_id,
+                    capability,
+                )
+                self._picture_mode = mode
+                return
+            except Exception as err:
+                _LOGGER.debug(
+                    "setPictureMode via %s failed: %s, trying fallback",
+                    capability,
+                    err,
+                )
+
+        _LOGGER.error("Failed to set picture mode '%s' via both capabilities", mode)
 
 
 class InvalidSmartThingsSoundMode(RuntimeError):
