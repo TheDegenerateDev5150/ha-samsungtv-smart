@@ -970,8 +970,28 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         self._running_app = st_running_app or DEFAULT_APP
 
+    def _resolve_source_by_id(self, source_id: str) -> tuple[str, str] | None:
+        """Resolve a technical source ID to (display_name, source_key).
+
+        Allows automations to use either the display name (e.g. "Home cinéma")
+        or the technical ID (e.g. "HDMI3") when selecting a source.
+        """
+        if not self._source_list:
+            return None
+        # source_list is {display_name: source_key} e.g. {"Home cinéma": "ST_HDMI3"}
+        # Check if source_id matches the ST_ suffix in any value
+        st_key = "ST_" + source_id
+        for display_name, source_key in self._source_list.items():
+            if source_key == st_key:
+                return (display_name, source_key)
+        # Also check for TV variant (dtv, digitalTv -> ST_TV)
+        if source_id.upper() in ["DTV", "DIGITALTV", "TV"]:
+            for display_name, source_key in self._source_list.items():
+                if source_key == "ST_TV":
+                    return (display_name, source_key)
+        return None
+
     def _get_st_sources(self):
-        """Get sources from SmartThings."""
         if not self._st:
             _LOGGER.debug("SmartThings not configured, _get_st_sources not executed")
             return
@@ -2072,6 +2092,12 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         if self._source_list and source in self._source_list:
             source_key = self._source_list[source]
+            if not await self._async_send_keys(source_key):
+                return
+        elif self._source_list and (resolved := self._resolve_source_by_id(source)):
+            # Accept technical IDs (e.g. "HDMI3") in addition to display names
+            source_key = resolved[1]
+            source = resolved[0]  # Use display name for state
             if not await self._async_send_keys(source_key):
                 return
         elif self._app_list and source in self._app_list:
