@@ -572,6 +572,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         self._st_error_count = 0
         self._st_last_exc = None
+        self._st_sources_loaded = False
         self._setvolumebyst = False
 
         # logo control initializzation
@@ -1241,10 +1242,12 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         self._state = MediaPlayerState.ON if result else MediaPlayerState.OFF
         self._started_up = True
 
-        # Reload SmartThings sources if we're still using defaults
-        # (sources are only available after the first async_device_update)
-        if self._st and self._default_source_used:
+        # Reload SmartThings sources once after first successful ST update
+        # _st_sources_loaded prevents repeated calls once sources are loaded
+        if self._st and not self._st_sources_loaded and self._st.source_list:
             self._get_st_sources()
+            if not self._default_source_used:
+                self._st_sources_loaded = True
 
         # NB: We are checking properties, not attribute!
         if self.state == MediaPlayerState.ON:
