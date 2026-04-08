@@ -274,8 +274,18 @@ class SmartThingsTV:
         if has_media_input:
             media_input = main_comp["mediaInputSource"]
 
-            if "supportedInputSources" in media_input:
-                supported_inputs = media_input["supportedInputSources"].value
+            has_supported = "supportedInputSources" in media_input
+            supported_val = (
+                media_input["supportedInputSources"].value if has_supported else None
+            )
+            _LOGGER.debug(
+                "Samsung TV: supportedInputSources present=%s, value=%s",
+                has_supported,
+                supported_val,
+            )
+
+            if has_supported and supported_val:
+                supported_inputs = supported_val
                 if supported_inputs:
                     self._source_list = {}
                     self._source_list_map = {}
@@ -301,13 +311,16 @@ class SmartThingsTV:
 
         # Fallback: if pysmartthings didn't provide sources, fetch via REST
         if not self._source_list and self._state == STStatus.STATE_ON:
+            _LOGGER.debug("Samsung TV: source_list empty, trying REST fallback")
             await self._fetch_input_source_map()
 
         if self._source_list:
             _LOGGER.debug(
-                "Samsung TV: sources: %s",
+                "Samsung TV: sources loaded: %s",
                 {k: v for k, v in self._source_list_map.items()},
             )
+        else:
+            _LOGGER.debug("Samsung TV: no sources available after update")
 
     def _apply_source_name_map(self, sources_map_raw: list) -> None:
         """Apply custom names from supportedInputSourcesMap."""
