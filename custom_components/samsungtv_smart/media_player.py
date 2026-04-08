@@ -978,6 +978,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         st_source_list = {}
         source_list = self._st.source_list
+        _LOGGER.debug(
+            "Samsung TV: _get_st_sources called, st.source_list=%s (type=%s)",
+            source_list,
+            type(source_list).__name__,
+        )
         if not source_list:
             return
 
