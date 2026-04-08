@@ -1267,6 +1267,16 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         self._state = MediaPlayerState.ON if result else MediaPlayerState.OFF
         self._started_up = True
 
+        # Deferred art thread disable: if media_player loaded before sensor,
+        # DATA_ART_API wasn't available in __init__. Check on each update.
+        if not self._ws._art_thread_disabled:
+            entry_data = self.hass.data.get(DOMAIN, {}).get(self._entry_id, {})
+            if entry_data.get(DATA_ART_API):
+                self._ws.disable_art_thread()
+                _LOGGER.debug(
+                    "Deferred: disabled SamsungArt thread (art.py now active)"
+                )
+
         # Reload SmartThings sources once after first successful ST update
         # _st_sources_loaded prevents repeated calls once sources are loaded
         if self._st and not self._st_sources_loaded and self._st.source_list:
