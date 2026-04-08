@@ -340,38 +340,65 @@ class SmartThingsTV:
         """Fetch input sources and custom names via direct REST GET.
 
         Builds both the source list and the name map from REST API.
-        Used as fallback when pysmartthings doesn't expose mediaInputSource.
+        Tries both standard and Samsung-specific capabilities.
         """
         if not self._device_id or not self._session:
             _LOGGER.debug("Cannot fetch input sources: missing device_id or session")
             return
         api_key = self._get_api_key()
-        url = (
-            f"{API_DEVICES}/{self._device_id}"
-            f"/components/main/capabilities/mediaInputSource/status"
-        )
-        _LOGGER.debug("Samsung TV: fetching input sources via REST: %s", url)
-        try:
-            async with self._session.get(
-                url,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Accept": "application/json",
-                },
-            ) as resp:
-                if resp.status != 200:
-                    _LOGGER.debug(
-                        "Could not fetch input sources (status %s)", resp.status
-                    )
-                    return
-                data = await resp.json()
-                _LOGGER.debug(
-                    "Samsung TV: input source REST full response: %s",
-                    data,
-                )
 
-                # Build source list from supportedInputSources if not yet available
-                if not self._source_list:
+        # Try multiple capabilities — Samsung TVs may use different ones
+        capabilities = [
+            "samsungvd.mediaInputSource",
+            "mediaInputSource",
+        ]
+
+        for cap_name in capabilities:
+            url = (
+                f"{API_DEVICES}/{self._device_id}"
+                f"/components/main/capabilities/{cap_name}/status"
+            )
+            _LOGGER.debug("Samsung TV: fetching input sources via REST: %s", cap_name)
+            try:
+                async with self._session.get(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Accept": "application/json",
+                    },
+                ) as resp:
+                    if resp.status != 200:
+                        _LOGGER.debug(
+                            "Samsung TV: %s returned status %s", cap_name, resp.status
+                        )
+                        continue
+                    data = await resp.json()
+                    _LOGGER.debug("Samsung TV: %s REST response: %s", cap_name, data)
+
+                    # Try supportedInputSourcesMap first (has custom names)
+                    raw_map = data.get("supportedInputSourcesMap", {}).get("value")
+                    if raw_map:
+                        self._source_list = {}
+                        self._source_list_map = {}
+                        for entry in raw_map:
+                            if isinstance(entry, dict):
+                                s_id = entry.get("id", "")
+                                s_name = entry.get("name", s_id)
+                            elif isinstance(entry, str):
+                                s_id = s_name = entry
+                            else:
+                                continue
+                            if s_id:
+                                self._source_list[s_id] = s_name
+                                self._source_list_map[s_id] = s_name
+                        _LOGGER.debug(
+                            "Samsung TV: sources from %s map: %s",
+                            cap_name,
+                            self._source_list_map,
+                        )
+                        return
+
+                    # Fallback to supportedInputSources (plain list)
                     raw_sources = data.get("supportedInputSources", {}).get("value")
                     if raw_sources:
                         self._source_list = {}
@@ -386,17 +413,16 @@ class SmartThingsTV:
                                 if s_id:
                                     self._source_list[s_id] = s_name
                                     self._source_list_map[s_id] = s_name
+                        if self._source_list:
+                            _LOGGER.debug(
+                                "Samsung TV: sources from %s list: %s",
+                                cap_name,
+                                self._source_list_map,
+                            )
+                            return
 
-                # Apply custom names from supportedInputSourcesMap
-                raw_map = data.get("supportedInputSourcesMap", {}).get("value")
-                if raw_map and self._source_list_map:
-                    self._apply_source_name_map(raw_map)
-                    _LOGGER.debug(
-                        "Input source map loaded via REST: %s",
-                        {k: v for k, v in self._source_list_map.items()},
-                    )
-        except Exception as err:
-            _LOGGER.debug("Error fetching input source map: %s", err)
+            except Exception as err:
+                _LOGGER.debug("Error fetching %s: %s", cap_name, err)
 
     async def _update_picture_mode(self, main_comp: dict) -> None:
         """Update picture mode from device status or REST fallback.
