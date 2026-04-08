@@ -894,15 +894,13 @@ class SmartThingsTV:
                 self._picture_mode_list,
             )
 
-        # Try both capabilities — detected one first, then the other
-        primary = self._picture_mode_capability or "custom.picturemode"
-        fallback = (
-            "custom.picturemode"
-            if primary == "samsungvd.pictureMode"
-            else "samsungvd.pictureMode"
-        )
+        # Try both capabilities — custom.picturemode first (works on more models),
+        # then samsungvd.pictureMode as fallback.
+        # Note: samsungvd.pictureMode may return COMPLETED but the TV can still
+        # reject the change ("function not available"), so we prefer custom first.
+        capabilities_to_try = ["custom.picturemode", "samsungvd.pictureMode"]
 
-        for capability in (primary, fallback):
+        for capability in capabilities_to_try:
             try:
                 await self._send_rest_command(
                     capability=capability,
