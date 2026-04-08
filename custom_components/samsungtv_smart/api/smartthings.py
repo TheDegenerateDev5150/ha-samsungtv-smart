@@ -259,12 +259,13 @@ class SmartThingsTV:
             )
 
     async def _fetch_picture_mode_map(self) -> None:
-        """Fetch supportedPictureModesMap via direct REST GET.
+        """Fetch supportedPictureModesMap and current mode via direct REST GET.
 
         pysmartthings v6 does not expose all capability attributes; in
         particular supportedPictureModesMap (which maps display names to
         internal ids like modeStandard / modeEco) is missing.  We fetch the
-        raw capability status directly to build the name<->id mapping.
+        raw capability status directly to build the name<->id mapping and
+        also read the current picture mode in the same request.
         """
         if not self._device_id or not self._session:
             return
@@ -292,26 +293,35 @@ class SmartThingsTV:
                 # {"supportedPictureModesMap": {"value": [{"id": "modeStandard",
                 #   "name": "Standard"}, ...]}, "pictureMode": {"value": "modeStandard"}}
                 raw_map = data.get("supportedPictureModesMap", {}).get("value")
-                if not raw_map:
-                    _LOGGER.debug("supportedPictureModesMap not in REST response")
-                    return
-                new_map: dict[str, str] = {}
-                for entry in raw_map:
-                    if isinstance(entry, dict):
-                        m_id = entry.get("id", "")
-                        m_name = entry.get("name", m_id)
-                    elif isinstance(entry, str):
-                        m_id = m_name = entry
+                if raw_map:
+                    new_map: dict[str, str] = {}
+                    for entry in raw_map:
+                        if isinstance(entry, dict):
+                            m_id = entry.get("id", "")
+                            m_name = entry.get("name", m_id)
+                        elif isinstance(entry, str):
+                            m_id = m_name = entry
+                        else:
+                            continue
+                        if m_id:
+                            new_map[m_name] = m_id
+                    if new_map:
+                        self._picture_mode_map = new_map
+                        self._picture_mode_list = list(new_map.keys())
+                        _LOGGER.debug(
+                            "Picture mode map loaded via REST: %s", list(new_map.keys())
+                        )
+
+                # Also read current picture mode from the same response
+                raw_mode = data.get("pictureMode", {}).get("value")
+                if raw_mode:
+                    if self._picture_mode_map:
+                        reverse = {v: k for k, v in self._picture_mode_map.items()}
+                        self._picture_mode = reverse.get(raw_mode, raw_mode)
                     else:
-                        continue
-                    if m_id:
-                        new_map[m_name] = m_id
-                if new_map:
-                    self._picture_mode_map = new_map
-                    self._picture_mode_list = list(new_map.keys())
-                    _LOGGER.debug(
-                        "Picture mode map loaded via REST: %s", list(new_map.keys())
-                    )
+                        self._picture_mode = raw_mode
+                    _LOGGER.debug("Picture mode from REST: %s (raw: %s)", self._picture_mode, raw_mode)
+
         except Exception as err:
             _LOGGER.debug("Error fetching picture mode map: %s", err)
 
@@ -519,7 +529,27 @@ class SmartThingsTV:
                             self._picture_mode = reverse.get(raw_mode, raw_mode)
                         else:
                             self._picture_mode = raw_mode
+                    else:
+                        # pysmartthings v6 may not expose pictureMode attribute;
+                        # fall back to REST API to get current picture mode
+                        await self._fetch_picture_mode_map()
                     break
+
+            # If no picture mode capability was found in main_comp at all,
+            # try REST API directly (some models / pysmartthings versions
+            # don't expose the capability through get_device_status)
+            if self._picture_mode is None and self._state == STStatus.STATE_ON:
+                if not self._picture_mode_capability:
+                    # Try both capability names via REST
+                    for cap_name in ("samsungvd.pictureMode", "custom.picturemode"):
+                        self._picture_mode_capability = cap_name
+                        await self._fetch_picture_mode_map()
+                        if self._picture_mode is not None:
+                            break
+                    if self._picture_mode is None:
+                        self._picture_mode_capability = None
+                else:
+                    await self._fetch_picture_mode_map()
 
         except Exception as err:
             _LOGGER.error("Error updating SmartThings status: %s", err)
