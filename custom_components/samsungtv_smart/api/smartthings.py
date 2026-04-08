@@ -302,9 +302,7 @@ class SmartThingsTV:
                 self._apply_source_name_map(sources_map_raw)
 
         # Fallback: fetch via REST if pysmartthings didn't expose the map
-        if not any(
-            v != k for k, v in self._source_list_map.items()
-        ):
+        if not any(v != k for k, v in self._source_list_map.items()):
             await self._fetch_input_source_map()
 
         _LOGGER.debug(
@@ -506,7 +504,11 @@ class SmartThingsTV:
                         self._picture_mode = reverse.get(raw_mode, raw_mode)
                     else:
                         self._picture_mode = raw_mode
-                    _LOGGER.debug("Picture mode from REST: %s (raw: %s)", self._picture_mode, raw_mode)
+                    _LOGGER.debug(
+                        "Picture mode from REST: %s (raw: %s)",
+                        self._picture_mode,
+                        raw_mode,
+                    )
 
         except Exception as err:
             _LOGGER.debug("Error fetching picture mode map: %s", err)
