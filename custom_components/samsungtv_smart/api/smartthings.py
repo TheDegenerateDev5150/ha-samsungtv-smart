@@ -366,8 +366,8 @@ class SmartThingsTV:
                     return
                 data = await resp.json()
                 _LOGGER.debug(
-                    "Samsung TV: input source REST response keys: %s",
-                    list(data.keys()) if data else "None",
+                    "Samsung TV: input source REST full response: %s",
+                    data,
                 )
 
                 # Build source list from supportedInputSources if not yet available
