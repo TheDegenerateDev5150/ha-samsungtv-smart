@@ -297,7 +297,9 @@ class SamsungTVWS:
         self._client_art = None
         self._last_art_ping = datetime.min
         self._client_art_supported = 2
-        self._art_thread_disabled = False  # Set True when async Art API (art.py) is active
+        self._art_thread_disabled = (
+            False  # Set True when async Art API (art.py) is active
+        )
 
         self._ping = Ping(self.host)
         self._status_callback = None
@@ -1043,8 +1045,10 @@ class SamsungTVWS:
                 self._client_control.daemon = True
                 self._client_control.start()
 
-            if self._client_art_supported > 0 and not self._art_thread_disabled and (
-                self._client_art is None or not self._client_art.is_alive()
+            if (
+                self._client_art_supported > 0
+                and not self._art_thread_disabled
+                and (self._client_art is None or not self._client_art.is_alive())
             ):
                 if self._client_art_supported > 1:
                     self._client_art_supported = 0
