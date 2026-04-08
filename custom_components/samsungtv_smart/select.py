@@ -548,38 +548,29 @@ class SamsungTVPictureModeSelect(SelectEntity):
         _LOGGER.debug("No picture mode capability found on this TV")
 
     async def async_select_option(self, option: str) -> None:
-        """Called when user picks a new picture mode."""
-        if not self._capability:
-            _LOGGER.warning("Cannot set picture mode: capability not detected")
+        """Called when user picks a new picture mode.
+
+        Delegates to the samsungtv_smart.select_picture_mode service which
+        uses the SmartThingsTV instance (with active OAuth token refresh).
+        Direct REST calls from select.py used a potentially stale token.
+        """
+        # Find the media_player entity for this device
+        entity_id = self._get_media_player_entity_id()
+        if not entity_id:
+            _LOGGER.error(
+                "Picture mode: no media_player entity found for %s",
+                self._device_name,
+            )
             return
 
-        mode_id = self._mode_map.get(option, option)
-        api_key = self._get_api_key()
-        url = f"{_API_DEVICES}/{self._device_id}/commands"
-        cmd = {
-            "component": "main",
-            "capability": self._capability,
-            "command": "setPictureMode",
-            "arguments": [mode_id],
-        }
-
         try:
-            async with self._session.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                },
-                json={"commands": [cmd]},
-                raise_for_status=True,
-            ) as resp:
-                _LOGGER.debug(
-                    "Picture mode set to %s (id: %s), status: %s",
-                    option,
-                    mode_id,
-                    resp.status,
-                )
+            await self.hass.services.async_call(
+                DOMAIN,
+                "select_picture_mode",
+                {"entity_id": entity_id, "picture_mode": option},
+                blocking=True,
+            )
+            _LOGGER.debug("Picture mode set to %s via service", option)
 
             self._attr_current_option = option
             self.async_write_ha_state()
@@ -590,6 +581,18 @@ class SamsungTVPictureModeSelect(SelectEntity):
 
         except Exception as ex:
             _LOGGER.error("Error setting picture mode to %s: %s", option, ex)
+
+    def _get_media_player_entity_id(self) -> str | None:
+        """Find the media_player entity for this TV."""
+        from homeassistant.helpers import entity_registry as er
+
+        registry = er.async_get(self.hass)
+        for entity in registry.entities.get_entries_for_config_entry_id(
+            self._entry.entry_id
+        ):
+            if entity.domain == "media_player":
+                return entity.entity_id
+        return None
 
     async def async_update(self) -> None:
         """Poll current picture mode from SmartThings."""
