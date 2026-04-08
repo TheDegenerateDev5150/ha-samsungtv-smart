@@ -1,4 +1,4 @@
-"""Samsung Frame TV - Matte type and color select entities."""
+"""Samsung TV Smart - Select entities (matte type/color + picture mode)."""
 
 from __future__ import annotations
 
@@ -14,7 +14,19 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api.art import SamsungTVAsyncArt
-from .const import CONF_WS_NAME, DATA_ART_API, DATA_CFG, DEFAULT_PORT, DOMAIN, WS_PREFIX
+from .const import (
+    AUTH_METHOD_OAUTH,
+    CONF_API_KEY,
+    CONF_AUTH_METHOD,
+    CONF_DEVICE_ID,
+    CONF_OAUTH_TOKEN,
+    CONF_WS_NAME,
+    DATA_ART_API,
+    DATA_CFG,
+    DEFAULT_PORT,
+    DOMAIN,
+    WS_PREFIX,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,13 +34,16 @@ _LOGGER = logging.getLogger(__name__)
 _RETRY_INTERVAL = 30  # seconds between retries
 _MAX_RETRIES = 10  # give up after 5 minutes
 
+# SmartThings REST API
+_API_DEVICES = "https://api.smartthings.com/v1/devices"
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Samsung Frame TV matte select entities from config entry."""
+    """Set up Samsung TV select entities from config entry."""
     config = hass.data[DOMAIN][entry.entry_id][DATA_CFG]
     host = config[CONF_HOST]
     port = config.get(CONF_PORT, DEFAULT_PORT)
@@ -39,6 +54,9 @@ async def async_setup_entry(
 
     session = async_get_clientsession(hass)
 
+    entities = []
+
+    # ── Frame TV Matte selects ────────────────────────────────────────────
     # Reuse shared art_api if already created by sensor.py, otherwise create one
     art_api = hass.data[DOMAIN][entry.entry_id].get(DATA_ART_API)
     if not art_api:
@@ -51,34 +69,72 @@ async def async_setup_entry(
             name=f"{WS_PREFIX} {ws_name} Art Select",
         )
 
-    # Check Frame TV support quickly - if not supported, skip
+    # Check Frame TV support quickly - if not supported, skip matte entities
     try:
         async with asyncio.timeout(5):
-            is_supported = await art_api.supported()
+            is_frame_supported = await art_api.supported()
     except Exception:
-        is_supported = False
+        is_frame_supported = False
 
-    if not is_supported:
-        _LOGGER.debug(
-            "Frame TV not supported on %s, skipping matte select entities", host
+    matte_type_select = None
+    matte_color_select = None
+    if is_frame_supported:
+        matte_type_select = SamsungTVMatteTypeSelect(
+            hass, entry, art_api, device_name, device_unique_id
         )
-        return
+        matte_color_select = SamsungTVMatteColorSelect(
+            hass, entry, art_api, device_name, device_unique_id
+        )
+        entities.extend([matte_type_select, matte_color_select])
 
-    # Create the two select entities
-    matte_type_select = SamsungTVMatteTypeSelect(
-        hass, entry, art_api, device_name, device_unique_id
-    )
-    matte_color_select = SamsungTVMatteColorSelect(
-        hass, entry, art_api, device_name, device_unique_id
-    )
+    # ── Picture Mode select (SmartThings) ─────────────────────────────────
+    api_key = config.get(CONF_API_KEY)
+    device_id = config.get(CONF_DEVICE_ID)
+    auth_method = config.get(CONF_AUTH_METHOD)
+    if auth_method == AUTH_METHOD_OAUTH and not api_key:
+        oauth_token = config.get(CONF_OAUTH_TOKEN)
+        if oauth_token and isinstance(oauth_token, dict):
+            api_key = oauth_token.get("access_token")
 
-    async_add_entities([matte_type_select, matte_color_select])
+    if api_key and device_id:
+        picture_mode_select = SamsungTVPictureModeSelect(
+            hass=hass,
+            entry=entry,
+            device_name=device_name,
+            device_unique_id=device_unique_id,
+            api_key=api_key,
+            device_id=device_id,
+            session=session,
+        )
+        entities.append(picture_mode_select)
+        _LOGGER.debug("Picture Mode select entity created for %s", device_name)
+    else:
+        picture_mode_select = None
+        _LOGGER.debug(
+            "SmartThings not configured for %s, skipping Picture Mode select",
+            device_name,
+        )
 
-    # Populate options from TV in background (TV might be off at boot)
-    hass.async_create_background_task(
-        _load_matte_options(hass, art_api, matte_type_select, matte_color_select),
-        f"samsungtv_matte_options_{entry.entry_id}",
-    )
+    if entities:
+        async_add_entities(entities)
+
+    # ── Background tasks ──────────────────────────────────────────────────
+    if matte_type_select and matte_color_select:
+        hass.async_create_background_task(
+            _load_matte_options(hass, art_api, matte_type_select, matte_color_select),
+            f"samsungtv_matte_options_{entry.entry_id}",
+        )
+
+    if picture_mode_select:
+        hass.async_create_background_task(
+            _load_picture_mode_options(hass, picture_mode_select),
+            f"samsungtv_picture_mode_options_{entry.entry_id}",
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Background loaders
+# ══════════════════════════════════════════════════════════════════════════
 
 
 async def _load_matte_options(
@@ -95,7 +151,6 @@ async def _load_matte_options(
                     include_color=True
                 )
 
-            # Extract string values from dict objects returned by the TV
             type_options = [
                 m["matte_type"] if isinstance(m, dict) else str(m) for m in matte_types
             ]
@@ -135,6 +190,50 @@ async def _load_matte_options(
     _LOGGER.warning("Could not populate matte options after %d attempts", _MAX_RETRIES)
 
 
+async def _load_picture_mode_options(
+    hass: HomeAssistant,
+    select_entity: "SamsungTVPictureModeSelect",
+) -> None:
+    """Fetch picture mode list from SmartThings, with retries."""
+    for attempt in range(_MAX_RETRIES):
+        try:
+            async with asyncio.timeout(10):
+                await select_entity.async_fetch_picture_modes()
+
+            if select_entity.options:
+                _LOGGER.info(
+                    "Picture mode select populated — modes: %s",
+                    select_entity.options,
+                )
+                return
+
+        except asyncio.TimeoutError:
+            _LOGGER.debug(
+                "Timeout fetching picture modes (attempt %d/%d), retrying in %ds",
+                attempt + 1,
+                _MAX_RETRIES,
+                _RETRY_INTERVAL,
+            )
+        except Exception as ex:
+            _LOGGER.debug(
+                "Error fetching picture modes (attempt %d/%d): %s",
+                attempt + 1,
+                _MAX_RETRIES,
+                ex,
+            )
+
+        await asyncio.sleep(_RETRY_INTERVAL)
+
+    _LOGGER.warning(
+        "Could not populate picture mode options after %d attempts", _MAX_RETRIES
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Matte select entities (Frame TV only)
+# ══════════════════════════════════════════════════════════════════════════
+
+
 class SamsungTVMatteSelectBase(SelectEntity):
     """Base class for Samsung Frame TV matte select entities."""
 
@@ -167,13 +266,6 @@ class SamsungTVMatteSelectBase(SelectEntity):
         self._attr_options = options
         if self._attr_current_option not in options:
             self._attr_current_option = options[0] if options else None
-        # Guard: async_write_ha_state() must not be called before the entity
-        # is fully registered on its platform (self.platform is set by HA
-        # after async_add_entities completes). The background task that calls
-        # set_options() can race against that registration, causing:
-        #   "Entity None ... does not have a platform"
-        # The _attr_* values are already stored, so HA will pick them up
-        # correctly on its first state read; we just skip the explicit push.
         if self.platform is not None:
             self.async_write_ha_state()
 
@@ -227,7 +319,6 @@ class SamsungTVMatteTypeSelect(SamsungTVMatteSelectBase):
             content_id: str = current.get("content_id", "")
             existing_matte: str = current.get("matte_id", "none_polar")
 
-            # Keep existing color, change only the type
             if "_" in existing_matte:
                 color_part = existing_matte.rsplit("_", 1)[1]
             else:
@@ -283,7 +374,6 @@ class SamsungTVMatteColorSelect(SamsungTVMatteSelectBase):
             content_id: str = current.get("content_id", "")
             existing_matte: str = current.get("matte_id", "none")
 
-            # Keep existing type, change only the color
             if "_" in existing_matte:
                 type_part = existing_matte.rsplit("_", 1)[0]
             else:
@@ -306,3 +396,215 @@ class SamsungTVMatteColorSelect(SamsungTVMatteSelectBase):
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         await self._async_refresh_current()
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Picture Mode select entity (SmartThings)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class SamsungTVPictureModeSelect(SelectEntity):
+    """Select entity for Samsung TV picture mode (Standard, Movie, Dynamic, etc.)."""
+
+    _attr_icon = "mdi:image-filter-hdr"
+    _attr_has_entity_name = True
+    _attr_should_poll = True
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        device_name: str,
+        device_unique_id: str,
+        api_key: str,
+        device_id: str,
+        session,
+    ) -> None:
+        self.hass = hass
+        self._entry = entry
+        self._device_name = device_name
+        self._device_unique_id = device_unique_id
+        self._api_key = api_key
+        self._device_id = device_id
+        self._session = session
+
+        self._attr_unique_id = f"{device_unique_id}_picture_mode"
+        self._attr_name = "Picture Mode"
+        self._attr_options: list[str] = []
+        self._attr_current_option: str | None = None
+
+        # Map display name -> API id (e.g. "Standard" -> "modeStandard")
+        self._mode_map: dict[str, str] = {}
+        # Which capability the TV uses
+        self._capability: str | None = None
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._device_unique_id)},
+            name=self._device_name,
+        )
+
+    @property
+    def available(self) -> bool:
+        """Only available when we have options loaded."""
+        return len(self._attr_options) > 0
+
+    def _get_api_key(self) -> str:
+        """Get current API key, refreshing from entry data for OAuth."""
+        entry = self.hass.config_entries.async_get_entry(self._entry.entry_id)
+        if entry:
+            auth_method = entry.data.get(CONF_AUTH_METHOD)
+            if auth_method == AUTH_METHOD_OAUTH:
+                oauth_token = entry.data.get(CONF_OAUTH_TOKEN)
+                if oauth_token and isinstance(oauth_token, dict):
+                    new_key = oauth_token.get("access_token")
+                    if new_key:
+                        self._api_key = new_key
+                        return new_key
+            api_key = entry.data.get(CONF_API_KEY)
+            if api_key:
+                self._api_key = api_key
+        return self._api_key
+
+    async def _rest_get_capability_status(self, capability: str) -> dict | None:
+        """Fetch capability status via SmartThings REST API."""
+        api_key = self._get_api_key()
+        url = (
+            f"{_API_DEVICES}/{self._device_id}"
+            f"/components/main/capabilities/{capability}/status"
+        )
+        try:
+            async with self._session.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Accept": "application/json",
+                },
+            ) as resp:
+                if resp.status != 200:
+                    return None
+                return await resp.json()
+        except Exception as ex:
+            _LOGGER.debug("Error fetching picture mode capability: %s", ex)
+            return None
+
+    async def async_fetch_picture_modes(self) -> None:
+        """Fetch picture mode list and current mode from SmartThings REST API."""
+        for cap_name in ("samsungvd.pictureMode", "custom.picturemode"):
+            data = await self._rest_get_capability_status(cap_name)
+            if not data:
+                continue
+
+            # Parse supported modes map
+            raw_map = data.get("supportedPictureModesMap", {}).get("value")
+            if raw_map:
+                new_map: dict[str, str] = {}
+                for entry in raw_map:
+                    if isinstance(entry, dict):
+                        m_id = entry.get("id", "")
+                        m_name = entry.get("name", m_id)
+                    elif isinstance(entry, str):
+                        m_id = m_name = entry
+                    else:
+                        continue
+                    if m_id:
+                        new_map[m_name] = m_id
+                if new_map:
+                    self._mode_map = new_map
+                    self._attr_options = list(new_map.keys())
+                    self._capability = cap_name
+
+            # Fallback: supportedPictureModes (names only)
+            if not self._attr_options:
+                raw_list = data.get("supportedPictureModes", {}).get("value")
+                if raw_list and isinstance(raw_list, list):
+                    self._attr_options = raw_list
+                    self._capability = cap_name
+
+            # Read current mode
+            raw_mode = data.get("pictureMode", {}).get("value")
+            if raw_mode and self._attr_options:
+                if self._mode_map:
+                    reverse = {v: k for k, v in self._mode_map.items()}
+                    self._attr_current_option = reverse.get(raw_mode, raw_mode)
+                else:
+                    self._attr_current_option = raw_mode
+
+                if self.platform is not None:
+                    self.async_write_ha_state()
+
+                _LOGGER.debug(
+                    "Picture mode: current=%s, options=%s (cap=%s)",
+                    self._attr_current_option,
+                    self._attr_options,
+                    cap_name,
+                )
+                return
+
+        _LOGGER.debug("No picture mode capability found on this TV")
+
+    async def async_select_option(self, option: str) -> None:
+        """Called when user picks a new picture mode."""
+        if not self._capability:
+            _LOGGER.warning("Cannot set picture mode: capability not detected")
+            return
+
+        mode_id = self._mode_map.get(option, option)
+        api_key = self._get_api_key()
+        url = f"{_API_DEVICES}/{self._device_id}/commands"
+        cmd = {
+            "component": "main",
+            "capability": self._capability,
+            "command": "setPictureMode",
+            "arguments": [mode_id],
+        }
+
+        try:
+            async with self._session.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                json={"commands": [cmd]},
+                raise_for_status=True,
+            ) as resp:
+                _LOGGER.debug(
+                    "Picture mode set to %s (id: %s), status: %s",
+                    option,
+                    mode_id,
+                    resp.status,
+                )
+
+            self._attr_current_option = option
+            self.async_write_ha_state()
+
+        except Exception as ex:
+            _LOGGER.error("Error setting picture mode to %s: %s", option, ex)
+
+    async def async_update(self) -> None:
+        """Poll current picture mode from SmartThings."""
+        if not self._capability:
+            return
+
+        data = await self._rest_get_capability_status(self._capability)
+        if not data:
+            return
+
+        raw_mode = data.get("pictureMode", {}).get("value")
+        if not raw_mode:
+            return
+
+        if self._mode_map:
+            reverse = {v: k for k, v in self._mode_map.items()}
+            new_mode = reverse.get(raw_mode, raw_mode)
+        else:
+            new_mode = raw_mode
+
+        if new_mode != self._attr_current_option:
+            _LOGGER.debug(
+                "Picture mode updated: %s -> %s", self._attr_current_option, new_mode
+            )
+            self._attr_current_option = new_mode
