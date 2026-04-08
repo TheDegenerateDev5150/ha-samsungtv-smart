@@ -990,7 +990,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         # e.g. {"digitalTv": "digitalTv", "HDMI1": "PlayStation", "HDMI2": "HDMI2"}
         for source_id, source_name in source_list.items():
             try:
-                is_tv = source_id.upper() in ["DIGITALTV", "TV"]
+                is_tv = source_id.upper() in ["DIGITALTV", "TV", "DTV"]
                 is_hdmi = source_id.startswith("HDMI")
                 if is_tv or is_hdmi:
                     input_type = "ST_TV" if is_tv else "ST_" + source_id
