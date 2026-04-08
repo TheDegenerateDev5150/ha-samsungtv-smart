@@ -894,11 +894,16 @@ class SmartThingsTV:
                 self._picture_mode_list,
             )
 
-        # Try both capabilities — custom.picturemode first (works on more models),
-        # then samsungvd.pictureMode as fallback.
-        # Note: samsungvd.pictureMode may return COMPLETED but the TV can still
-        # reject the change ("function not available"), so we prefer custom first.
-        capabilities_to_try = ["custom.picturemode", "samsungvd.pictureMode"]
+        # Try detected capability first, fallback to the other.
+        # custom.picturemode returns 422 on some TVs (Frame 2024) which could
+        # interfere with the session, so we use the detected capability first.
+        primary = self._picture_mode_capability or "samsungvd.pictureMode"
+        fallback = (
+            "custom.picturemode"
+            if primary == "samsungvd.pictureMode"
+            else "samsungvd.pictureMode"
+        )
+        capabilities_to_try = [primary, fallback]
 
         for capability in capabilities_to_try:
             try:
