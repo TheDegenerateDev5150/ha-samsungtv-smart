@@ -503,6 +503,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         if shared_art_api:
             self._art_api = shared_art_api
             _LOGGER.debug("Using shared Frame Art API instance")
+            # Disable the old SamsungArt thread in samsungws.py to prevent
+            # competing WebSocket connections on the art-app channel.
+            # Multiple clients cause the TV to route d2d_service_message
+            # responses unpredictably, resulting in art.py timeouts.
+            self._ws.disable_art_thread()
         else:
             self._art_api = SamsungTVAsyncArt(
                 host=self._host,
