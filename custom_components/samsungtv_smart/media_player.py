@@ -977,39 +977,26 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         st_source_list = {}
         source_list = self._st.source_list
-        if source_list:
+        if not source_list:
+            return
 
-            def get_next_name(index):
-                if index >= len(source_list):
-                    return ""
-                next_input = source_list[index]
-                if not (
-                    next_input.upper() in ["DIGITALTV", "TV"]
-                    or next_input.startswith("HDMI")
-                ):
-                    return next_input
-                return ""
+        # source_list is a dict {source_id: source_name}
+        # e.g. {"digitalTv": "digitalTv", "HDMI1": "PlayStation", "HDMI2": "HDMI2"}
+        for source_id, source_name in source_list.items():
+            try:
+                is_tv = source_id.upper() in ["DIGITALTV", "TV"]
+                is_hdmi = source_id.startswith("HDMI")
+                if is_tv or is_hdmi:
+                    input_type = "ST_TV" if is_tv else "ST_" + source_id
+                    if input_type in st_source_list.values():
+                        continue
 
-            for i, _ in enumerate(source_list):
-                try:
-                    # SmartThings source list is an array that may contain the input
-                    # or the assigned name, if we found a name that is not an input
-                    # we use it as input name
-                    input_name = source_list[i]
-                    is_tv = input_name.upper() in ["DIGITALTV", "TV"]
-                    is_hdmi = input_name.startswith("HDMI")
-                    if is_tv or is_hdmi:
-                        input_type = "ST_TV" if is_tv else "ST_" + input_name
-                        if input_type in st_source_list.values():
-                            continue
+                    # Use custom name from map, or fall back to source_id
+                    name = source_name if source_name != source_id else ""
+                    st_source_list[name or source_id] = input_type
 
-                        name = self._st.get_source_name(input_name)
-                        if not name:
-                            name = get_next_name(i + 1)
-                        st_source_list[name or input_name] = input_type
-
-                except Exception:  # pylint: disable=broad-except
-                    pass
+            except Exception:  # pylint: disable=broad-except
+                pass
 
         if len(st_source_list) > 0:
             _LOGGER.info(
@@ -1253,6 +1240,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         self._state = MediaPlayerState.ON if result else MediaPlayerState.OFF
         self._started_up = True
+
+        # Reload SmartThings sources if we're still using defaults
+        # (sources are only available after the first async_device_update)
+        if self._st and self._default_source_used:
+            self._get_st_sources()
 
         # NB: We are checking properties, not attribute!
         if self.state == MediaPlayerState.ON:
