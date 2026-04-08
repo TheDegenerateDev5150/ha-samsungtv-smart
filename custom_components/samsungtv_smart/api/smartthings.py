@@ -266,7 +266,12 @@ class SmartThingsTV:
         for HDMI1). Falls back to REST API if pysmartthings doesn't expose
         the capability or the map attribute.
         """
-        if "mediaInputSource" in main_comp:
+        has_media_input = "mediaInputSource" in main_comp
+        _LOGGER.debug(
+            "Samsung TV: _update_source_list called, mediaInputSource in comp: %s",
+            has_media_input,
+        )
+        if has_media_input:
             media_input = main_comp["mediaInputSource"]
 
             if "supportedInputSources" in media_input:
@@ -325,12 +330,14 @@ class SmartThingsTV:
         Used as fallback when pysmartthings doesn't expose mediaInputSource.
         """
         if not self._device_id or not self._session:
+            _LOGGER.debug("Cannot fetch input sources: missing device_id or session")
             return
         api_key = self._get_api_key()
         url = (
             f"{API_DEVICES}/{self._device_id}"
             f"/components/main/capabilities/mediaInputSource/status"
         )
+        _LOGGER.debug("Samsung TV: fetching input sources via REST: %s", url)
         try:
             async with self._session.get(
                 url,
@@ -345,6 +352,10 @@ class SmartThingsTV:
                     )
                     return
                 data = await resp.json()
+                _LOGGER.debug(
+                    "Samsung TV: input source REST response keys: %s",
+                    list(data.keys()) if data else "None",
+                )
 
                 # Build source list from supportedInputSources if not yet available
                 if not self._source_list:
