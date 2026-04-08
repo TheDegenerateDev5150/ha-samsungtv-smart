@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
@@ -437,6 +438,8 @@ class SamsungTVPictureModeSelect(SelectEntity):
         self._mode_map: dict[str, str] = {}
         # Which capability the TV uses
         self._capability: str | None = None
+        # Cooldown: skip polls briefly after setting a mode
+        self._skip_poll_until: float = 0
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -580,6 +583,10 @@ class SamsungTVPictureModeSelect(SelectEntity):
 
             self._attr_current_option = option
             self.async_write_ha_state()
+            # Skip polls for 5 seconds to let the TV apply the change;
+            # without this, the next async_update() reads the OLD mode
+            # from the TV (which hasn't switched yet) and overwrites ours.
+            self._skip_poll_until = time.time() + 5
 
         except Exception as ex:
             _LOGGER.error("Error setting picture mode to %s: %s", option, ex)
@@ -587,6 +594,10 @@ class SamsungTVPictureModeSelect(SelectEntity):
     async def async_update(self) -> None:
         """Poll current picture mode from SmartThings."""
         if not self._capability:
+            return
+
+        # Skip polling briefly after a mode change to let the TV apply it
+        if time.time() < self._skip_poll_until:
             return
 
         data = await self._rest_get_capability_status(self._capability)
@@ -602,6 +613,18 @@ class SamsungTVPictureModeSelect(SelectEntity):
             new_mode = reverse.get(raw_mode, raw_mode)
         else:
             new_mode = raw_mode
+
+        # If the TV reports a mode we don't know about (e.g. Filmmaker),
+        # add it dynamically to options and map
+        if new_mode not in self._attr_options:
+            _LOGGER.info(
+                "Picture mode: discovered new mode '%s' (raw: %s), adding to options",
+                new_mode,
+                raw_mode,
+            )
+            self._attr_options = [*self._attr_options, new_mode]
+            if raw_mode != new_mode:
+                self._mode_map[new_mode] = raw_mode
 
         if new_mode != self._attr_current_option:
             _LOGGER.debug(
