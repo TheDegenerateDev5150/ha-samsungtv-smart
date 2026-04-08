@@ -264,51 +264,45 @@ class SmartThingsTV:
         Reads supportedInputSources for the basic list, then checks
         supportedInputSourcesMap for custom device names (e.g. "PlayStation"
         for HDMI1). Falls back to REST API if pysmartthings doesn't expose
-        the map attribute.
+        the capability or the map attribute.
         """
-        if "mediaInputSource" not in main_comp:
-            return
+        if "mediaInputSource" in main_comp:
+            media_input = main_comp["mediaInputSource"]
 
-        media_input = main_comp["mediaInputSource"]
+            if "supportedInputSources" in media_input:
+                supported_inputs = media_input["supportedInputSources"].value
+                if supported_inputs:
+                    self._source_list = {}
+                    self._source_list_map = {}
+                    for source in supported_inputs:
+                        if isinstance(source, str):
+                            source_id = source
+                            source_name = source
+                        elif isinstance(source, dict):
+                            source_id = source.get("id", "")
+                            source_name = source.get("name", source_id)
+                        else:
+                            continue
+                        if source_id:
+                            self._source_list[source_id] = source_name
+                            self._source_list_map[source_id] = source_name
 
-        if "supportedInputSources" not in media_input:
-            return
+                    # Try to get custom names from supportedInputSourcesMap
+                    _mk = "supportedInputSourcesMap"
+                    if _mk in media_input:
+                        sources_map_raw = media_input[_mk].value
+                        if sources_map_raw:
+                            self._apply_source_name_map(sources_map_raw)
 
-        supported_inputs = media_input["supportedInputSources"].value
-        if not supported_inputs:
-            return
-
-        # Build basic source list from supportedInputSources
-        self._source_list = {}
-        self._source_list_map = {}
-        for source in supported_inputs:
-            if isinstance(source, str):
-                source_id = source
-                source_name = source
-            elif isinstance(source, dict):
-                source_id = source.get("id", "")
-                source_name = source.get("name", source_id)
-            else:
-                continue
-            if source_id:
-                self._source_list[source_id] = source_name
-                self._source_list_map[source_id] = source_name
-
-        # Try to get custom names from supportedInputSourcesMap
-        _mk = "supportedInputSourcesMap"
-        if _mk in media_input:
-            sources_map_raw = media_input[_mk].value
-            if sources_map_raw:
-                self._apply_source_name_map(sources_map_raw)
-
-        # Fallback: fetch via REST if pysmartthings didn't expose the map
-        if not any(v != k for k, v in self._source_list_map.items()):
+        # Fallback: if pysmartthings didn't provide sources, fetch via REST
+        if not self._source_list and self._state == STStatus.STATE_ON:
             await self._fetch_input_source_map()
 
-        _LOGGER.debug(
-            "Samsung TV: sources: %s",
-            {k: v for k, v in self._source_list_map.items()},
-        )
+        if self._source_list:
+            _LOGGER.debug(
+                "Samsung TV: sources: %s",
+                {k: v for k, v in self._source_list_map.items()},
+            )
 
     def _apply_source_name_map(self, sources_map_raw: list) -> None:
         """Apply custom names from supportedInputSourcesMap."""
@@ -325,10 +319,10 @@ class SmartThingsTV:
                 self._source_list[s_id] = s_name
 
     async def _fetch_input_source_map(self) -> None:
-        """Fetch supportedInputSourcesMap via direct REST GET.
+        """Fetch input sources and custom names via direct REST GET.
 
-        Similar to _fetch_picture_mode_map but for input sources.
-        Provides custom device names for HDMI ports.
+        Builds both the source list and the name map from REST API.
+        Used as fallback when pysmartthings doesn't expose mediaInputSource.
         """
         if not self._device_id or not self._session:
             return
@@ -346,10 +340,32 @@ class SmartThingsTV:
                 },
             ) as resp:
                 if resp.status != 200:
+                    _LOGGER.debug(
+                        "Could not fetch input sources (status %s)", resp.status
+                    )
                     return
                 data = await resp.json()
+
+                # Build source list from supportedInputSources if not yet available
+                if not self._source_list:
+                    raw_sources = data.get("supportedInputSources", {}).get("value")
+                    if raw_sources:
+                        self._source_list = {}
+                        self._source_list_map = {}
+                        for source in raw_sources:
+                            if isinstance(source, str):
+                                self._source_list[source] = source
+                                self._source_list_map[source] = source
+                            elif isinstance(source, dict):
+                                s_id = source.get("id", "")
+                                s_name = source.get("name", s_id)
+                                if s_id:
+                                    self._source_list[s_id] = s_name
+                                    self._source_list_map[s_id] = s_name
+
+                # Apply custom names from supportedInputSourcesMap
                 raw_map = data.get("supportedInputSourcesMap", {}).get("value")
-                if raw_map:
+                if raw_map and self._source_list_map:
                     self._apply_source_name_map(raw_map)
                     _LOGGER.debug(
                         "Input source map loaded via REST: %s",
