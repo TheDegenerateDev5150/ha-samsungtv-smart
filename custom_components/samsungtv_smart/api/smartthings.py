@@ -258,6 +258,90 @@ class SmartThingsTV:
                 result,
             )
 
+    async def _update_picture_mode(self, main_comp: dict) -> None:
+        """Update picture mode from device status or REST fallback.
+
+        Supports both capability names:
+        - samsungvd.pictureMode (newer models)
+        - custom.picturemode (older models)
+
+        Samsung SmartThings uses two attributes:
+        - supportedPictureModesMap: [{"id":"modeStandard","name":"Standard"}, ...]
+        - supportedPictureModes: ["Standard", "Eco"] (localized names only)
+        - pictureMode: current mode as an id (e.g. "modeStandard")
+
+        We use the Map to build a name<->id mapping so that:
+        - _picture_mode_list shows localized names to the user
+        - _picture_mode stores the localized name (not the raw id)
+        - async_set_picture_mode resolves name -> id before sending
+        """
+        for _pic_cap in ("samsungvd.pictureMode", "custom.picturemode"):
+            if _pic_cap not in main_comp:
+                continue
+
+            self._picture_mode_capability = _pic_cap
+            picture_mode_cap = main_comp[_pic_cap]
+
+            # Build name<->id map from supportedPictureModesMap if available
+            _mk = "supportedPictureModesMap"
+            if _mk in picture_mode_cap:
+                modes_map_raw = picture_mode_cap[_mk].value
+                if modes_map_raw:
+                    new_map: dict[str, str] = {}
+                    for entry in modes_map_raw:
+                        if isinstance(entry, dict):
+                            m_id = entry.get("id", "")
+                            m_name = entry.get("name", m_id)
+                        elif isinstance(entry, str):
+                            m_id = m_name = entry
+                        else:
+                            continue
+                        if m_id:
+                            new_map[m_name] = m_id
+                    if new_map:
+                        self._picture_mode_map = new_map
+                        self._picture_mode_list = list(new_map.keys())
+
+            # Fallback: use supportedPictureModes (names only, no id mapping)
+            if not self._picture_mode_list:
+                _sk = "supportedPictureModes"
+                if _sk in picture_mode_cap:
+                    self._picture_mode_list = picture_mode_cap[_sk].value
+
+            # If pysmartthings did not expose supportedPictureModesMap,
+            # fetch it directly from the REST capability status endpoint.
+            if not self._picture_mode_map:
+                await self._fetch_picture_mode_map()
+
+            # Current mode: convert raw id -> display name if map available
+            _pk = "pictureMode"
+            if _pk in picture_mode_cap:
+                raw_mode = picture_mode_cap[_pk].value
+                if self._picture_mode_map:
+                    reverse = {v: k for k, v in self._picture_mode_map.items()}
+                    self._picture_mode = reverse.get(raw_mode, raw_mode)
+                else:
+                    self._picture_mode = raw_mode
+            else:
+                # pysmartthings v6 may not expose pictureMode attribute;
+                # fall back to REST API to get current picture mode
+                await self._fetch_picture_mode_map()
+            return
+
+        # No picture mode capability found in main_comp at all —
+        # try REST API directly (some models / pysmartthings versions
+        # don't expose the capability through get_device_status)
+        if self._picture_mode is None and self._state == STStatus.STATE_ON:
+            if not self._picture_mode_capability:
+                for cap_name in ("samsungvd.pictureMode", "custom.picturemode"):
+                    self._picture_mode_capability = cap_name
+                    await self._fetch_picture_mode_map()
+                    if self._picture_mode is not None:
+                        return
+                self._picture_mode_capability = None
+            else:
+                await self._fetch_picture_mode_map()
+
     async def _fetch_picture_mode_map(self) -> None:
         """Fetch supportedPictureModesMap and current mode via direct REST GET.
 
@@ -474,82 +558,8 @@ class SmartThingsTV:
                         ].value
                     break
 
-            # Update picture mode — support both capability names
-            # (samsungvd.pictureMode on newer models, custom.picturemode on older ones)
-            # FIX: Samsung SmartThings uses two attributes:
-            #   - supportedPictureModesMap: [{"id":"modeStandard","name":"Standard"}, ...]
-            #   - supportedPictureModes: ["Standard", "Eco"] (localized names only)
-            #   - pictureMode: current mode as an id (e.g. "modeStandard")
-            # We use the Map to build a name<->id mapping so that:
-            #   - _picture_mode_list shows localized names to the user
-            #   - _picture_mode stores the localized name (not the raw id)
-            #   - async_set_picture_mode resolves name -> id before sending
-            for _pic_cap in ("samsungvd.pictureMode", "custom.picturemode"):
-                if _pic_cap in main_comp:
-                    self._picture_mode_capability = _pic_cap
-                    picture_mode_cap = main_comp[_pic_cap]
-
-                    # Build name<->id map from supportedPictureModesMap if available
-                    _mk = "supportedPictureModesMap"
-                    if _mk in picture_mode_cap:
-                        modes_map_raw = picture_mode_cap[_mk].value
-                        if modes_map_raw:
-                            new_map: dict[str, str] = {}
-                            for entry in modes_map_raw:
-                                if isinstance(entry, dict):
-                                    m_id = entry.get("id", "")
-                                    m_name = entry.get("name", m_id)
-                                elif isinstance(entry, str):
-                                    m_id = m_name = entry
-                                else:
-                                    continue
-                                if m_id:
-                                    new_map[m_name] = m_id
-                            if new_map:
-                                self._picture_mode_map = new_map
-                                self._picture_mode_list = list(new_map.keys())
-
-                    # Fallback: use supportedPictureModes (names only, no id mapping)
-                    if not self._picture_mode_list:
-                        _sk = "supportedPictureModes"
-                        if _sk in picture_mode_cap:
-                            self._picture_mode_list = picture_mode_cap[_sk].value
-
-                    # If pysmartthings did not expose supportedPictureModesMap,
-                    # fetch it directly from the REST capability status endpoint.
-                    if not self._picture_mode_map:
-                        await self._fetch_picture_mode_map()
-
-                    # Current mode: convert raw id -> display name if map available
-                    _pk = "pictureMode"
-                    if _pk in picture_mode_cap:
-                        raw_mode = picture_mode_cap[_pk].value
-                        if self._picture_mode_map:
-                            reverse = {v: k for k, v in self._picture_mode_map.items()}
-                            self._picture_mode = reverse.get(raw_mode, raw_mode)
-                        else:
-                            self._picture_mode = raw_mode
-                    else:
-                        # pysmartthings v6 may not expose pictureMode attribute;
-                        # fall back to REST API to get current picture mode
-                        await self._fetch_picture_mode_map()
-                    break
-
-            # If no picture mode capability was found in main_comp at all,
-            # try REST API directly (some models / pysmartthings versions
-            # don't expose the capability through get_device_status)
-            if self._picture_mode is None and self._state == STStatus.STATE_ON:
-                if not self._picture_mode_capability:
-                    # Try both capability names via REST
-                    for cap_name in ("samsungvd.pictureMode", "custom.picturemode"):
-                        self._picture_mode_capability = cap_name
-                        await self._fetch_picture_mode_map()
-                        if self._picture_mode is not None:
-                            break
-                    if self._picture_mode is None:
-                        self._picture_mode_capability = None
-                else:
-                    await self._fetch_picture_mode_map()
+            # Update picture mode
+            await self._update_picture_mode(main_comp)
 
         except Exception as err:
             _LOGGER.error("Error updating SmartThings status: %s", err)
