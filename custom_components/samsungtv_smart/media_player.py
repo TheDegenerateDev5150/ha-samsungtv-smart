@@ -952,6 +952,44 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         return result
 
     @callback
+    def _resolve_app_name(self, app_id: str) -> str | None:
+        """Resolve a SmartThings/Tizen app ID to a human-readable name.
+
+        Checks multiple sources:
+        1. Reverse lookup in _app_list_st (configured apps)
+        2. Reverse lookup in _app_list (Tizen app IDs)
+        3. WS installed_app list (app_name from TV)
+        4. STD_APP_LIST (hardcoded known apps by st_app_id)
+        """
+        # 1. Check configured ST apps (reverse: name -> st_id)
+        if self._app_list_st:
+            for name, st_id in self._app_list_st.items():
+                if st_id == app_id:
+                    return name
+
+        # 2. Check configured apps by Tizen ID
+        if self._app_list:
+            for name, tizen_id in self._app_list.items():
+                if tizen_id == app_id:
+                    return name
+
+        # 3. Check WS installed apps
+        if self._ws.installed_app:
+            for app in self._ws.installed_app.values():
+                if app.app_id == app_id:
+                    return app.app_name
+
+        # 4. Check STD_APP_LIST by st_app_id
+        for tizen_id, info in STD_APP_LIST.items():
+            if info.get("st_app_id") == app_id or tizen_id == app_id:
+                # Use the app_name from installed_app if available
+                if self._ws.installed_app and tizen_id in self._ws.installed_app:
+                    return self._ws.installed_app[tizen_id].app_name
+                # No installed name available, return None to fall back to raw ID
+                return None
+
+        return None
+
     def _get_running_app(self):
         """Retrieve name of running apps."""
 
@@ -1462,7 +1500,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                     # means that this is not the real running app / media title
                     st_apps = self._app_list_st or {}
                     if run_app not in list(st_apps.values()):
-                        return self._st.channel_name
+                        # Resolve app ID to human-readable name
+                        app_name = self._resolve_app_name(run_app)
+                        return app_name or run_app
 
         media_title = self._get_source()
         if media_title and media_title != DEFAULT_APP:
