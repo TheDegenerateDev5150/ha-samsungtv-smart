@@ -146,57 +146,66 @@ STD_APP_LIST = {
     "org.tizen.browser": {
         "st_app_id": "",
         "logo": "tizenbrowser.png",
-    },  # Internet
+        "name": "Internet",
+    },
     "11101200001": {
         "st_app_id": "RN1MCdNq8t.Netflix",
         "logo": "netflix.png",
-    },  # Netflix
+        "name": "Netflix",
+    },
     "3201907018807": {
         "st_app_id": "org.tizen.netflix-app",
         "logo": "netflix.png",
-    },  # Netflix (New)
+        "name": "Netflix",
+    },
     "111299001912": {
         "st_app_id": "9Ur5IzDKqV.TizenYouTube",
         "logo": "youtube.png",
-    },  # YouTube
+        "name": "YouTube",
+    },
     "3201512006785": {
         "st_app_id": "org.tizen.ignition",
         "logo": "primevideo.png",
-    },  # Prime Video
-    # "3201512006785": {
-    #     "st_app_id": "evKhCgZelL.AmazonIgnitionLauncher2",
-    #     "logo": "",
-    # },  # Prime Video
+        "name": "Prime Video",
+    },
     "3201910019365": {
         "st_app_id": "org.tizen.primevideo",
         "logo": "primevideo.png",
-    },  # Prime Video (New)
+        "name": "Prime Video",
+    },
     "3201901017640": {
         "st_app_id": "MCmYXNxgcu.DisneyPlus",
         "logo": "disneyplus.png",
-    },  # Disney+
+        "name": "Disney+",
+    },
     "3202110025305": {
         "st_app_id": "rJyOSqC6Up.PPlusIntl",
         "logo": "paramountplus.png",
-    },  # Paramount+
+        "name": "Paramount+",
+    },
     "11091000000": {
         "st_app_id": "4ovn894vo9.Facebook",
         "logo": "facebook.png",
-    },  # Facebook
+        "name": "Facebook",
+    },
     "3201806016390": {
         "st_app_id": "yu1NM3vHsU.DAZN",
         "logo": "dazn.png",
-    },  # Dazn
+        "name": "DAZN",
+    },
     "3201601007250": {
         "st_app_id": "QizQxC7CUf.PlayMovies",
         "logo": "",
-    },  # Google Play
+        "name": "Google Play",
+    },
     "3201606009684": {
         "st_app_id": "rJeHak5zRg.Spotify",
         "logo": "spotify.png",
-    },  # Spotify
+        "name": "Spotify",
+    },
     "3201512006963": {
         "st_app_id": "kIciSQlYEM.plex",
         "logo": "",
-    },  # Plex
+        "name": "Plex",
+    },
 }
