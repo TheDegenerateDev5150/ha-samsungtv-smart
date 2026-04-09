@@ -991,7 +991,79 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             len(self._app_list) if self._app_list else 0,
             len(installed) if installed else 0,
         )
-        return None
+        # Last resort: clean up the SmartThings/Tizen ID into a readable name
+        # e.g. "SKCwdZ5Hxp.swisscombluetv" -> "Swisscom Blue TV"
+        # e.g. "HEPsqFNie0.tvplusstandalone" -> "TV Plus"
+        return self._clean_app_id(app_id)
+
+    @staticmethod
+    def _clean_app_id(app_id: str) -> str:
+        """Convert a raw SmartThings/Tizen app ID to a human-readable name.
+
+        Examples:
+            SKCwdZ5Hxp.swisscombluetv -> Swisscom Blue TV
+            HEPsqFNie0.tvplusstandalone -> TV Plus
+            org.tizen.netflix-app -> Netflix
+        """
+        import re
+
+        # Take the part after the last dot
+        name = app_id.rsplit(".", 1)[-1] if "." in app_id else app_id
+        # Remove common suffixes
+        for suffix in ("standalone", "-app", "app", "Launcher2"):
+            if name.lower().endswith(suffix.lower()) and len(name) > len(suffix):
+                name = name[: -len(suffix)]
+        # Remove Tizen prefix
+        if name.lower().startswith("tizen"):
+            name = name[5:]
+        # Insert spaces before uppercase letters (camelCase)
+        name = re.sub(r"([a-z])([A-Z])", r"\1 \2", name)
+        # Replace hyphens and underscores with spaces
+        name = name.replace("-", " ").replace("_", " ")
+        # Split known words that may be concatenated in lowercase
+        _KNOWN_WORDS = {
+            "tv": "TV",
+            "plus": "Plus",
+            "blue": "Blue",
+            "swisscom": "Swisscom",
+            "netflix": "Netflix",
+            "youtube": "YouTube",
+            "spotify": "Spotify",
+            "disney": "Disney",
+            "prime": "Prime",
+            "video": "Video",
+            "apple": "Apple",
+            "amazon": "Amazon",
+            "plex": "Plex",
+            "hbo": "HBO",
+            "hulu": "Hulu",
+            "dazn": "DAZN",
+        }
+        # Try to split concatenated lowercase words
+        result = name
+        lower = name.lower().strip()
+        if " " not in lower and len(lower) > 3:
+            # Greedy match from known words
+            remaining = lower
+            parts = []
+            while remaining:
+                matched = False
+                for word in sorted(_KNOWN_WORDS, key=len, reverse=True):
+                    if remaining.startswith(word):
+                        parts.append(_KNOWN_WORDS[word])
+                        remaining = remaining[len(word) :]
+                        matched = True
+                        break
+                if not matched:
+                    parts.append(remaining.title())
+                    break
+            if parts:
+                result = " ".join(parts)
+            else:
+                result = name.strip().title()
+        else:
+            result = name.strip().title()
+        return result
 
     def _get_running_app(self):
         """Retrieve name of running apps."""
