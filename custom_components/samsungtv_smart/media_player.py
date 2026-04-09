@@ -980,13 +980,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             if info.get("st_app_id") == app_id or tizen_id == app_id:
                 if installed and tizen_id in installed:
                     return installed[tizen_id].app_name
-                _LOGGER.debug(
-                    "App '%s' found in STD_APP_LIST (tizen_id=%s) "
-                    "but not in installed_app (%d apps loaded)",
-                    app_id,
-                    tizen_id,
-                    len(installed) if installed else 0,
-                )
+                # Use hardcoded name from STD_APP_LIST as fallback
+                if info.get("name"):
+                    return info["name"]
                 return None
 
         _LOGGER.debug(
