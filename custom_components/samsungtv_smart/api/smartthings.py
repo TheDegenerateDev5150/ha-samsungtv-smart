@@ -396,6 +396,10 @@ class SmartThingsTV:
                             cap_name,
                             self._source_list_map,
                         )
+                        # Also read current inputSource from same response
+                        input_val = data.get("inputSource", {}).get("value")
+                        if input_val:
+                            self._source = input_val
                         return
 
                     # Fallback to supportedInputSources (plain list)
@@ -665,12 +669,17 @@ class SmartThingsTV:
             if "audioMute" in main_comp and "mute" in main_comp["audioMute"]:
                 self._muted = main_comp["audioMute"]["mute"].value == "muted"
 
-            # Update source
+            # Update source — try standard capability first
             if (
                 "mediaInputSource" in main_comp
                 and "inputSource" in main_comp["mediaInputSource"]
             ):
-                self._source = main_comp["mediaInputSource"]["inputSource"].value
+                input_val = main_comp["mediaInputSource"]["inputSource"].value
+                if input_val:
+                    self._source = input_val
+            # Note: if inputSource is null from standard capability,
+            # _update_source_list / _fetch_input_source_map will read it
+            # from samsungvd.mediaInputSource REST response instead.
 
             # Update channel info if enabled
             if use_channel_info and self._state == STStatus.STATE_ON:
