@@ -631,6 +631,13 @@ class SmartThingsTV:
         """Update device status using pysmartthings."""
         self._get_api_key()
 
+        # Periodically send a refresh command to force the TV to report
+        # its actual state to SmartThings cloud. Without this, values like
+        # pictureMode remain stale (e.g. always "Standard") until the
+        # SmartThings app is opened. Throttled to once per 60 seconds.
+        if self._state == STStatus.STATE_ON:
+            await self._periodic_refresh()
+
         try:
             # get_device_status() returns .components (dict, not DeviceStatus object)
             components = await self._st.get_device_status(self._device_id)
@@ -960,6 +967,16 @@ class SmartThingsTV:
             _LOGGER.debug("Sent refresh command to update SmartThings state")
         except Exception as err:
             _LOGGER.debug("Refresh command failed (non-critical): %s", err)
+
+    @Throttle(timedelta(seconds=60))
+    async def _periodic_refresh(self) -> None:
+        """Periodically refresh SmartThings state during polling.
+
+        Ensures that changes made via the TV remote control or other
+        sources are reflected in the SmartThings API. Throttled to
+        once per 60 seconds to avoid API rate limiting.
+        """
+        await self._async_refresh_device_status()
 
 
 class InvalidSmartThingsSoundMode(RuntimeError):
