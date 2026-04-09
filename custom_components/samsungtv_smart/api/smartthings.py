@@ -928,6 +928,13 @@ class SmartThingsTV:
                     capability,
                 )
                 self._picture_mode = mode
+
+                # Send a refresh command to force the TV to update its
+                # cached state in SmartThings cloud. Without this, the API
+                # returns stale values (e.g. always "Standard") until the
+                # SmartThings app is opened. Samsung confirmed this behavior
+                # and recommended the refresh workaround.
+                await self._async_refresh_device_status()
                 return
             except Exception as err:
                 _LOGGER.debug(
@@ -937,6 +944,22 @@ class SmartThingsTV:
                 )
 
         _LOGGER.error("Failed to set picture mode '%s' via both capabilities", mode)
+
+    async def _async_refresh_device_status(self) -> None:
+        """Send a 'refresh' command to force SmartThings to re-read TV state.
+
+        The SmartThings app does this when opened, which is why the API
+        returns correct values after opening the app. Samsung confirmed
+        this is the recommended workaround for stale capability values.
+        """
+        try:
+            await self._send_rest_command(
+                capability="refresh",
+                command="refresh",
+            )
+            _LOGGER.debug("Sent refresh command to update SmartThings state")
+        except Exception as err:
+            _LOGGER.debug("Refresh command failed (non-critical): %s", err)
 
 
 class InvalidSmartThingsSoundMode(RuntimeError):
