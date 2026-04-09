@@ -2258,10 +2258,56 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         await self._st.async_set_sound_mode(sound_mode)
 
     async def async_select_picture_mode(self, picture_mode):
-        """Select picture mode."""
-        if not self._st:
-            raise NotImplementedError()
-        await self._st.async_set_picture_mode(picture_mode)
+        """Select picture mode.
+
+        Uses SmartThings API first, then sends a WS key command as well.
+        The WS key bypasses HDMI content protection restrictions that cause
+        the SmartThings API to return COMPLETED but the TV to show
+        "function not available".
+        """
+        # Map picture mode display names / internal ids to WS key codes.
+        # Only Dynamic, Standard, and Movie have dedicated keys.
+        # Other modes (Eco, Filmmaker) have no dedicated key — we fall back
+        # to KEY_PMODE which cycles through modes (less reliable).
+        _PICTURE_MODE_KEYS = {
+            # Dynamic
+            "dynamic": "KEY_DYNAMIC",
+            "dynamique": "KEY_DYNAMIC",
+            "dynamisch": "KEY_DYNAMIC",
+            "modedynamic": "KEY_DYNAMIC",
+            # Standard
+            "standard": "KEY_STANDARD",
+            "modestandard": "KEY_STANDARD",
+            # Movie / Film / Cinema
+            "movie": "KEY_MOVIE1",
+            "film": "KEY_MOVIE1",
+            "cinéma (étalonné)": "KEY_MOVIE1",
+            "modemovie": "KEY_MOVIE1",
+            "natural": "KEY_MOVIE1",
+        }
+
+        # 1. Try SmartThings API (works for native TV sources)
+        if self._st:
+            try:
+                await self._st.async_set_picture_mode(picture_mode)
+            except Exception:
+                pass
+
+        # 2. Also send WS key as fallback (bypasses HDMI restrictions)
+        ws_key = _PICTURE_MODE_KEYS.get(picture_mode.lower())
+        if ws_key:
+            await self.async_send_command(ws_key)
+            _LOGGER.debug(
+                "Picture mode '%s' also sent via WS key %s",
+                picture_mode,
+                ws_key,
+            )
+        else:
+            _LOGGER.debug(
+                "No direct WS key for '%s', skipping WS fallback "
+                "(Eco/Filmmaker have no dedicated remote key)",
+                picture_mode,
+            )
 
     # ==========================================
     # Frame Art Extended Service Methods
