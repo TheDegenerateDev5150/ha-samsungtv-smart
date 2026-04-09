@@ -2266,9 +2266,8 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         "function not available".
         """
         # Map picture mode display names / internal ids to WS key codes.
-        # Only Dynamic, Standard, and Movie have dedicated keys.
-        # Other modes (Eco, Filmmaker) have no dedicated key — we fall back
-        # to KEY_PMODE which cycles through modes (less reliable).
+        # Only Dynamic, Standard, Movie and Eco have dedicated keys.
+        # Filmmaker Mode has no dedicated key.
         _PICTURE_MODE_KEYS = {
             # Dynamic
             "dynamic": "KEY_DYNAMIC",
@@ -2284,6 +2283,10 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             "cinéma (étalonné)": "KEY_MOVIE1",
             "modemovie": "KEY_MOVIE1",
             "natural": "KEY_MOVIE1",
+            # Eco
+            "eco": "KEY_ESAVING",
+            "éco": "KEY_ESAVING",
+            "modeeco": "KEY_ESAVING",
         }
 
         # 1. Try SmartThings API (works for native TV sources)
@@ -2305,7 +2308,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         else:
             _LOGGER.debug(
                 "No direct WS key for '%s', skipping WS fallback "
-                "(Eco/Filmmaker have no dedicated remote key)",
+                "(FILMMAKER MODE has no dedicated remote key)",
                 picture_mode,
             )
 
