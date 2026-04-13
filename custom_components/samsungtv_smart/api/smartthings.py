@@ -742,7 +742,7 @@ class SmartThingsTV:
     # Power commands — REST API (fixes EnumType / component_id bug)
     # ──────────────────────────────────────────────────────────────────────────
 
-   async def async_turn_on(self):
+    async def async_turn_on(self):
         """Turn device on via direct REST API."""
         self._get_api_key()
         try:
