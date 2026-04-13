@@ -474,7 +474,7 @@ class SamsungTVSmartOAuth2FlowHandler(
             self._st_entry_unique_id = st_entry_unique_id
 
         self._api_key = api_key
-        self._auth_method = AUTH_METHOD_PAT
+        self._auth_method = AUTH_METHOD_ST_ENTRY if st_entry_unique_id else AUTH_METHOD_PAT
 
         use_ha_name = user_input.get(CONF_USE_HA_NAME, False)
         if use_ha_name:
