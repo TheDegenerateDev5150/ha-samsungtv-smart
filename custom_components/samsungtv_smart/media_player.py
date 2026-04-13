@@ -1854,10 +1854,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         Frame 2024 and never truly powers off.
         Falls back to WS for non-Frame TVs or when SmartThings is absent.
         """
-        if (
-            self._st
-            and self.support_art_mode != ArtModeSupport.UNSUPPORTED
-        ):
+        if self._st and self.support_art_mode != ArtModeSupport.UNSUPPORTED:
             try:
                 await self._st.async_turn_off()
                 self._ws.set_power_off_request()
@@ -1867,9 +1864,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 await self._async_switch_entity(False)
                 return
             except Exception:
-                _LOGGER.debug(
-                    "SmartThings turn_off failed, falling back to WS"
-                )
+                _LOGGER.debug("SmartThings turn_off failed, falling back to WS")
 
         result = await self.hass.async_add_executor_job(self._turn_off)
         if result:
