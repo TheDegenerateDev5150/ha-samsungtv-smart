@@ -1846,7 +1846,31 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         return True
 
     async def async_turn_off(self):
-        """Turn the media player on."""
+        """Turn the media player off.
+
+        Frame TV + SmartThings: use SmartThings REST switch/off which
+        reliably powers off regardless of current state (ON or Art Mode).
+        The WS KEY_POWER hold only toggles between ON and Art Mode on
+        Frame 2024 and never truly powers off.
+        Falls back to WS for non-Frame TVs or when SmartThings is absent.
+        """
+        if (
+            self._st
+            and self.support_art_mode != ArtModeSupport.UNSUPPORTED
+        ):
+            try:
+                await self._st.async_turn_off()
+                self._ws.set_power_off_request()
+                self._end_of_power_off = dt_util.utcnow() + timedelta(
+                    seconds=POWER_OFF_DELAY
+                )
+                await self._async_switch_entity(False)
+                return
+            except Exception:
+                _LOGGER.debug(
+                    "SmartThings turn_off failed, falling back to WS"
+                )
+
         result = await self.hass.async_add_executor_job(self._turn_off)
         if result:
             await self._async_switch_entity(False)
