@@ -742,13 +742,11 @@ class SmartThingsTV:
     # Power commands — REST API (fixes EnumType / component_id bug)
     # ──────────────────────────────────────────────────────────────────────────
 
-    async def async_turn_on(self):
+   async def async_turn_on(self):
         """Turn device on via direct REST API."""
         self._get_api_key()
         try:
-            await self._send_rest_command(
-                capability=CAP_SWITCH, command="on"
-            )
+            await self._send_rest_command(capability=CAP_SWITCH, command="on")
             self._state = STStatus.STATE_ON
         except Exception as err:
             _LOGGER.error("Error turning on device: %s", err)
@@ -758,9 +756,7 @@ class SmartThingsTV:
         """Turn device off via direct REST API."""
         self._get_api_key()
         try:
-            await self._send_rest_command(
-                capability=CAP_SWITCH, command="off"
-            )
+            await self._send_rest_command(capability=CAP_SWITCH, command="off")
             self._state = STStatus.STATE_OFF
         except Exception as err:
             _LOGGER.error("Error turning off device: %s", err)
