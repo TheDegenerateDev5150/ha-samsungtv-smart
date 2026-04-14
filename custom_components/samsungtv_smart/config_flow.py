@@ -474,7 +474,9 @@ class SamsungTVSmartOAuth2FlowHandler(
             self._st_entry_unique_id = st_entry_unique_id
 
         self._api_key = api_key
-        self._auth_method = AUTH_METHOD_ST_ENTRY if st_entry_unique_id else AUTH_METHOD_PAT
+        self._auth_method = (
+            AUTH_METHOD_ST_ENTRY if st_entry_unique_id else AUTH_METHOD_PAT
+        )
 
         use_ha_name = user_input.get(CONF_USE_HA_NAME, False)
         if use_ha_name:
@@ -667,6 +669,9 @@ class SamsungTVSmartOAuth2FlowHandler(
 
         self._host = ip_address
         self._api_key = api_key
+        self._auth_method = (
+            AUTH_METHOD_ST_ENTRY if self._st_entry_unique_id else AUTH_METHOD_PAT
+        )
 
         # Validate SmartThings token if provided
         if self._api_key:
@@ -763,6 +768,7 @@ class SamsungTVSmartOAuth2FlowHandler(
 
         if self._api_key:
             updates[CONF_API_KEY] = self._api_key
+            updates[CONF_AUTH_METHOD] = self._auth_method
             if CONF_ST_ENTRY_UNIQUE_ID in entry.data or self._st_entry_unique_id:
                 updates[CONF_ST_ENTRY_UNIQUE_ID] = self._st_entry_unique_id
 
