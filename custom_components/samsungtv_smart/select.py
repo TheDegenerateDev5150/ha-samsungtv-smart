@@ -20,6 +20,7 @@ from .const import (
     CONF_API_KEY,
     CONF_AUTH_METHOD,
     CONF_DEVICE_ID,
+    CONF_IS_FRAME_TV,
     CONF_OAUTH_TOKEN,
     CONF_WS_NAME,
     DATA_ART_API,
@@ -70,12 +71,16 @@ async def async_setup_entry(
             name=f"{WS_PREFIX} {ws_name} Art Select",
         )
 
-    # Check Frame TV support quickly - if not supported, skip matte entities
-    try:
-        async with asyncio.timeout(5):
-            is_frame_supported = await art_api.supported()
-    except Exception:
-        is_frame_supported = False
+    # Use persisted flag if available, otherwise probe live
+    is_frame_tv_cached = entry.data.get(CONF_IS_FRAME_TV, False)
+    if is_frame_tv_cached:
+        is_frame_supported = True
+    else:
+        try:
+            async with asyncio.timeout(5):
+                is_frame_supported = await art_api.supported()
+        except Exception:
+            is_frame_supported = False
 
     matte_type_select = None
     matte_color_select = None
