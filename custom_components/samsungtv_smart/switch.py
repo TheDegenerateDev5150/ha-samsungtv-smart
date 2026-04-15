@@ -30,6 +30,7 @@ from .api.art import SamsungTVAsyncArt
 from .const import (
     AUTH_METHOD_OAUTH,
     CONF_AUTH_METHOD,
+    CONF_IS_FRAME_TV,
     CONF_WS_NAME,
     DATA_ART_API,
     DATA_CFG,
@@ -113,16 +114,23 @@ async def async_setup_entry(
             name=f"{WS_PREFIX} {ws_name} Art",
         )
 
-        # Quick check if Frame TV is supported
-        try:
-            async with asyncio.timeout(5):
-                is_supported = await art_api.supported()
-        except asyncio.TimeoutError:
-            _LOGGER.debug("Timeout checking Frame TV support for %s", host)
-            is_supported = False
-        except Exception as ex:
-            _LOGGER.debug("Frame TV support check failed: %s", ex)
-            is_supported = False
+        # Use persisted flag if available, otherwise probe live
+        is_frame_tv_cached = entry.data.get(CONF_IS_FRAME_TV, False)
+        if is_frame_tv_cached:
+            _LOGGER.debug(
+                "Frame TV flag found for %s, skipping live check in switch", host
+            )
+            is_supported = True
+        else:
+            try:
+                async with asyncio.timeout(5):
+                    is_supported = await art_api.supported()
+            except asyncio.TimeoutError:
+                _LOGGER.debug("Timeout checking Frame TV support for %s", host)
+                is_supported = False
+            except Exception as ex:
+                _LOGGER.debug("Frame TV support check failed: %s", ex)
+                is_supported = False
 
         if not is_supported:
             _LOGGER.info(
