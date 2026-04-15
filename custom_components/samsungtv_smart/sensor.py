@@ -40,6 +40,7 @@ from .const import (
     CONF_API_KEY,
     CONF_AUTH_METHOD,
     CONF_DEVICE_ID,
+    CONF_IS_FRAME_TV,
     CONF_OAUTH_TOKEN,
     CONF_WS_NAME,
     DATA_ART_API,
@@ -87,16 +88,37 @@ async def async_setup_entry(
         name=f"{WS_PREFIX} {ws_name} Art",
     )
 
-    # Quick check if Frame TV is supported (with short timeout)
-    try:
-        async with asyncio.timeout(5):
-            is_supported = await art_api.supported()
-    except asyncio.TimeoutError:
-        _LOGGER.debug("Timeout checking Frame TV support for %s", host)
-        is_supported = False
-    except Exception as ex:
-        _LOGGER.debug("Frame TV support check failed: %s", ex)
-        is_supported = False
+    # Check Frame TV support:
+    # If already confirmed as a Frame TV (persisted flag), skip the live check.
+    # This prevents Art Mode entities from disappearing after a reload when
+    # the TV is off or in Art Mode (and thus unreachable via WebSocket).
+    is_frame_tv_cached = entry.data.get(CONF_IS_FRAME_TV, False)
+
+    if is_frame_tv_cached:
+        _LOGGER.debug(
+            "Frame TV flag found in entry data for %s, skipping live check", host
+        )
+        is_supported = True
+    else:
+        # First time: probe the TV live to detect Frame capability
+        try:
+            async with asyncio.timeout(5):
+                is_supported = await art_api.supported()
+        except asyncio.TimeoutError:
+            _LOGGER.debug("Timeout checking Frame TV support for %s", host)
+            is_supported = False
+        except Exception as ex:
+            _LOGGER.debug("Frame TV support check failed: %s", ex)
+            is_supported = False
+
+        if is_supported:
+            # Persist the flag so future reloads skip this live check
+            hass.config_entries.async_update_entry(
+                entry, data={**entry.data, CONF_IS_FRAME_TV: True}
+            )
+            _LOGGER.info(
+                "Frame TV confirmed for %s, persisting flag in entry data", host
+            )
 
     if is_supported:
         # Create www/frame_art directory if it doesn't exist
