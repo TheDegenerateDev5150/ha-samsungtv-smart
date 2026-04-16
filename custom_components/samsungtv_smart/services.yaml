@@ -271,6 +271,40 @@ art_get_brightness:
         entity:
           integration: samsungtv_smart
 
+art_set_color_temperature:
+  name: Set Art Mode Color Temperature
+  description: Set the color temperature for Art Mode display. Range -5 to +5 (negative = warmer, 0 = neutral, positive = cooler).
+  fields:
+    entity_id:
+      name: Entity Name
+      description: Name of the target entity
+      required: true
+      selector:
+        entity:
+          integration: samsungtv_smart
+    color_temperature:
+      name: Color Temperature
+      description: Color temperature value (-5 = warmest, 0 = neutral, +5 = coolest)
+      required: true
+      example: 0
+      selector:
+        number:
+          min: -5
+          max: 5
+          step: 1
+
+art_get_color_temperature:
+  name: Get Art Mode Color Temperature
+  description: Get the current color temperature for Art Mode display.
+  fields:
+    entity_id:
+      name: Entity Name
+      description: Name of the target entity
+      required: true
+      selector:
+        entity:
+          integration: samsungtv_smart
+
 art_change_matte:
   name: Change Artwork Matte
   description: Change the matte/frame style for a piece of artwork.
