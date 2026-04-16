@@ -227,7 +227,12 @@ class FrameArtModeSwitch(SwitchEntity):
         return None
 
     async def _is_tv_on(self) -> bool:
-        """Check if TV is currently on."""
+        """Check if TV is currently on OR already in Art Mode.
+
+        A Frame TV in Art Mode reports media_player state as "off", but the
+        screen is physically on. Treat that as on, consistent with
+        SamsungTVPowerSwitch.is_on logic.
+        """
         entity_id = self._get_media_player_entity_id()
         if not entity_id:
             return False
@@ -236,8 +241,15 @@ class FrameArtModeSwitch(SwitchEntity):
         if state is None:
             return False
 
-        # TV is "on" if state is not off/unavailable
-        return state.state not in (STATE_OFF, "unavailable", "unknown")
+        # TV is clearly on (watching TV, idle, paused...)
+        if state.state not in (STATE_OFF, "unavailable", "unknown"):
+            return True
+
+        # media_player says "off" — but Art Mode may be active
+        if state.state == STATE_OFF:
+            return state.attributes.get("art_mode_status") == "on"
+
+        return False
 
     async def _turn_on_tv(self) -> bool:
         """Turn on the TV using media_player service."""
@@ -287,6 +299,22 @@ class FrameArtModeSwitch(SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn Art Mode on."""
         _LOGGER.debug("Turning Art Mode ON for %s", self._device_name)
+
+        # Short-circuit: if already in Art Mode, nothing to do.
+        # Avoids useless set_artmode(True) calls that the TV may silently
+        # reject (returning None), triggering 3 retries and a WARNING log.
+        entity_id = self._get_media_player_entity_id()
+        if entity_id:
+            state = self._hass.states.get(entity_id)
+            if state and state.attributes.get("art_mode_status") == "on":
+                _LOGGER.debug(
+                    "Art Mode already ON for %s, skipping activation",
+                    self._device_name,
+                )
+                self._attr_is_on = True
+                self._available = True
+                self.async_write_ha_state()
+                return
 
         # Check if TV is on
         tv_is_on = await self._is_tv_on()
