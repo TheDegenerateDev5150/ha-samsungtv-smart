@@ -749,7 +749,20 @@ class SmartThingsTV:
             await self._send_rest_command(capability=CAP_SWITCH, command="on")
             self._state = STStatus.STATE_ON
         except Exception as err:
-            _LOGGER.error("Error turning on device: %s", err)
+            # 409 Conflict typically means the device is offline in the
+            # SmartThings cloud (TV in deep sleep, off the network, or
+            # hardware unresponsive). This is a normal, expected case —
+            # not an integration bug — so we log it as WARNING instead of
+            # ERROR to reduce noise in logs.
+            err_str = str(err)
+            if "409" in err_str or "Conflict" in err_str:
+                _LOGGER.warning(
+                    "Cannot turn on device via SmartThings "
+                    "(device appears offline): %s",
+                    err,
+                )
+            else:
+                _LOGGER.error("Error turning on device: %s", err)
             raise
 
     async def async_turn_off(self):
