@@ -86,6 +86,18 @@ Art Mode brightness level.
 
 **State:** Brightness percentage (0-100)
 
+### Number: `number.samsung_*_art_mode_brightness`
+
+Interactive slider for Art Mode brightness. Adjustable from the HA UI without writing automations.
+
+**Range:** 0-100 (step 10) — converted internally to the TV's native 1-10 scale
+
+### Number: `number.samsung_*_art_mode_color_temperature`
+
+Interactive slider for Art Mode color temperature.
+
+**Range:** -5 (warmest) to +5 (coolest), step 1 — `0` is neutral
+
 ---
 
 ## Available Services
