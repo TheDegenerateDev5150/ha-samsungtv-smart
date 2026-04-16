@@ -108,6 +108,7 @@ SAMSMART_PLATFORM = [
     Platform.REMOTE,
     Platform.SWITCH,
     Platform.SELECT,
+    Platform.NUMBER,
 ]
 
 SAMSMART_SCHEMA = {
