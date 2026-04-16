@@ -24,6 +24,7 @@ Frame Art Mode allows you to:
 - 📸 Manage personal photos and Art Store images
 - 🖼️ Change frame styles (mattes)
 - 💡 Control brightness levels
+- 🌡️ Adjust color temperature (warm/cool tones)
 - ⭐ Organize favorites
 - 🎬 Create slideshows and auto-rotation
 - 📤 Upload custom images
@@ -211,6 +212,46 @@ Get current brightness level.
 
 ```yaml
 service: samsungtv_smart.art_get_brightness
+target:
+  entity_id: media_player.samsung_frame
+```
+
+---
+
+### Color Temperature Control
+
+Adjust the warm/cool tone of artwork displayed in Art Mode. Useful for matching the room ambience (warmer in the evening, cooler during the day).
+
+#### `samsungtv_smart.art_set_color_temperature`
+
+Set Frame TV Art Mode color temperature.
+
+**Parameters:**
+| Parameter | Type | Required | Range | Description |
+|-----------|------|----------|-------|-------------|
+| `color_temperature` | integer | Yes | -5 to +5 | Color temperature value |
+
+```yaml
+service: samsungtv_smart.art_set_color_temperature
+target:
+  entity_id: media_player.samsung_frame
+data:
+  color_temperature: 0
+```
+
+**Typical Values:**
+- `-5`: Warmest (most reddish/yellow tones — cozy evening look)
+- `-2`: Slightly warm
+- `0`: Neutral (default)
+- `+2`: Slightly cool
+- `+5`: Coolest (most bluish tones — bright daylight look)
+
+#### `samsungtv_smart.art_get_color_temperature`
+
+Get current color temperature value.
+
+```yaml
+service: samsungtv_smart.art_get_color_temperature
 target:
   entity_id: media_player.samsung_frame
 ```
