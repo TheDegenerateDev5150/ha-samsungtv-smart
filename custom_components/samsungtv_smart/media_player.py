@@ -76,6 +76,7 @@ from .api.upnp import SamsungUPnP
 from .const import (
     ATTR_BRIGHTNESS,
     ATTR_CATEGORY_ID,
+    ATTR_COLOR_TEMPERATURE,
     ATTR_CONTENT_ID,
     ATTR_DURATION,
     ATTR_ENABLED,
@@ -126,6 +127,7 @@ from .const import (
     SERVICE_ART_DELETE,
     SERVICE_ART_GET_ARTMODE,
     SERVICE_ART_GET_BRIGHTNESS,
+    SERVICE_ART_GET_COLOR_TEMPERATURE,
     SERVICE_ART_GET_CURRENT,
     SERVICE_ART_GET_MATTE_LIST,
     SERVICE_ART_GET_PHOTO_FILTER_LIST,
@@ -135,6 +137,7 @@ from .const import (
     SERVICE_ART_SET_ARTMODE,
     SERVICE_ART_SET_AUTO_ROTATION,
     SERVICE_ART_SET_BRIGHTNESS,
+    SERVICE_ART_SET_COLOR_TEMPERATURE,
     SERVICE_ART_SET_FAVOURITE,
     SERVICE_ART_SET_PHOTO_FILTER,
     SERVICE_ART_SET_SLIDESHOW,
@@ -314,6 +317,20 @@ async def async_setup_entry(
         SERVICE_ART_GET_BRIGHTNESS,
         {},
         "async_art_get_brightness",
+    )
+    platform.async_register_entity_service(
+        SERVICE_ART_SET_COLOR_TEMPERATURE,
+        {
+            vol.Required(ATTR_COLOR_TEMPERATURE): vol.All(
+                vol.Coerce(int), vol.Range(-5, 5)
+            )
+        },
+        "async_art_set_color_temperature",
+    )
+    platform.async_register_entity_service(
+        SERVICE_ART_GET_COLOR_TEMPERATURE,
+        {},
+        "async_art_get_color_temperature",
     )
     platform.async_register_entity_service(
         SERVICE_ART_CHANGE_MATTE,
@@ -3134,6 +3151,47 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             return {"brightness_tv": result, "brightness_ui": ui_brightness}
         except Exception as ex:
             _LOGGER.error("Error getting brightness: %s", ex)
+            return {"error": str(ex)}
+
+    async def async_art_set_color_temperature(self, color_temperature: int) -> dict:
+        """Set Art Mode color temperature.
+
+        Accepts -5 to +5 (negative = warmer, 0 = neutral, positive = cooler).
+        """
+        if not await self._ensure_frame_tv_check():
+            _LOGGER.warning("Frame TV art mode is not supported on this device")
+            return {"error": "Frame TV not supported"}
+
+        # Ensure TV is on and in Art Mode
+        if not await self._ensure_art_mode_ready():
+            return {"error": "Failed to turn on TV"}
+
+        try:
+            _LOGGER.debug(
+                "Frame Art: Setting color temperature to %d", color_temperature
+            )
+            await self._art_api.set_color_temperature(color_temperature)
+            return {
+                "success": True,
+                "color_temperature": color_temperature,
+            }
+        except Exception as ex:
+            _LOGGER.error("Error setting color temperature: %s", ex)
+            return {"error": str(ex)}
+
+    async def async_art_get_color_temperature(self) -> dict:
+        """Get Art Mode color temperature.
+
+        Returns the value in the TV's native scale (typically -5 to +5).
+        """
+        if not await self._ensure_frame_tv_check():
+            _LOGGER.warning("Frame TV art mode is not supported on this device")
+            return {"error": "Frame TV not supported"}
+        try:
+            result = await self._art_api.get_color_temperature()
+            return {"color_temperature": result}
+        except Exception as ex:
+            _LOGGER.error("Error getting color temperature: %s", ex)
             return {"error": str(ex)}
 
     async def async_art_change_matte(
