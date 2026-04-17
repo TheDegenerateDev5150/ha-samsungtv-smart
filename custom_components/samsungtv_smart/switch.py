@@ -271,7 +271,7 @@ class FrameArtModeSwitch(SwitchEntity):
             )
             return True
         except Exception as ex:
-            _LOGGER.error("Failed to turn on TV: %s", ex)
+            _LOGGER.debug("Failed to turn on TV %s: %s", entity_id, ex)
             return False
 
     async def _wait_for_tv_ready(self, max_wait: int = 15) -> bool:
@@ -324,7 +324,10 @@ class FrameArtModeSwitch(SwitchEntity):
 
             # Turn on TV
             if not await self._turn_on_tv():
-                _LOGGER.error("Failed to turn on TV, cannot activate Art Mode")
+                _LOGGER.warning(
+                    "Cannot activate Art Mode on %s: TV is not reachable",
+                    self._device_name,
+                )
                 return
 
             # Wait for TV to be ready
@@ -362,10 +365,31 @@ class FrameArtModeSwitch(SwitchEntity):
                         await self.async_update()
                         return  # Success, exit
                     else:
+                        # set_artmode returned None/False — this can happen when
+                        # the WebSocket is not connected (returns None) or when
+                        # the TV is already in Art Mode (no-op, no response).
+                        # Before retrying, check actual state: if Art Mode is
+                        # already on, we're done.
                         _LOGGER.debug(
-                            "Art Mode set_artmode returned None/False on attempt %d",
+                            "Art Mode set_artmode returned None/False on attempt %d,"
+                            " checking actual state...",
                             attempt + 1,
                         )
+                        try:
+                            actual = await self._art_api.get_artmode()
+                            if actual == "on":
+                                _LOGGER.info(
+                                    "Art Mode is already ON for %s"
+                                    " (confirmed by get_artmode)",
+                                    self._device_name,
+                                )
+                                self._attr_is_on = True
+                                self._available = True
+                                self.async_write_ha_state()
+                                return
+                        except Exception:
+                            pass
+
                         if attempt < max_retries - 1:
                             _LOGGER.debug("Retrying in %d seconds...", retry_delay)
                             await asyncio.sleep(retry_delay)
