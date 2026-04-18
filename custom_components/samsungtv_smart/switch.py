@@ -526,6 +526,34 @@ class FrameArtModeSwitch(SwitchEntity):
             f"frame_art_switch_initial_update_{self._entry.entry_id}",
         )
 
+        # Subscribe to media_player state changes for responsive UI updates.
+        # When media_player toggles between on/off or art_mode_status changes,
+        # re-read actual Art Mode state immediately instead of waiting for the
+        # next polling cycle (up to 30s).
+        entity_id = self._get_media_player_entity_id()
+        if entity_id:
+            self.async_on_remove(
+                async_track_state_change_event(
+                    self._hass,
+                    [entity_id],
+                    self._handle_media_player_state_change,
+                )
+            )
+
+    @callback
+    def _handle_media_player_state_change(self, event) -> None:
+        """React to media_player state changes and refresh Art Mode state."""
+        new_state = event.data.get("new_state")
+        if new_state is None:
+            return
+        art_status = new_state.attributes.get("art_mode_status")
+        if art_status == "on":
+            self._attr_is_on = True
+        elif new_state.state in (STATE_OFF, "unavailable"):
+            self._attr_is_on = False
+        self._available = True
+        self.async_write_ha_state()
+
 
 class SamsungTVPowerSwitch(SwitchEntity):
     """Switch for turning Samsung TV on/off.
@@ -557,6 +585,9 @@ class SamsungTVPowerSwitch(SwitchEntity):
         self._device_unique_id = device_unique_id
         self._attr_unique_id = f"{entry.entry_id}_power"
         self._media_player_entity_id: str | None = None
+        # Optimistic override — set temporarily by turn_on/turn_off for
+        # instant UI feedback, cleared on next media_player state change.
+        self._optimistic_state: bool | None = None
 
     async def _get_st_client(self):
         """Get SmartThings client with current (possibly refreshed) token."""
@@ -631,6 +662,11 @@ class SamsungTVPowerSwitch(SwitchEntity):
         screen is physically on.  We treat that as on so that automations
         reading this switch never send a spurious turn_on to an already-lit TV.
         """
+        # Return optimistic state immediately after user action, before
+        # media_player has had time to update its own state.
+        if self._optimistic_state is not None:
+            return self._optimistic_state
+
         state = self._get_media_player_state()
         if state is None:
             return None
@@ -657,6 +693,8 @@ class SamsungTVPowerSwitch(SwitchEntity):
             return
 
         _LOGGER.debug("Power switch: delegating turn_on to %s", entity_id)
+        self._optimistic_state = True
+        self.async_write_ha_state()
         await self.hass.services.async_call(
             "media_player",
             "turn_on",
@@ -724,6 +762,8 @@ class SamsungTVPowerSwitch(SwitchEntity):
     @callback
     def _handle_media_player_state_change(self, event) -> None:
         """React to media_player state changes and push update immediately."""
+        # Clear optimistic override — real state is now available.
+        self._optimistic_state = None
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
