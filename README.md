@@ -7,7 +7,7 @@
 
 A custom integration for Home Assistant to control Samsung Smart TVs (Tizen OS), based on the excellent work of [ollo69/ha-samsungtv-smart](https://github.com/ollo69/ha-samsungtv-smart).
 
-This fork brings improved WebSocket stability, full Samsung Frame TV Art Mode support, and OAuth2 authentication for SmartThings.
+This fork brings improved WebSocket stability, full Samsung Frame TV Art Mode support, picture mode and source selection fixes for 2024 Frame TVs, and OAuth2 authentication for SmartThings.
 
 ---
 
@@ -15,6 +15,7 @@ This fork brings improved WebSocket stability, full Samsung Frame TV Art Mode su
 
 - [Features](#features)
 - [Requirements](#requirements)
+- [Migrating from ollo69](#migrating-from-ollo69ha-samsungtv-smart)
 - [Installation](#installation)
 - [Configuration](#configuration)
   - [SmartThings Authentication](#smartthings-authentication)
@@ -40,10 +41,14 @@ This fork brings improved WebSocket stability, full Samsung Frame TV Art Mode su
 - **Three SmartThings authentication methods**: OAuth2, Personal Access Token, or existing ST integration
 - **Samsung Frame TV Art Mode** — full artwork management via a dedicated async API
 - New dedicated entities: Art Mode switch and Frame Art sensor
+- **Picture mode control** — `select` entity with dual-strategy (SmartThings API + WS fallback for HDMI inputs)
+- **Improved source detection** — REST fallback for Frame 2024 TVs where `supportedInputSources` returns empty; supports custom source names
+- **App name resolution** — unknown SmartThings app IDs are parsed and resolved to display names
 - Improved WebSocket connection stability — prevents zombie connections and saturation
 - Wake-on-LAN support
 - Channel and app list management
 - Logo fetching for apps and sources
+- `folder-gallery-card` Lovelace card bundled — no manual installation required
 
 ---
 
@@ -53,6 +58,39 @@ This fork brings improved WebSocket stability, full Samsung Frame TV Art Mode su
 - Python packages (installed automatically): `websocket-client`, `wakeonlan`, `aiofiles`, `casttube`, `pysmartthings>=6.0`
 - A Samsung Smart TV running **Tizen OS** (2016+), reachable on the local network
 - For SmartThings features: a Samsung account and a SmartThings-registered TV
+
+---
+
+## Migrating from ollo69/ha-samsungtv-smart
+
+This fork is a drop-in replacement for ollo69's integration. Migration is straightforward and preserves entity IDs, automations, and all existing configuration.
+
+### Before you start
+
+- Note down your custom **source list**, **app list**, and **channel list** for each TV: Settings → Integrations → SamsungTV Smart → Configure
+- Have your **SmartThings credentials** ready (API key or OAuth token)
+- Optionally, install [Spook](https://github.com/frenck/spook) — it will flag any broken entity references after migration, saving you a lot of manual checking
+
+### Migration steps
+
+1. **Remove ollo69's integration** for each TV via Settings → Integrations → SamsungTV Smart → Delete. Do not rename or remove any entities beforehand.
+
+2. **Install this fork** via HACS (add `https://github.com/TheFab21/ha-samsungtv-smart` as a custom repository, see [Installation](#installation)), then restart Home Assistant.
+
+3. **Re-add each TV** through the integration setup flow. Use the **exact same device name** as before — this preserves your entity IDs (e.g. `media_player.living_room_tv`) and keeps automations, scripts, and dashboard cards intact.
+
+4. **Re-enter your SmartThings credentials** when prompted. OAuth2 is recommended for a maintenance-free setup (see [SmartThings Authentication](#smartthings-authentication)).
+
+5. **Restore your source, app, and channel lists** via Settings → Integrations → SamsungTV Smart → Configure for each TV. The format is identical to ollo69.
+
+6. If any entity ID got a `_2` suffix, rename it back via Settings → Entities.
+
+### Key differences from ollo69
+
+- **Art Mode**: use the dedicated `switch.<tv_name>_art_mode` entity to toggle Art Mode instead of the `set_art_mode` service. The switch is more reliable and works consistently across all Frame TV models, including multi-TV setups.
+- **Picture mode**: a new `select.<tv_name>_picture_mode` entity is available. If you had automations calling `samsungtv_smart.select_picture_mode`, they continue to work.
+- **SmartThings authentication**: OAuth2 is now available and strongly recommended over Personal Access Tokens (PATs expire after 24 hours).
+- **Frame 2024 TVs**: source list and picture mode detection are fixed via REST fallbacks — no manual workarounds needed.
 
 ---
 
@@ -195,6 +233,7 @@ Each configured TV creates the following entities:
 | `media_player.<tv_name>` | Media Player | Main TV control entity |
 | `switch.<tv_name>_art_mode` | Switch | Toggle Art Mode on/off (Frame TVs only) |
 | `sensor.<tv_name>_frame_art` | Sensor | Currently displayed artwork info (Frame TVs only) |
+| `select.<tv_name>_picture_mode` | Select | Change picture mode (Standard, Movie, etc.) |
 
 > **Note:** The `folder-gallery-card` Lovelace card is bundled with this integration and registered automatically. No manual installation or resource configuration required.
 
@@ -466,11 +505,23 @@ Mitigations built into this fork:
 2. Verify your OAuth app is still active by running `smartthings apps` in the SmartThings CLI.
 3. Re-authenticate: go to **Settings → Devices & Services → Samsung TV Smart → Reconfigure**.
 
+### Source list empty on Frame 2024 TVs
+
+The SmartThings `supportedInputSources` attribute returns empty on some 2024 Frame TV models. This fork automatically falls back to a REST API call (`samsungvd.mediaInputSource`) to retrieve the full source list with custom names. If sources still appear missing, check that SmartThings is properly configured and the TV is reachable.
+
+### Picture mode not updating after change
+
+SmartThings caches the picture mode value. This fork automatically sends a `refresh` command after any `setPictureMode` call to force the TV to report the new value. If the `select` entity still shows a stale value, wait a few seconds for the next poll cycle.
+
 ### Frame Art services not working
 
 - These services require a Samsung **Frame** TV with Art Mode capability.
 - Make sure the TV is on (not just in Art Mode).
 - Check that port **8002** (encrypted WebSocket) is not blocked.
+
+### Art Mode fails briefly after TV wakes from standby
+
+When the TV wakes from standby (e.g. via an automation), the WebSocket connection needs a short time to re-establish before the Art API becomes available. This is normal — the integration will self-recover within a minute. If you experience consistent failures in morning automations, add a 60–90 second delay after the TV turns on before triggering Art Mode commands.
 
 ---
 
