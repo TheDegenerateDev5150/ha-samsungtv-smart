@@ -2,7 +2,9 @@
   "domain": "samsungtv_smart",
   "name": "SamsungTV Smart and Art Mode",
   "after_dependencies": [
-    "smartthings"
+    "smartthings",
+    "folder",
+    "local_file"
   ],
   "codeowners": [
     "@TheFab21"
