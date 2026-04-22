@@ -2371,14 +2371,22 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         self.async_write_ha_state()
 
     async def _ensure_frame_tv_check(self) -> bool:
-        """Check if Frame TV is supported (cached)."""
-        if self._frame_tv_supported is None:
-            try:
-                self._frame_tv_supported = await self._art_api.supported()
-            except Exception as ex:
-                _LOGGER.debug("Frame TV support check failed: %s", ex)
-                self._frame_tv_supported = False
-        return self._frame_tv_supported
+        """Check if Frame TV is supported (cached on success only).
+
+        A failed check (exception or False) is NOT cached so that transient
+        startup failures (TV not yet reachable) are retried on the next call,
+        avoiding a permanent "Frame TV not supported" state until reload.
+        """
+        if self._frame_tv_supported:
+            return True
+        try:
+            result = await self._art_api.supported()
+            if result:
+                self._frame_tv_supported = True
+            return bool(result)
+        except Exception as ex:
+            _LOGGER.debug("Frame TV support check failed: %s", ex)
+            return False
 
     async def async_art_get_artmode(self) -> dict:
         """Get the current Art Mode status."""
