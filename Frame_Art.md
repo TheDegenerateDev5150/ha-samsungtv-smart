@@ -553,6 +553,20 @@ Thumbnails are saved to organized directories:
 - Store: `/local/frame_art/store/SAM-S1234567.jpg`
 - Personal: `/local/frame_art/personal/MY_F0001.jpg`
 
+### Local File Entity (Optional)
+
+The **Local File** integration lets you expose `current.jpg` as a camera entity in Home Assistant, which can then be used in dashboards or automations.
+
+To set it up, go to **Settings → Devices & Services → Add Integration → Local File** and configure it with:
+
+| Field | Value |
+|-------|-------|
+| File path | `/config/www/frame_art/current.jpg` |
+
+This creates a `camera.frame_art_thumbnail` entity (name is yours to choose) that always shows the currently displayed artwork thumbnail. Useful for Lovelace cards that expect a camera entity rather than a URL.
+
+> **Note:** The file must exist before the entity is created. Run `art_get_thumbnails_batch` at least once first, or ensure your sync automation has run.
+
 ### Folder Sensor Setup
 
 Create folder sensors to monitor thumbnails:
