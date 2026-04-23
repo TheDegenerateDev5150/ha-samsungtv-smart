@@ -19,6 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers import entity_registry as er
 
 from .api.art import SamsungTVAsyncArt
 from .const import (
@@ -120,6 +121,7 @@ class SamsungTVArtNumberBase(NumberEntity):
         self._device_name = device_name
         self._device_unique_id = device_unique_id
         self._attr_native_value: float | None = None
+        self._media_player_entity_id: str | None = None
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -127,6 +129,47 @@ class SamsungTVArtNumberBase(NumberEntity):
             identifiers={(DOMAIN, self._device_unique_id)},
             name=self._device_name,
         )
+
+    def _is_tv_in_art_mode(self) -> bool:
+        """Return True only if the media_player is on and in Art Mode.
+
+        Checks the HA state of the media_player entity for this config entry.
+        This avoids hitting the WebSocket Art API when the TV is off/standby,
+        which would cause async_update to block for the full timeout duration
+        and trigger HA's '> 10 seconds' warning.
+        """
+        if self._media_player_entity_id is None:
+            entity_registry = er.async_get(self.hass)
+            for entity in entity_registry.entities.values():
+                if (
+                    entity.config_entry_id == self._entry.entry_id
+                    and entity.domain == "media_player"
+                ):
+                    self._media_player_entity_id = entity.entity_id
+                    break
+
+        if not self._media_player_entity_id:
+            return False
+
+        state = self.hass.states.get(self._media_player_entity_id)
+        if state is None:
+            return False
+
+        # Art Mode brightness/color temp are only meaningful (and readable) when
+        # the TV is actually in Art Mode.  The media_player state is "on" both
+        # for normal TV use and Art Mode; we use the "art_mode" attribute that
+        # the sensor/media_player exposes to distinguish them.
+        # Fall back to just checking "on" so we still poll when art_mode attr
+        # is absent (e.g. older firmware or attribute not yet populated).
+        if state.state in ("off", "unavailable", "unknown"):
+            return False
+
+        art_mode_attr = state.attributes.get("art_mode")
+        if art_mode_attr is not None:
+            return bool(art_mode_attr)
+
+        # art_mode attribute not present — TV is on, allow polling
+        return True
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -172,6 +215,8 @@ class SamsungTVArtBrightnessNumber(SamsungTVArtNumberBase):
 
     async def async_update(self) -> None:
         """Read current brightness from TV (TV scale 1-10) and convert to 0-100."""
+        if not self._is_tv_in_art_mode():
+            return
         try:
             async with asyncio.timeout(5):
                 result = await self._art_api.get_brightness()
@@ -215,6 +260,8 @@ class SamsungTVArtColorTemperatureNumber(SamsungTVArtNumberBase):
 
     async def async_update(self) -> None:
         """Read current color temperature from TV."""
+        if not self._is_tv_in_art_mode():
+            return
         try:
             async with asyncio.timeout(5):
                 result = await self._art_api.get_color_temperature()
