@@ -29,6 +29,7 @@ This fork brings improved WebSocket stability, full Samsung Frame TV Art Mode su
   - [Thumbnail Downloads](#thumbnail-downloads)
 - [Automations & Tips](#automations--tips)
 - [Troubleshooting](#troubleshooting)
+  - [Integration not appearing in Add Integration](#integration-not-appearing-in-add-integration)
 - [Credits](#credits)
 
 ---
@@ -75,15 +76,21 @@ This fork is a drop-in replacement for ollo69's integration. Migration is straig
 
 1. **Remove ollo69's integration** for each TV via Settings → Integrations → SamsungTV Smart → Delete. Do not rename or remove any entities beforehand.
 
-2. **Install this fork** via HACS (add `https://github.com/TheFab21/ha-samsungtv-smart` as a custom repository, see [Installation](#installation)), then restart Home Assistant.
+2. **Uninstall ollo69 via HACS** — go to HACS → Integrations, find the ollo69 integration and remove it. Then verify that the `samsungtv_smart` folder is gone from your `config/custom_components/` directory. If it still exists, delete it manually.
 
-3. **Re-add each TV** through the integration setup flow. Use the **exact same device name** as before — this preserves your entity IDs (e.g. `media_player.living_room_tv`) and keeps automations, scripts, and dashboard cards intact.
+3. **Restart Home Assistant** before proceeding. This is critical — it ensures the old integration domain is fully cleared from HA's internal registry. Skipping this step can prevent the new integration from appearing in the Add Integration dialog.
 
-4. **Re-enter your SmartThings credentials** when prompted. OAuth2 is recommended for a maintenance-free setup (see [SmartThings Authentication](#smartthings-authentication)).
+4. **Install this fork** via HACS (add `https://github.com/TheFab21/ha-samsungtv-smart` as a custom repository, see [Installation](#installation)), then restart Home Assistant again.
 
-5. **Restore your source, app, and channel lists** via Settings → Integrations → SamsungTV Smart → Configure for each TV. The format is identical to ollo69.
+5. **Add each TV** through **Settings → Devices & Services → + Add Integration**, search for **SamsungTV Smart**. Use the **exact same device name** as before — this preserves your entity IDs (e.g. `media_player.living_room_tv`) and keeps automations, scripts, and dashboard cards intact.
 
-6. If any entity ID got a `_2` suffix, rename it back via Settings → Entities.
+6. **Re-enter your SmartThings credentials** when prompted. OAuth2 is recommended for a maintenance-free setup (see [SmartThings Authentication](#smartthings-authentication)).
+
+7. **Restore your source, app, and channel lists** via Settings → Integrations → SamsungTV Smart → Configure for each TV. The format is identical to ollo69.
+
+8. If any entity ID got a `_2` suffix, rename it back via Settings → Entities.
+
+> ⚠️ **If "SamsungTV Smart" does not appear in the Add Integration search** after completing steps 1–4, see [Integration not appearing in Add Integration](#integration-not-appearing-in-add-integration) in the Troubleshooting section.
 
 ### Key differences from ollo69
 
@@ -467,6 +474,51 @@ automation:
 ---
 
 ## Troubleshooting
+
+### Integration not appearing in Add Integration
+
+If "SamsungTV Smart" does not appear when searching in **Settings → Devices & Services → + Add Integration**, or if clicking "Add entry" returns the error *"This integration cannot be added from the UI"*, the most likely cause is a stale entry left over from a previous install (typically when migrating from ollo69).
+
+**Step 1 — Check for leftover entries**
+
+Go to **Settings → Devices & Services**. If any `samsungtv_smart` entry is listed there (even one marked as unavailable or broken), delete it before trying to add a new one.
+
+**Step 2 — Check for leftover files**
+
+Via SSH or the **File Editor** / **Studio Code Server** add-on, verify that the old `samsungtv_smart` folder has been fully removed:
+
+```bash
+ls /config/custom_components/samsungtv_smart/
+```
+
+If the folder still exists, remove it, then reinstall via HACS.
+
+**Step 3 — Clean restart sequence**
+
+The correct sequence after removing the old integration is:
+
+1. Delete the integration entry (Settings → Integrations → Delete)
+2. Uninstall via HACS and confirm the `custom_components/samsungtv_smart/` folder is gone
+3. **Restart Home Assistant** (full restart, not reload)
+4. Install the new version via HACS
+5. **Restart Home Assistant again**
+6. Now add the integration via Settings → Devices & Services → + Add Integration
+
+Skipping the intermediate restart (step 3) is the most common cause of the integration not appearing in the search.
+
+**Step 4 — Check HA logs**
+
+If the integration still does not appear after a clean install, enable DEBUG logging and check for errors during startup:
+
+```yaml
+# configuration.yaml
+logger:
+  default: warning
+  logs:
+    custom_components.samsungtv_smart: debug
+```
+
+Restart and look for any exception in **Settings → System → Logs** related to `samsungtv_smart`.
 
 ### TV not found during setup
 
