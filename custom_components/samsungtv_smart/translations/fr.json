@@ -98,6 +98,9 @@
         "title": "Ré-authentification requise",
         "description": "Votre authentification SmartThings a expiré. Cliquez sur Soumettre pour vous reconnecter."
       }
+    },
+    "create_entry": {
+      "default": "{name} configuré avec succès"
     }
   },
   "options": {
