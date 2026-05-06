@@ -331,17 +331,25 @@ class FrameArtModeSwitch(SwitchEntity):
                 return
 
             # Wait for TV to be ready
+            tv_was_off = True
             if not await self._wait_for_tv_ready(max_wait=20):
                 _LOGGER.warning(
                     "TV may not be fully ready, attempting Art Mode anyway..."
                 )
 
-            # Additional delay for TV to stabilize
-            await asyncio.sleep(2)
+            # Additional delay for TV Art subsystem to stabilize after boot.
+            # supported() returns True quickly (WebSocket reachable) but
+            # set_artmode() may still fail for several seconds while the Art
+            # subsystem initialises. 8s covers cold-boot scenarios reliably.
+            _LOGGER.debug("Waiting 8s for Art subsystem to stabilize after power-on...")
+            await asyncio.sleep(8)
+        else:
+            tv_was_off = False
 
-        # Now activate Art Mode with retry
-        max_retries = 3
-        retry_delay = 2
+        # Use more retries with longer delays when coming from a cold boot,
+        # because the Art WebSocket may still be settling.
+        max_retries = 5 if tv_was_off else 3
+        retry_delay = 3 if tv_was_off else 2
 
         for attempt in range(max_retries):
             try:
