@@ -768,7 +768,14 @@ class SamsungTVInfo:
         return self._ping_port
 
     def _try_connect_ws(self):
-        """Try to connect to device using web sockets on port 8001 and 8002"""
+        """Try to connect to device using web sockets on port 8001 and 8002.
+
+        Port fallback strategy:
+        - If a preferred port is known (ws_port set), try it first with existing
+          token (fast path), then without token, then the alternate port.
+        - Otherwise try 8001 then 8002 (8001 is the default since Tizen 9.0
+          filtered port 8002 on 2024 models).
+        """
 
         self._ping_port = SamsungTVWS.ping_probe(self._hostname)
         if self._ping_port is None:
@@ -777,18 +784,30 @@ class SamsungTVInfo:
             )
             return RESULT_NOT_SUCCESSFUL
 
-        if self._ws_port and self._ws_token:
-            port_list = tuple([self._ws_port, 8001, 8002])
+        # Build port list: preferred port first (with token fast-path), then alternate
+        if self._ws_port:
+            alternate = 8001 if self._ws_port == 8002 else 8002
+            # Each entry is (port, use_token)
+            # First attempt: preferred port + existing token (quick, no popup)
+            # Second attempt: preferred port without token (new pairing on same port)
+            # Third attempt: alternate port without token (firmware changed port)
+            if self._ws_token:
+                attempts = [
+                    (self._ws_port, True),
+                    (self._ws_port, False),
+                    (alternate, False),
+                ]
+            else:
+                attempts = [
+                    (self._ws_port, False),
+                    (alternate, False),
+                ]
         else:
-            port_list = (8001, 8002)
+            attempts = [(8001, False), (8002, False)]
 
-        for index, port in enumerate(port_list):
-
-            timeout = 45  # We need this high timeout because waiting for TV auth popup
-            token = None
-            if len(port_list) > 2 and index == 0:
-                timeout = DEFAULT_TIMEOUT
-                token = self._ws_token
+        for port, use_token in attempts:
+            timeout = DEFAULT_TIMEOUT if use_token else 45
+            token = self._ws_token if use_token else None
 
             try:
                 _LOGGER.info(
@@ -807,6 +826,14 @@ class SamsungTVInfo:
                     remote.open()
                     self._ws_token = remote.token
                 _LOGGER.info("Found working configuration using port %s", str(port))
+                if self._ws_port != port:
+                    _LOGGER.warning(
+                        "SamsungTV %s: port changed from %s to %s"
+                        " (likely a firmware update filtered the previous port)",
+                        self._hostname,
+                        self._ws_port,
+                        port,
+                    )
                 self._ws_port = port
                 return RESULT_SUCCESS
             except (OSError, ConnectionFailure, WebSocketException) as err:
@@ -872,8 +899,12 @@ class SamsungTVInfo:
         if session is None:
             return RESULT_NOT_SUCCESSFUL
 
-        if ws_port and ws_token:
+        # Accept ws_port alone (even without token) so the preferred port is
+        # tried first — the fallback logic in _try_connect_ws will try the
+        # alternate port automatically if the preferred one is unreachable.
+        if ws_port:
             self._ws_port = ws_port
+        if ws_token:
             self._ws_token = ws_token
 
         result = await self._hass.async_add_executor_job(self._try_connect_ws)
