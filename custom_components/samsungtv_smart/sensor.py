@@ -307,6 +307,8 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         # Enabled by default - thumbnails are fetched for current artwork
         self._thumbnail_fetch_enabled = True
         self._thumbnail_failures = 0
+        # Temporary backoff for thumbnail fetch (re-enables automatically)
+        self._thumbnail_backoff_until: float | None = None
 
         # Connection failure tracking to prevent infinite reconnection loops
         self._connection_failures = 0
@@ -410,11 +412,26 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 _LOGGER.debug("Error getting current artwork: %s", ex)
 
             # Only fetch thumbnail if:
-            # - Thumbnail fetching is enabled
+            # - Thumbnail fetching is not in backoff period
             # - We have a content_id
             # - Content has changed OR we don't have a thumbnail yet
+            thumbnail_in_backoff = (
+                self._thumbnail_backoff_until is not None
+                and time.time() < self._thumbnail_backoff_until
+            )
+            if thumbnail_in_backoff:
+                # Check if backoff expired — reset and re-enable
+                pass
+            elif self._thumbnail_backoff_until is not None:
+                # Backoff expired — reset state and allow fetch
+                _LOGGER.info(
+                    "Frame Art: Thumbnail fetch backoff expired, resuming automatic fetch"
+                )
+                self._thumbnail_backoff_until = None
+                self._thumbnail_failures = 0
+
             if (
-                self._thumbnail_fetch_enabled
+                not thumbnail_in_backoff
                 and content_id
                 and (
                     content_id != self._last_content_id
@@ -433,9 +450,11 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                     f"frame_art_thumbnail_{content_id}",
                 )
                 self._last_content_id = content_id
-            elif content_id and not self._thumbnail_fetch_enabled:
+            elif content_id and thumbnail_in_backoff:
                 _LOGGER.debug(
-                    "Frame Art: Thumbnail fetching disabled, skipping %s", content_id
+                    "Frame Art: Thumbnail fetch in backoff (%.0fs remaining), skipping %s",
+                    self._thumbnail_backoff_until - time.time(),
+                    content_id,
                 )
             elif content_id:
                 _LOGGER.debug(
@@ -514,10 +533,14 @@ class FrameArtCoordinator(DataUpdateCoordinator):
 
             # Don't raise just return partial data
         else:
-            # Update successful, reset failure counter
+            # Update successful, reset failure counters
             if self._connection_failures > 0:
                 _LOGGER.info("Frame Art: Update successful, resetting failure counter")
                 self._connection_failures = 0
+            # Also reset thumbnail failures on a successful update cycle
+            # (TV is reachable again, timeouts were transient)
+            if self._thumbnail_failures > 0 and self._thumbnail_backoff_until is None:
+                self._thumbnail_failures = 0
 
         return data
 
@@ -808,16 +831,19 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 self._thumbnail_failures,
             )
 
-            # For store images, save DRM placeholder instead of disabling
+            # For store images, save DRM placeholder instead of backing off
             if is_store_image:
                 await self._save_drm_placeholder(content_id)
             elif self._thumbnail_failures >= 3:
+                # Temporary backoff: pause automatic thumbnail fetch for 5 minutes,
+                # then retry. This prevents hammering the TV during startup or
+                # connectivity issues while still recovering automatically.
+                self._thumbnail_backoff_until = time.time() + 300  # 5 minutes
                 _LOGGER.warning(
-                    "Frame Art: Disabling automatic thumbnail fetch after %d failures. "
-                    "Use art_get_thumbnail service to fetch manually.",
+                    "Frame Art: Too many thumbnail timeouts (%d), pausing automatic "
+                    "fetch for 5 minutes. Will retry automatically.",
                     self._thumbnail_failures,
                 )
-                self._thumbnail_fetch_enabled = False
 
         except Exception as ex:
             _LOGGER.warning(
