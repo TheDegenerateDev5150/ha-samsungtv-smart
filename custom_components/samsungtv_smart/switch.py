@@ -232,6 +232,10 @@ class FrameArtModeSwitch(SwitchEntity):
         A Frame TV in Art Mode reports media_player state as "off", but the
         screen is physically on. Treat that as on, consistent with
         SamsungTVPowerSwitch.is_on logic.
+
+        "unknown" means the WebSocket connection is not yet established —
+        typically the TV is booting up. Treat it as on so that Art Mode
+        activation is not blocked during the startup transient.
         """
         entity_id = self._get_media_player_entity_id()
         if not entity_id:
@@ -241,8 +245,8 @@ class FrameArtModeSwitch(SwitchEntity):
         if state is None:
             return False
 
-        # TV is clearly on (watching TV, idle, paused...)
-        if state.state not in (STATE_OFF, "unavailable", "unknown"):
+        # TV is clearly on (watching TV, idle, paused...) or still starting up
+        if state.state not in (STATE_OFF, "unavailable"):
             return True
 
         # media_player says "off" — but Art Mode may be active
@@ -559,7 +563,22 @@ class FrameArtModeSwitch(SwitchEntity):
             self._attr_is_on = True
         elif new_state.state in (STATE_OFF, "unavailable"):
             self._attr_is_on = False
+        elif new_state.state == "unknown":
+            # TV is booting up — WebSocket not yet established.
+            # Schedule a deferred re-check so the switch reflects the actual
+            # Art Mode state once the TV is fully ready, without blocking here.
+            self._hass.async_create_background_task(
+                self._deferred_state_refresh(delay=8),
+                f"art_mode_switch_deferred_refresh_{self._entry.entry_id}",
+            )
+            return  # Don't write state yet — keep last known value
         self._available = True
+        self.async_write_ha_state()
+
+    async def _deferred_state_refresh(self, delay: int = 8) -> None:
+        """Wait for TV to settle after power-on, then refresh Art Mode state."""
+        await asyncio.sleep(delay)
+        await self.async_update()
         self.async_write_ha_state()
 
 
