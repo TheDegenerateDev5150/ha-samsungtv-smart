@@ -522,7 +522,14 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         return data
 
     def _is_tv_powered_off(self) -> bool:
-        """Check if the TV (media_player) is powered off."""
+        """Check if the TV (media_player) is powered off.
+
+        "unknown" is NOT treated as powered off — it means the WebSocket is
+        not yet established (TV is booting). Treating it as off would cause
+        the coordinator to short-circuit and return art_mode="off" during
+        startup, leaving the sensor stuck in an incorrect state until the
+        next polling cycle.
+        """
         try:
             # Find media_player entity for this config entry
             from homeassistant.helpers import entity_registry as er
@@ -536,7 +543,8 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 ):
                     state = self._hass.states.get(entity.entity_id)
                     if state:
-                        # TV is powered off if media_player state is "off" or "unavailable"
+                        # "unknown" = WebSocket not yet connected (booting up).
+                        # Only treat "off" and "unavailable" as truly powered off.
                         return state.state in ("off", "unavailable")
                     break
         except Exception as ex:
