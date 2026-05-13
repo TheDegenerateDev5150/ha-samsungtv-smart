@@ -537,8 +537,7 @@ class FolderGalleryCard extends HTMLElement {
     const contentId = this._normalizeContentId(imageData.content_id || imageData.name || '');
     this._hass.callService(
       'samsungtv_smart', 'art_set_favourite',
-      { content_id: contentId, status: 'on' },
-      { entity_id: entityId }
+      { entity_id: entityId, content_id: contentId, status: 'on' }
     );
     this.showToast('Added to favourites');
   }
@@ -554,8 +553,7 @@ class FolderGalleryCard extends HTMLElement {
     }
     this._hass.callService(
       'samsungtv_smart', 'art_delete',
-      { content_id: contentId },
-      { entity_id: entityId }
+      { entity_id: entityId, content_id: contentId }
     );
     this.showToast('Artwork deleted');
   }
