@@ -398,6 +398,7 @@ class FolderGalleryCard extends HTMLElement {
           <span class="lightbox-close" id="lightbox-close">&times;</span>
           <img id="lightbox-img" src="" alt="">
           <div class="lightbox-actions">
+            <button class="lightbox-btn" id="lightbox-action" style="display:none">Select</button>
             <button class="lightbox-btn" id="lightbox-upload" style="display:none">⬆ Upload</button>
             <button class="lightbox-btn" id="lightbox-favourite" style="display:none">★ Favourite</button>
             <button class="lightbox-btn danger" id="lightbox-delete" style="display:none">🗑 Delete</button>
@@ -462,6 +463,7 @@ class FolderGalleryCard extends HTMLElement {
     const lightbox = this.shadowRoot.getElementById('lightbox');
     const closeBtn = this.shadowRoot.getElementById('lightbox-close');
     const closeBtnAlt = this.shadowRoot.getElementById('lightbox-close-btn');
+    const actionBtn = this.shadowRoot.getElementById('lightbox-action');
     const uploadBtn = this.shadowRoot.getElementById('lightbox-upload');
     const favouriteBtn = this.shadowRoot.getElementById('lightbox-favourite');
     const deleteBtn = this.shadowRoot.getElementById('lightbox-delete');
@@ -473,6 +475,16 @@ class FolderGalleryCard extends HTMLElement {
         if (e.target === lightbox) this.closeLightbox();
       });
     }
+    // Original action button (art_select_image for frame_art cards)
+    if (actionBtn) {
+      actionBtn.addEventListener('click', () => {
+        if (this._selectedImage) {
+          this.executeAction(this._selectedImage);
+          this.closeLightbox();
+        }
+      });
+    }
+    // Upload button (for media gallery cards)
     if (uploadBtn) {
       uploadBtn.addEventListener('click', () => {
         if (this._selectedImage) {
@@ -502,6 +514,7 @@ class FolderGalleryCard extends HTMLElement {
   openLightbox(imageData) {
     const lightbox = this.shadowRoot.getElementById('lightbox');
     const img = this.shadowRoot.getElementById('lightbox-img');
+    const actionBtn = this.shadowRoot.getElementById('lightbox-action');
     const uploadBtn = this.shadowRoot.getElementById('lightbox-upload');
     const favouriteBtn = this.shadowRoot.getElementById('lightbox-favourite');
     const deleteBtn = this.shadowRoot.getElementById('lightbox-delete');
@@ -518,15 +531,36 @@ class FolderGalleryCard extends HTMLElement {
     const isSam = upper.startsWith('SAM-') || upper.startsWith('SAM_');
     const isFrameArt = isMy || isSam;
 
-    if (uploadBtn) uploadBtn.style.display = isFrameArt ? 'none' : 'inline-block';
-    if (favouriteBtn) favouriteBtn.style.display = isFrameArt ? 'inline-block' : 'none';
-    if (deleteBtn) deleteBtn.style.display = isMy ? 'inline-block' : 'none';
+    // Determine which buttons to show based on content type
+    const hasUploadAction = this._config.action &&
+      this._config.action.service &&
+      this._config.action.service.includes('art_upload');
+
+    if (hasUploadAction) {
+      // Media gallery mode: upload / favourite / delete
+      if (actionBtn) actionBtn.style.display = 'none';
+      if (uploadBtn) uploadBtn.style.display = isFrameArt ? 'none' : 'inline-block';
+      if (favouriteBtn) favouriteBtn.style.display = isFrameArt ? 'inline-block' : 'none';
+      if (deleteBtn) deleteBtn.style.display = isMy ? 'inline-block' : 'none';
+    } else {
+      // Frame art mode: original Select button
+      if (uploadBtn) uploadBtn.style.display = 'none';
+      if (favouriteBtn) favouriteBtn.style.display = 'none';
+      if (deleteBtn) deleteBtn.style.display = 'none';
+      if (actionBtn && this._config.action) {
+        actionBtn.style.display = 'inline-block';
+        const actionName = this._config.action.service?.split('.').pop() || 'Select';
+        actionBtn.textContent = actionName.replace(/_/g, ' ').replace(/\w/g, l => l.toUpperCase());
+      }
+    }
   }
 
   _callFavourite(imageData) {
     if (!this._hass) return;
-    const entityId = this._config.action && this._config.action.data
-      ? this._config.action.data.entity_id : '';
+    const entityId = (this._config.action && this._config.action.target)
+      ? this._config.action.target.entity_id
+      : (this._config.action && this._config.action.data)
+        ? this._config.action.data.entity_id : '';
     const contentId = imageData.content_id || imageData.name || '';
     this._hass.callService(
       'samsungtv_smart', 'art_set_favourite',
@@ -538,8 +572,10 @@ class FolderGalleryCard extends HTMLElement {
 
   _callDelete(imageData) {
     if (!this._hass) return;
-    const entityId = this._config.action && this._config.action.data
-      ? this._config.action.data.entity_id : '';
+    const entityId = (this._config.action && this._config.action.target)
+      ? this._config.action.target.entity_id
+      : (this._config.action && this._config.action.data)
+        ? this._config.action.data.entity_id : '';
     const contentId = imageData.content_id || imageData.name || '';
     const upper = contentId.toUpperCase();
     if (!upper.startsWith('MY-') && !upper.startsWith('MY_')) {
