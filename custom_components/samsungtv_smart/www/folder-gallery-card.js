@@ -512,7 +512,6 @@ class FolderGalleryCard extends HTMLElement {
     img.src = imageData.path;
     lightbox.classList.add('open');
 
-    // Detect MY- / MY_ / SAM- / SAM_ (case-insensitive)
     const contentId = (imageData.content_id || imageData.name || '');
     const upper = contentId.toUpperCase();
     const isMy = upper.startsWith('MY-') || upper.startsWith('MY_');
@@ -526,7 +525,9 @@ class FolderGalleryCard extends HTMLElement {
 
   _normalizeContentId(contentId) {
     // MY_F0001 -> MY-F0001, SAM_F0206 -> SAM-F0206
-    return contentId.replace(/^(MY|SAM)_/i, (_, prefix) => prefix.toUpperCase() + '-');
+    return contentId.replace(/^(MY|SAM)_/i, function(_, prefix) {
+      return prefix.toUpperCase() + '-';
+    });
   }
 
   _callFavourite(imageData) {
@@ -534,11 +535,11 @@ class FolderGalleryCard extends HTMLElement {
     const entityId = this._config.action && this._config.action.data
       ? this._config.action.data.entity_id : '';
     const contentId = this._normalizeContentId(imageData.content_id || imageData.name || '');
-    this._hass.callService('samsungtv_smart', 'art_set_favourite', {
-      entity_id: entityId,
-      content_id: contentId,
-      status: 'on'
-    });
+    this._hass.callService(
+      'samsungtv_smart', 'art_set_favourite',
+      { content_id: contentId, status: 'on' },
+      { entity_id: entityId }
+    );
     this.showToast('Added to favourites');
   }
 
@@ -551,10 +552,11 @@ class FolderGalleryCard extends HTMLElement {
       this.showToast('Only MY- content can be deleted');
       return;
     }
-    this._hass.callService('samsungtv_smart', 'art_delete', {
-      entity_id: entityId,
-      content_id: contentId,
-    });
+    this._hass.callService(
+      'samsungtv_smart', 'art_delete',
+      { content_id: contentId },
+      { entity_id: entityId }
+    );
     this.showToast('Artwork deleted');
   }
 
