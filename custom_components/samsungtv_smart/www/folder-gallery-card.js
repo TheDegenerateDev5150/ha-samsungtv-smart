@@ -523,18 +523,11 @@ class FolderGalleryCard extends HTMLElement {
     if (deleteBtn) deleteBtn.style.display = isMy ? 'inline-block' : 'none';
   }
 
-  _normalizeContentId(contentId) {
-    // MY_F0001 -> MY-F0001, SAM_F0206 -> SAM-F0206
-    return contentId.replace(/^(MY|SAM)_/i, function(_, prefix) {
-      return prefix.toUpperCase() + '-';
-    });
-  }
-
   _callFavourite(imageData) {
     if (!this._hass) return;
     const entityId = this._config.action && this._config.action.data
       ? this._config.action.data.entity_id : '';
-    const contentId = this._normalizeContentId(imageData.content_id || imageData.name || '');
+    const contentId = imageData.content_id || imageData.name || '';
     this._hass.callService(
       'samsungtv_smart', 'art_set_favourite',
       { entity_id: entityId, content_id: contentId, status: 'on' }
@@ -546,9 +539,10 @@ class FolderGalleryCard extends HTMLElement {
     if (!this._hass) return;
     const entityId = this._config.action && this._config.action.data
       ? this._config.action.data.entity_id : '';
-    const contentId = this._normalizeContentId(imageData.content_id || imageData.name || '');
-    if (!contentId.toUpperCase().startsWith('MY-')) {
-      this.showToast('Only MY- content can be deleted');
+    const contentId = imageData.content_id || imageData.name || '';
+    const upper = contentId.toUpperCase();
+    if (!upper.startsWith('MY-') && !upper.startsWith('MY_')) {
+      this.showToast('Only MY content can be deleted');
       return;
     }
     this._hass.callService(
