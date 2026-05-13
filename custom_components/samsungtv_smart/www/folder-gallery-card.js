@@ -512,22 +512,28 @@ class FolderGalleryCard extends HTMLElement {
     img.src = imageData.path;
     lightbox.classList.add('open');
 
-    // Determine content_id from filename (e.g. "MY-F0001", "SAM-F0206")
-    const contentId = (imageData.content_id || imageData.name || '').toUpperCase();
-    const isMy = contentId.startsWith('MY-');
-    const isSam = contentId.startsWith('SAM-');
+    // Detect MY- / MY_ / SAM- / SAM_ (case-insensitive)
+    const contentId = (imageData.content_id || imageData.name || '');
+    const upper = contentId.toUpperCase();
+    const isMy = upper.startsWith('MY-') || upper.startsWith('MY_');
+    const isSam = upper.startsWith('SAM-') || upper.startsWith('SAM_');
     const isFrameArt = isMy || isSam;
 
-    // Show/hide buttons based on content type
     if (uploadBtn) uploadBtn.style.display = isFrameArt ? 'none' : 'inline-block';
     if (favouriteBtn) favouriteBtn.style.display = isFrameArt ? 'inline-block' : 'none';
     if (deleteBtn) deleteBtn.style.display = isMy ? 'inline-block' : 'none';
   }
 
+  _normalizeContentId(contentId) {
+    // MY_F0001 -> MY-F0001, SAM_F0206 -> SAM-F0206
+    return contentId.replace(/^(MY|SAM)_/i, (_, prefix) => prefix.toUpperCase() + '-');
+  }
+
   _callFavourite(imageData) {
     if (!this._hass) return;
-    const entityId = this._config.action?.data?.entity_id || '';
-    const contentId = imageData.content_id || imageData.name || '';
+    const entityId = this._config.action && this._config.action.data
+      ? this._config.action.data.entity_id : '';
+    const contentId = this._normalizeContentId(imageData.content_id || imageData.name || '');
     this._hass.callService('samsungtv_smart', 'art_set_favourite', {
       entity_id: entityId,
       content_id: contentId,
@@ -538,8 +544,9 @@ class FolderGalleryCard extends HTMLElement {
 
   _callDelete(imageData) {
     if (!this._hass) return;
-    const entityId = this._config.action?.data?.entity_id || '';
-    const contentId = imageData.content_id || imageData.name || '';
+    const entityId = this._config.action && this._config.action.data
+      ? this._config.action.data.entity_id : '';
+    const contentId = this._normalizeContentId(imageData.content_id || imageData.name || '');
     if (!contentId.toUpperCase().startsWith('MY-')) {
       this.showToast('Only MY- content can be deleted');
       return;
