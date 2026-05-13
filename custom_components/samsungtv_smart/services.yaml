@@ -154,7 +154,7 @@ art_upload:
 
 art_delete:
   name: Delete Artwork
-  description: Delete an uploaded artwork from the TV. Only user-uploaded content (MY-*) can be deleted.
+  description: Delete an uploaded artwork from the TV. Only user-uploaded content (MY-* or MY_*) can be deleted.
   fields:
     entity_id:
       name: Entity Name
@@ -165,7 +165,7 @@ art_delete:
           integration: samsungtv_smart
     content_id:
       name: Content ID
-      description: The content ID to delete (must start with MY-)
+      description: The content ID to delete (must start with MY- or MY_)
       required: true
       example: "MY-F0001"
       selector:
