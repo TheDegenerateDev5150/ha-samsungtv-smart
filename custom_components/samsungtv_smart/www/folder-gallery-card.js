@@ -549,6 +549,7 @@ class FolderGalleryCard extends HTMLElement {
       if (typeof obj === 'string') {
         return obj
           .replace(/\{\{image_path\}\}/g, imageData.path)
+          .replace(/\{\{file_path\}\}/g, imageData.path.replace('/local/', '/config/www/'))
           .replace(/\{\{filename\}\}/g, imageData.filename)
           .replace(/\{\{name\}\}/g, imageData.name)
           .replace(/\{\{content_id\}\}/g, imageData.content_id || '')
@@ -716,7 +717,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c FOLDER-GALLERY-CARD %c v1.0.0 ',
+  '%c FOLDER-GALLERY-CARD %c v1.0.1 ',
   'color: white; background: #03a9f4; font-weight: bold;',
   'color: #03a9f4; background: white; font-weight: bold;'
 );
