@@ -371,6 +371,14 @@ class FolderGalleryCard extends HTMLElement {
         .lightbox-btn.secondary {
           background: rgba(255,255,255,0.1);
         }
+        
+        .lightbox-btn.danger {
+          background: #e53935;
+        }
+        
+        .lightbox-btn.danger:hover {
+          background: #ef5350;
+        }
       </style>
       
       <ha-card>
@@ -390,7 +398,9 @@ class FolderGalleryCard extends HTMLElement {
           <span class="lightbox-close" id="lightbox-close">&times;</span>
           <img id="lightbox-img" src="" alt="">
           <div class="lightbox-actions">
-            <button class="lightbox-btn" id="lightbox-action">Select</button>
+            <button class="lightbox-btn" id="lightbox-upload" style="display:none">⬆ Upload</button>
+            <button class="lightbox-btn" id="lightbox-favourite" style="display:none">★ Favourite</button>
+            <button class="lightbox-btn danger" id="lightbox-delete" style="display:none">🗑 Delete</button>
             <button class="lightbox-btn secondary" id="lightbox-close-btn">Close</button>
           </div>
         </div>
@@ -452,23 +462,37 @@ class FolderGalleryCard extends HTMLElement {
     const lightbox = this.shadowRoot.getElementById('lightbox');
     const closeBtn = this.shadowRoot.getElementById('lightbox-close');
     const closeBtnAlt = this.shadowRoot.getElementById('lightbox-close-btn');
-    const actionBtn = this.shadowRoot.getElementById('lightbox-action');
+    const uploadBtn = this.shadowRoot.getElementById('lightbox-upload');
+    const favouriteBtn = this.shadowRoot.getElementById('lightbox-favourite');
+    const deleteBtn = this.shadowRoot.getElementById('lightbox-delete');
 
-    if (closeBtn) {
-      closeBtn.addEventListener('click', () => this.closeLightbox());
-    }
-    if (closeBtnAlt) {
-      closeBtnAlt.addEventListener('click', () => this.closeLightbox());
-    }
+    if (closeBtn) closeBtn.addEventListener('click', () => this.closeLightbox());
+    if (closeBtnAlt) closeBtnAlt.addEventListener('click', () => this.closeLightbox());
     if (lightbox) {
       lightbox.addEventListener('click', (e) => {
         if (e.target === lightbox) this.closeLightbox();
       });
     }
-    if (actionBtn) {
-      actionBtn.addEventListener('click', () => {
+    if (uploadBtn) {
+      uploadBtn.addEventListener('click', () => {
         if (this._selectedImage) {
-          this.executeAction(this._selectedImage);
+          this.executeAction(this._selectedImage, this._config.action);
+          this.closeLightbox();
+        }
+      });
+    }
+    if (favouriteBtn) {
+      favouriteBtn.addEventListener('click', () => {
+        if (this._selectedImage) {
+          this._callFavourite(this._selectedImage);
+          this.closeLightbox();
+        }
+      });
+    }
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', () => {
+        if (this._selectedImage) {
+          this._callDelete(this._selectedImage);
           this.closeLightbox();
         }
       });
@@ -478,19 +502,53 @@ class FolderGalleryCard extends HTMLElement {
   openLightbox(imageData) {
     const lightbox = this.shadowRoot.getElementById('lightbox');
     const img = this.shadowRoot.getElementById('lightbox-img');
-    const actionBtn = this.shadowRoot.getElementById('lightbox-action');
-    
-    if (lightbox && img) {
-      this._selectedImage = imageData;
-      img.src = imageData.path;
-      lightbox.classList.add('open');
-      
-      // Update action button text
-      if (actionBtn && this._config.action) {
-        const actionName = this._config.action.service?.split('.').pop() || 'Select';
-        actionBtn.textContent = actionName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
-      }
+    const uploadBtn = this.shadowRoot.getElementById('lightbox-upload');
+    const favouriteBtn = this.shadowRoot.getElementById('lightbox-favourite');
+    const deleteBtn = this.shadowRoot.getElementById('lightbox-delete');
+
+    if (!lightbox || !img) return;
+
+    this._selectedImage = imageData;
+    img.src = imageData.path;
+    lightbox.classList.add('open');
+
+    // Determine content_id from filename (e.g. "MY-F0001", "SAM-F0206")
+    const contentId = (imageData.content_id || imageData.name || '').toUpperCase();
+    const isMy = contentId.startsWith('MY-');
+    const isSam = contentId.startsWith('SAM-');
+    const isFrameArt = isMy || isSam;
+
+    // Show/hide buttons based on content type
+    if (uploadBtn) uploadBtn.style.display = isFrameArt ? 'none' : 'inline-block';
+    if (favouriteBtn) favouriteBtn.style.display = isFrameArt ? 'inline-block' : 'none';
+    if (deleteBtn) deleteBtn.style.display = isMy ? 'inline-block' : 'none';
+  }
+
+  _callFavourite(imageData) {
+    if (!this._hass) return;
+    const entityId = this._config.action?.data?.entity_id || '';
+    const contentId = imageData.content_id || imageData.name || '';
+    this._hass.callService('samsungtv_smart', 'art_set_favourite', {
+      entity_id: entityId,
+      content_id: contentId,
+      status: 'on'
+    });
+    this.showToast('Added to favourites');
+  }
+
+  _callDelete(imageData) {
+    if (!this._hass) return;
+    const entityId = this._config.action?.data?.entity_id || '';
+    const contentId = imageData.content_id || imageData.name || '';
+    if (!contentId.toUpperCase().startsWith('MY-')) {
+      this.showToast('Only MY- content can be deleted');
+      return;
     }
+    this._hass.callService('samsungtv_smart', 'art_delete', {
+      entity_id: entityId,
+      content_id: contentId,
+    });
+    this.showToast('Artwork deleted');
   }
 
   closeLightbox() {
@@ -717,7 +775,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c FOLDER-GALLERY-CARD %c v1.0.1 ',
+  '%c FOLDER-GALLERY-CARD %c v1.1.0 ',
   'color: white; background: #03a9f4; font-weight: bold;',
   'color: #03a9f4; background: white; font-weight: bold;'
 );
