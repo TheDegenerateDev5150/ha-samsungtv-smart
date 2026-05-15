@@ -93,6 +93,31 @@ class SamsungTVAsyncArt:
         # Connection lock to prevent concurrent connection attempts (v6.3.5)
         self._connection_lock = asyncio.Lock()
 
+        # Short-lived cache for get_artmode_settings to dedupe the near-simultaneous
+        # calls issued by the brightness and color-temperature NumberEntities every
+        # 30 s. The Frame 2024 does not respond to the dedicated get_brightness /
+        # get_color_temperature requests, so both entities fall through to
+        # get_artmode_settings — without this cache, the TV receives two identical
+        # WebSocket requests within ~1 ms of each other every cycle.
+        # TTL is intentionally short (1.5 s): long enough to absorb concurrent
+        # polls, short enough that a set_brightness / set_color_temperature
+        # immediately reflects on the next poll.
+        self._artmode_settings_cache: list | None = None
+        self._artmode_settings_cache_ts: float = 0.0
+        self._artmode_settings_cache_ttl: float = 1.5
+        self._artmode_settings_lock = asyncio.Lock()
+
+        # Capability flags: certain Frame TV models (e.g. QE55LS03DAUXXN / 2024)
+        # do not respond to the dedicated get_brightness / get_color_temperature
+        # WebSocket requests — the call times out silently and the integration
+        # falls back to get_artmode_settings. To avoid paying the timeout cost
+        # on every poll, we attempt the direct request once with a short timeout
+        # and flip these flags off on the first miss. After that the entity
+        # polls go straight to get_artmode_settings (cached above).
+        # Flag = None means "unknown, probe once"; True/False is the learned state.
+        self._supports_get_brightness: bool | None = None
+        self._supports_get_color_temperature: bool | None = None
+
     def _get_uuid(self) -> str:
         """Generate a new UUID for art requests."""
         self._art_uuid = str(uuid.uuid4())
@@ -1024,29 +1049,96 @@ class SamsungTVAsyncArt:
         return data is not None
 
     async def get_artmode_settings(self, setting: str = "") -> dict | list | None:
-        """Get art mode settings."""
-        data = await self._send_art_request({"request": "get_artmode_settings"})
-        if data:
-            settings_data = data.get("data", "[]")
-            if isinstance(settings_data, str):
-                try:
-                    settings_data = json.loads(settings_data)
-                except json.JSONDecodeError:
-                    return None
-            if setting:
-                return next(
-                    (item for item in settings_data if item.get("item") == setting),
-                    None,
+        """Get art mode settings.
+
+        Uses a short-lived cache (~1.5 s) to dedupe the near-simultaneous calls
+        issued by the brightness and color-temperature NumberEntities on every
+        polling cycle. The cache is invalidated by set_brightness and
+        set_color_temperature so a freshly-applied value is read back on the
+        very next poll.
+        """
+        async with self._artmode_settings_lock:
+            now = time.time()
+            cached = self._artmode_settings_cache
+            cache_fresh = (
+                cached is not None
+                and (now - self._artmode_settings_cache_ts)
+                < self._artmode_settings_cache_ttl
+            )
+
+            if cache_fresh:
+                _LOGGER.debug(
+                    "Art API: get_artmode_settings served from cache (age=%.2fs)",
+                    now - self._artmode_settings_cache_ts,
                 )
-            return settings_data
-        return None
+                settings_data = cached
+            else:
+                data = await self._send_art_request({"request": "get_artmode_settings"})
+                if not data:
+                    return None
+                settings_data = data.get("data", "[]")
+                if isinstance(settings_data, str):
+                    try:
+                        settings_data = json.loads(settings_data)
+                    except json.JSONDecodeError:
+                        return None
+                # Only cache lists — refuse to cache malformed payloads.
+                if isinstance(settings_data, list):
+                    self._artmode_settings_cache = settings_data
+                    self._artmode_settings_cache_ts = now
+
+        if setting:
+            if not isinstance(settings_data, list):
+                return None
+            return next(
+                (item for item in settings_data if item.get("item") == setting),
+                None,
+            )
+        return settings_data
+
+    def _invalidate_artmode_settings_cache(self) -> None:
+        """Drop the cached art mode settings.
+
+        Called after a set_* operation so that the next read reflects the new
+        value rather than the pre-set snapshot.
+        """
+        self._artmode_settings_cache = None
+        self._artmode_settings_cache_ts = 0.0
 
     async def get_brightness(self) -> dict | None:
-        """Get current art mode brightness."""
-        data = await self._send_art_request({"request": "get_brightness"})
-        if not data:
-            data = await self.get_artmode_settings("brightness")
-        return data
+        """Get current art mode brightness.
+
+        On TVs that respond to the dedicated `get_brightness` WebSocket request
+        (older firmware on some models), use it directly. On TVs that don't
+        respond — observed on the QE55LS03DAUXXN / Frame 2024 — fall back to
+        `get_artmode_settings("brightness")`, which returns the same value as
+        part of the consolidated settings payload.
+
+        A capability flag is learned at runtime: after the first timeout we
+        stop attempting the direct request and go straight to the cached
+        consolidated path, eliminating the 5 s timeout cost per poll.
+        """
+        if self._supports_get_brightness is not False:
+            data = await self._send_art_request(
+                {"request": "get_brightness"},
+                timeout=1.0 if self._supports_get_brightness is None else 2.0,
+            )
+            if data:
+                if self._supports_get_brightness is None:
+                    _LOGGER.debug(
+                        "Art API: TV supports direct get_brightness, "
+                        "enabling fast path"
+                    )
+                    self._supports_get_brightness = True
+                return data
+            if self._supports_get_brightness is None:
+                _LOGGER.info(
+                    "Art API: TV did not respond to get_brightness within 1 s; "
+                    "falling back to get_artmode_settings for future polls"
+                )
+                self._supports_get_brightness = False
+
+        return await self.get_artmode_settings("brightness")
 
     async def set_brightness(self, value: int) -> bool:
         """Set art mode brightness."""
@@ -1056,14 +1148,38 @@ class SamsungTVAsyncArt:
                 "value": value,
             }
         )
+        if data is not None:
+            self._invalidate_artmode_settings_cache()
         return data is not None
 
     async def get_color_temperature(self) -> dict | None:
-        """Get current art mode color temperature."""
-        data = await self._send_art_request({"request": "get_color_temperature"})
-        if not data:
-            data = await self.get_artmode_settings("color_temperature")
-        return data
+        """Get current art mode color temperature.
+
+        See `get_brightness` for the capability-detection rationale. The Frame
+        2024 does not respond to the dedicated request and is served from the
+        consolidated `get_artmode_settings` payload.
+        """
+        if self._supports_get_color_temperature is not False:
+            data = await self._send_art_request(
+                {"request": "get_color_temperature"},
+                timeout=1.0 if self._supports_get_color_temperature is None else 2.0,
+            )
+            if data:
+                if self._supports_get_color_temperature is None:
+                    _LOGGER.debug(
+                        "Art API: TV supports direct get_color_temperature, "
+                        "enabling fast path"
+                    )
+                    self._supports_get_color_temperature = True
+                return data
+            if self._supports_get_color_temperature is None:
+                _LOGGER.info(
+                    "Art API: TV did not respond to get_color_temperature within "
+                    "1 s; falling back to get_artmode_settings for future polls"
+                )
+                self._supports_get_color_temperature = False
+
+        return await self.get_artmode_settings("color_temperature")
 
     async def set_color_temperature(self, value: int) -> bool:
         """Set art mode color temperature."""
@@ -1073,6 +1189,8 @@ class SamsungTVAsyncArt:
                 "value": value,
             }
         )
+        if data is not None:
+            self._invalidate_artmode_settings_cache()
         return data is not None
 
     async def get_auto_rotation_status(self) -> dict | None:
