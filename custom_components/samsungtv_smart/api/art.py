@@ -95,7 +95,7 @@ def __init__(
     # calls issued by the brightness and color-temperature NumberEntities every
     # 30 s. The Frame 2024 does not respond to the dedicated get_brightness /
     # get_color_temperature requests, so both entities fall through to
-    # get_artmode_settings — without this cache, the TV receives two identical
+    # get_artmode_settings  -  without this cache, the TV receives two identical
     # WebSocket requests within ~1 ms of each other every cycle.
     # TTL is intentionally short (1.5 s): long enough to absorb concurrent
     # polls, short enough that a set_brightness / set_color_temperature
@@ -107,7 +107,7 @@ def __init__(
 
     # Capability flags: certain Frame TV models (e.g. QE55LS03DAUXXN / 2024)
     # do not respond to the dedicated get_brightness / get_color_temperature
-    # WebSocket requests — the call times out silently and the integration
+    # WebSocket requests  -  the call times out silently and the integration
     # falls back to get_artmode_settings. To avoid paying the timeout cost
     # on every poll, we attempt the direct request once with a short timeout
     # and flip these flags off on the first miss. After that the entity
@@ -355,13 +355,13 @@ async def _receive_loop(self) -> None:
     `open()` (which short-circuits when `self._ws and not self._ws.closed`
     looks truthy) and caused every subsequent `_send_art_request` to fail
     with `Cannot write to closing transport` until the integration was
-    reloaded — sometimes many hours after the TV had come back online.
+    reloaded  -  sometimes many hours after the TV had come back online.
 
     We now clear the stale references and cancel any in-flight pending
     requests so the next `_send_art_request` triggers a fresh `open()`.
 
     Note: we do NOT call `close()` from here. `close()` cancels and awaits
-    `self._recv_task`, and we ARE that task — calling it would deadlock.
+    `self._recv_task`, and we ARE that task  -  calling it would deadlock.
     The cleanup below is the subset of `close()` that is safe to do from
     inside the task.
     """
@@ -403,7 +403,7 @@ async def _receive_loop(self) -> None:
             self._ws = None
             self._recv_task = None
             # Fail in-flight pending requests immediately rather than
-            # letting their callers block on the per-request timeout —
+            # letting their callers block on the per-request timeout;
             # the response will never arrive on this dead channel.
             for future in self._pending_requests.values():
                 if not future.done():
@@ -638,7 +638,7 @@ async def get_thumbnail_list(self, content_id_list: list[dict]) -> dict[str, byt
         _LOGGER.debug("Art API: No response for get_thumbnail_list")
         return {}
 
-    # Si la TV répond directement par un event d'erreur
+    # Si la TV repond directement par un event d'erreur
     if data.get("event") == "error":
         _LOGGER.debug(
             "Art API: get_thumbnail_list returned error: %s",
@@ -876,7 +876,7 @@ async def _get_thumbnail_via_list(
         _LOGGER.debug("Art API: No response for get_thumbnail_list (single)")
         return None
 
-    # Sur certains modèles, la TV répond directement "event: error" (code -1)
+    # Sur certains modeles, la TV repond directement "event: error" (code -1)
     if data.get("event") == "error":
         _LOGGER.debug(
             "Art API: get_thumbnail_list error for %s: %s",
@@ -919,7 +919,7 @@ async def _get_thumbnail_via_list(
             _LOGGER.debug("Art API: Connected successfully for %s", content_id)
         except ConnectionResetError as ex:
             _LOGGER.debug("Art API: Connection reset for %s: %s", content_id, ex)
-            # Retry uniquement pour le Art Store (SAM-), comme discuté
+            # Retry uniquement pour le Art Store (SAM-), comme discute
             if content_id.startswith("SAM-") and retry_count < 2:
                 _LOGGER.debug(
                     "Art API: Art Store image %s, retrying after delay", content_id
@@ -965,7 +965,7 @@ async def _get_thumbnail_via_list(
                 len(ex.partial or b""),
                 ex.expected,
             )
-            # même logique : petit retry pour les images SAM- si besoin
+            # meme logique : petit retry pour les images SAM- si besoin
             if content_id.startswith("SAM-") and retry_count < 2:
                 _LOGGER.debug(
                     "Art API: Art Store image %s, retrying after incomplete read",
@@ -1137,7 +1137,7 @@ async def get_artmode_settings(self, setting: str = "") -> dict | list | None:
                     settings_data = json.loads(settings_data)
                 except json.JSONDecodeError:
                     return None
-            # Only cache lists — refuse to cache malformed payloads.
+            # Only cache lists  -  refuse to cache malformed payloads.
             if isinstance(settings_data, list):
                 self._artmode_settings_cache = settings_data
                 self._artmode_settings_cache_ts = now
@@ -1165,7 +1165,7 @@ async def get_brightness(self) -> dict | None:
 
     On TVs that respond to the dedicated `get_brightness` WebSocket request
     (older firmware on some models), use it directly. On TVs that don't
-    respond — observed on the QE55LS03DAUXXN / Frame 2024 — fall back to
+    respond  -  observed on the QE55LS03DAUXXN / Frame 2024  -  fall back to
     `get_artmode_settings("brightness")`, which returns the same value as
     part of the consolidated settings payload.
 
