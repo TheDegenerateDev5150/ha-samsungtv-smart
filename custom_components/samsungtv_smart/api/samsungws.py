@@ -603,7 +603,7 @@ class SamsungTVWS:
 
         is_ssl = self._is_ssl_connection()
         url = self._format_websocket_url(
-            _WS_ENDPOINT_APP_CONTROL, is_ssl=is_ssl, use_token=False
+            _WS_ENDPOINT_APP_CONTROL, is_ssl=is_ssl, use_token=True
         )
         sslopt = {"cert_reqs": ssl.CERT_NONE} if is_ssl else {}
 
@@ -743,7 +743,7 @@ class SamsungTVWS:
 
         is_ssl = self._is_ssl_connection()
         url = self._format_websocket_url(
-            _WS_ENDPOINT_ART, is_ssl=is_ssl, use_token=False
+            _WS_ENDPOINT_ART, is_ssl=is_ssl, use_token=True
         )
         sslopt = {"cert_reqs": ssl.CERT_NONE} if is_ssl else {}
 
