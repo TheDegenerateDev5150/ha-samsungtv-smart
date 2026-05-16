@@ -69,9 +69,9 @@ def _set_ws_logger_level(level: int = logging.CRITICAL) -> None:
         ws_logger.setLevel(level)
 
 
-def _format_rest_url(host: str, append: str = "") -> str:
+def _format_rest_url(host: str, append: str = "", port: int = 8001) -> str:
     """Return URL used for rest commands."""
-    return f"http://{host}:8001/api/v2/{append}"
+    return f"http://{host}:{port}/api/v2/{append}"
 
 
 def gen_uuid() -> str:
@@ -186,15 +186,17 @@ class SamsungTVAsyncRest:
         host: str,
         session: aiohttp.ClientSession,
         timeout=None,
+        port: int = 8001,
     ) -> None:
         """Initialize the class."""
         self._host = host
+        self._port = port
         self._session = session
         self._timeout = None if timeout == 0 else timeout
 
     async def _rest_request(self, target: str, method: str = "GET") -> dict[str, Any]:
         """Perform async rest request."""
-        url = _format_rest_url(self._host, target)
+        url = _format_rest_url(self._host, target, self._port)
         try:
             if method == "POST":
                 req = self._session.post(url, timeout=self._timeout, verify_ssl=False)
@@ -459,7 +461,7 @@ class SamsungTVWS:
 
     def _rest_request(self, target, method="GET"):
         """Send a rest command using http protocol."""
-        url = _format_rest_url(self.host, target)
+        url = _format_rest_url(self.host, target, self.port)
         try:
             if method == "POST":
                 response = requests.post(url, timeout=self.timeout)
