@@ -2692,9 +2692,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         """Get thumbnail for a specific piece of artwork.
 
         If save_to_file is True, saves the thumbnail to:
-        - /config/www/frame_art/personal/ for user-uploaded images (MY_F*)
-        - /config/www/frame_art/store/ for Samsung Art Store images (SAM-*)
-        - /config/www/frame_art/other/ for other content types
+        - /config/www/frame_art/{entry_id}/personal/ for user-uploaded images (MY_F*)
+        - /config/www/frame_art/{entry_id}/store/ for Samsung Art Store images (SAM-*)
+        - /config/www/frame_art/{entry_id}/other/ for other content types
 
         If force_download is False, checks if file already exists before downloading.
         """
@@ -2715,10 +2715,12 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             else:
                 subdir = "other"
 
-            # Create directory path
-            www_path = self.hass.config.path("www", "frame_art", subdir)
+            # V7: per-TV directory path: www/frame_art/{entry_id}/{subdir}/
+            tv_dir = self.hass.config.path("www", "frame_art", self._entry_id)
+            www_path = os.path.join(tv_dir, subdir)
             file_name = f"{content_id.replace(':', '_')}.jpg"
             file_path = os.path.join(www_path, file_name)
+            local_url = f"/local/frame_art/{self._entry_id}/{subdir}/{file_name}"
 
             # Check if file already exists (unless force_download=True)
             if save_to_file and not force_download:
@@ -2735,7 +2737,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                     result = {
                         "service": "art_get_thumbnail",
                         "content_id": content_id,
-                        "thumbnail_url": f"/local/frame_art/{subdir}/{file_name}",
+                        "thumbnail_url": local_url,
                         "thumbnail_path": file_path,
                         "subdirectory": subdir,
                         "cached": True,
@@ -2812,9 +2814,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                         )
 
                         # Add URL to result
-                        result["thumbnail_url"] = (
-                            f"/local/frame_art/{subdir}/{file_name}"
-                        )
+                        result["thumbnail_url"] = local_url
                         result["thumbnail_path"] = file_path
                         result["subdirectory"] = subdir
                         _LOGGER.debug("Saved thumbnail to %s", file_path)
@@ -2861,7 +2861,8 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         # Determine which directories to clean
         dirs_to_clean = []
-        base_path = self.hass.config.path("www", "frame_art")
+        # V7: per-TV directory www/frame_art/{entry_id}/
+        base_path = self.hass.config.path("www", "frame_art", self._entry_id)
 
         if favorites_only:
             # Favorites are typically SAM-* (store) images
@@ -2955,9 +2956,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         - All artworks (if no filters specified)
 
         Saves thumbnails to organized subdirectories:
-        - /config/www/frame_art/personal/ for user-uploaded images (MY_F*)
-        - /config/www/frame_art/store/ for Samsung Art Store images (SAM-*)
-        - /config/www/frame_art/other/ for other content types
+        - /config/www/frame_art/{entry_id}/personal/ for user-uploaded images (MY_F*)
+        - /config/www/frame_art/{entry_id}/store/ for Samsung Art Store images (SAM-*)
+        - /config/www/frame_art/{entry_id}/other/ for other content types
 
         If force_download=False, skips files that already exist.
         If cleanup_orphans=True, removes local files not in the current artwork list.

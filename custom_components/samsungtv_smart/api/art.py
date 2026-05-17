@@ -117,6 +117,11 @@ class SamsungTVAsyncArt:
         # Flag = None means "unknown, probe once"; True/False is the learned state.
         self._supports_get_brightness: bool | None = None
         self._supports_get_color_temperature: bool | None = None
+        # V7: optional callback installed by sensor.py to persist learned
+        # capability flags into the config entry so they survive restarts.
+        # Signature: (name: str, value: bool) -> None. The name is the
+        # const key (CONF_SUPPORTS_GET_BRIGHTNESS / CONF_SUPPORTS_GET_COLOR_TEMPERATURE).
+        self._capability_persist_callback = None
 
     def _get_uuid(self) -> str:
         """Generate a new UUID for art requests."""
@@ -1162,6 +1167,27 @@ class SamsungTVAsyncArt:
         self._artmode_settings_cache = None
         self._artmode_settings_cache_ts = 0.0
 
+    def _persist_capability(self, name: str, value: bool) -> None:
+        """Notify the integration that a capability flag has been learned.
+
+        Maps the short internal name to the const key used in entry.data and
+        forwards to the callback installed by sensor.py (if any). No-op when
+        running outside HA (unit tests) where the callback is absent.
+        """
+        if self._capability_persist_callback is None:
+            return
+        key_map = {
+            "brightness": "supports_get_brightness",
+            "color_temperature": "supports_get_color_temperature",
+        }
+        key = key_map.get(name)
+        if not key:
+            return
+        try:
+            self._capability_persist_callback(key, value)
+        except Exception as ex:
+            _LOGGER.debug("Art API: capability persist callback failed: %s", ex)
+
     async def get_brightness(self) -> dict | None:
         """Get current art mode brightness.
 
@@ -1187,6 +1213,7 @@ class SamsungTVAsyncArt:
                         "enabling fast path"
                     )
                     self._supports_get_brightness = True
+                    self._persist_capability("brightness", True)
                 return data
             if self._supports_get_brightness is None:
                 _LOGGER.info(
@@ -1194,6 +1221,7 @@ class SamsungTVAsyncArt:
                     "falling back to get_artmode_settings for future polls"
                 )
                 self._supports_get_brightness = False
+                self._persist_capability("brightness", False)
 
         return await self.get_artmode_settings("brightness")
 
@@ -1228,6 +1256,7 @@ class SamsungTVAsyncArt:
                         "enabling fast path"
                     )
                     self._supports_get_color_temperature = True
+                    self._persist_capability("color_temperature", True)
                 return data
             if self._supports_get_color_temperature is None:
                 _LOGGER.info(
@@ -1235,6 +1264,7 @@ class SamsungTVAsyncArt:
                     "1 s; falling back to get_artmode_settings for future polls"
                 )
                 self._supports_get_color_temperature = False
+                self._persist_capability("color_temperature", False)
 
         return await self.get_artmode_settings("color_temperature")
 

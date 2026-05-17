@@ -39,12 +39,16 @@ from .const import (
     AUTH_METHOD_OAUTH,
     CONF_API_KEY,
     CONF_AUTH_METHOD,
+    CONF_CONTENT_LIST_INTERVAL,
     CONF_DEVICE_ID,
     CONF_IS_FRAME_TV,
     CONF_OAUTH_TOKEN,
+    CONF_SUPPORTS_GET_BRIGHTNESS,
+    CONF_SUPPORTS_GET_COLOR_TEMPERATURE,
     CONF_WS_NAME,
     DATA_ART_API,
     DATA_CFG,
+    DEFAULT_CONTENT_LIST_INTERVAL,
     DEFAULT_PORT,
     DOMAIN,
     WS_PREFIX,
@@ -54,6 +58,52 @@ _LOGGER = logging.getLogger(__name__)
 
 # Update interval for the Frame Art sensor (reduced for faster manual updates)
 SCAN_INTERVAL = timedelta(seconds=15)
+
+
+def _migrate_legacy_thumbnails(legacy_dir: str, tv_dir: str) -> None:
+    """Move pre-V7 flat thumbnails into the per-TV subdirectory.
+
+    Runs once per config entry, only when both:
+    - the old www/frame_art/current.jpg exists, and
+    - the new www/frame_art/{entry_id}/current.jpg does NOT exist.
+
+    Designed to be safe to call repeatedly: it's a no-op once migration is
+    done. Called from a worker thread (file I/O).
+    """
+    import os
+    import shutil
+
+    new_current = os.path.join(tv_dir, "current.jpg")
+    legacy_current = os.path.join(legacy_dir, "current.jpg")
+    if not os.path.isfile(legacy_current) or os.path.isfile(new_current):
+        return
+
+    _LOGGER.info(
+        "Frame Art: migrating legacy flat thumbnails to per-TV directory %s",
+        tv_dir,
+    )
+    try:
+        # Move every *.jpg in the legacy root into the TV dir.
+        # Known subdirectories (personal/, store/, other/) are moved wholesale.
+        # Anything else is left alone.
+        for item in os.listdir(legacy_dir):
+            src = os.path.join(legacy_dir, item)
+            dst = os.path.join(tv_dir, item)
+            if os.path.isfile(src) and src.endswith(".jpg"):
+                shutil.move(src, dst)
+            elif os.path.isdir(src) and item in ("personal", "store", "other"):
+                if not os.path.exists(dst):
+                    shutil.move(src, dst)
+        # Also move the DRM marker if present
+        drm_marker = os.path.join(legacy_dir, "current_drm.txt")
+        if os.path.isfile(drm_marker):
+            shutil.move(drm_marker, os.path.join(tv_dir, "current_drm.txt"))
+        _LOGGER.info("Frame Art: migration complete")
+    except Exception as ex:
+        _LOGGER.warning(
+            "Frame Art: migration failed, thumbnails may need manual move: %s",
+            ex,
+        )
 
 
 async def async_setup_entry(
@@ -121,15 +171,50 @@ async def async_setup_entry(
             )
 
     if is_supported:
-        # Create www/frame_art directory if it doesn't exist
+        # V7: per-TV thumbnail directory www/frame_art/{entry_id}/.
+        # Each config entry (i.e. each TV) gets its own subdirectory so that
+        # multi-Frame setups don't overwrite each other's current.jpg.
         import os
 
-        www_path = hass.config.path("www", "frame_art")
+        tv_dir = hass.config.path("www", "frame_art", entry.entry_id)
         try:
-            os.makedirs(www_path, exist_ok=True)
-            _LOGGER.debug("Frame Art directory ready: %s", www_path)
+            os.makedirs(tv_dir, exist_ok=True)
+            _LOGGER.debug("Frame Art directory ready: %s", tv_dir)
         except Exception as ex:
             _LOGGER.warning("Could not create frame_art directory: %s", ex)
+
+        # V7: migrate legacy flat layout if present
+        await hass.async_add_executor_job(
+            _migrate_legacy_thumbnails,
+            hass.config.path("www", "frame_art"),
+            tv_dir,
+        )
+
+        # V7: restore persisted brightness/color-temperature capability flags
+        # so we don't pay the per-cycle WS probe on TVs already known to
+        # not support those direct requests (e.g. Frame 2024).
+        supports_brightness = entry.data.get(CONF_SUPPORTS_GET_BRIGHTNESS)
+        supports_color_temp = entry.data.get(CONF_SUPPORTS_GET_COLOR_TEMPERATURE)
+        if supports_brightness is not None:
+            art_api._supports_get_brightness = supports_brightness
+        if supports_color_temp is not None:
+            art_api._supports_get_color_temperature = supports_color_temp
+
+        # Install a callback so art_api can persist newly-learned capabilities.
+        def _persist_capability(name: str, value: bool) -> None:
+            """Persist a learned capability flag into entry.data."""
+            if entry.data.get(name) == value:
+                return
+            hass.config_entries.async_update_entry(
+                entry, data={**entry.data, name: value}
+            )
+            _LOGGER.debug(
+                "Frame Art: persisted capability %s=%s in entry data",
+                name,
+                value,
+            )
+
+        art_api._capability_persist_callback = _persist_capability
 
         # Store art_api in hass.data for sharing with media_player
         hass.data[DOMAIN][entry.entry_id][DATA_ART_API] = art_api
@@ -304,6 +389,18 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         self._entry = entry
         self._hass = hass
         self._last_content_id: str | None = None
+        # V7: per-TV thumbnail root: www/frame_art/{entry_id}/
+        self._tv_dir: str = hass.config.path("www", "frame_art", entry.entry_id)
+        # V7: throttle the (expensive) get_content_list call. The user-facing
+        # cycle time comes from options (default 5 min). We translate it into
+        # a counter against SCAN_INTERVAL so the sensor keeps refreshing the
+        # cheap stuff (current_artwork, slideshow_status) every 15 s.
+        interval_seconds = entry.options.get(
+            CONF_CONTENT_LIST_INTERVAL, DEFAULT_CONTENT_LIST_INTERVAL
+        )
+        scan_seconds = SCAN_INTERVAL.total_seconds()
+        self._content_list_cycle = max(1, int(interval_seconds // scan_seconds))
+        self._content_list_counter = 0  # 0 => fetch on next cycle
         # Enabled by default - thumbnails are fetched for current artwork
         self._thumbnail_fetch_enabled = True
         self._thumbnail_failures = 0
@@ -362,7 +459,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             data["art_mode"] = "off"
             # Keep current_thumbnail_url from last known state (for Lovelace display)
             if self._has_current_thumbnail():
-                data["current_thumbnail_url"] = "/local/frame_art/current.jpg"
+                data["current_thumbnail_url"] = self.current_thumbnail_url
             # Keep artwork_count from previous data if available
             if self.data and self.data.get("artwork_count") is not None:
                 data["artwork_count"] = self.data["artwork_count"]
@@ -465,18 +562,30 @@ class FrameArtCoordinator(DataUpdateCoordinator):
 
             # If we have a saved thumbnail, use it
             if self._has_current_thumbnail():
-                data["current_thumbnail_url"] = "/local/frame_art/current.jpg"
+                data["current_thumbnail_url"] = self.current_thumbnail_url
 
-            # Get artwork count (less frequently, only if art_mode is on)
+            # Get artwork count (less frequently, only if art_mode is on).
+            # V7: throttle the expensive get_content_list call. We only hit
+            # the TV every N cycles (N derived from CONF_CONTENT_LIST_INTERVAL,
+            # default 5 min). In between, we keep the previously-known count.
             if data["art_mode"] == "on":
-                try:
-                    async with asyncio.timeout(15):
-                        artwork_list = await self._art_api.available()
-                        data["artwork_count"] = len(artwork_list) if artwork_list else 0
-                except asyncio.TimeoutError:
-                    _LOGGER.debug("Timeout getting artwork list")
-                except Exception as ex:
-                    _LOGGER.debug("Error getting artwork list: %s", ex)
+                if self._content_list_counter <= 0:
+                    try:
+                        async with asyncio.timeout(15):
+                            artwork_list = await self._art_api.available()
+                            data["artwork_count"] = (
+                                len(artwork_list) if artwork_list else 0
+                            )
+                            self._content_list_counter = self._content_list_cycle
+                    except asyncio.TimeoutError:
+                        _LOGGER.debug("Timeout getting artwork list")
+                    except Exception as ex:
+                        _LOGGER.debug("Error getting artwork list: %s", ex)
+                else:
+                    self._content_list_counter -= 1
+                    # Carry forward the previous count so the UI doesn't flicker
+                    if self.data and self.data.get("artwork_count") is not None:
+                        data["artwork_count"] = self.data["artwork_count"]
 
             # Get slideshow status with timeout
             try:
@@ -597,12 +706,16 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Could not get media_player art_mode_status: %s", ex)
         return None
 
+    @property
+    def current_thumbnail_url(self) -> str:
+        """Return the HA /local URL for this TV's current.jpg."""
+        return f"/local/frame_art/{self._entry.entry_id}/current.jpg"
+
     def _has_current_thumbnail(self) -> bool:
         """Check if current thumbnail file exists."""
         import os
 
-        www_path = self._hass.config.path("www", "frame_art", "current.jpg")
-        return os.path.isfile(www_path)
+        return os.path.isfile(os.path.join(self._tv_dir, "current.jpg"))
 
     def _create_drm_placeholder(self) -> bytes:
         """Create a DRM Protected placeholder image.
@@ -728,22 +841,22 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         try:
             import os
 
-            www_path = self._hass.config.path("www", "frame_art")
+            tv_dir = self._tv_dir
 
             def _write_placeholder():
-                os.makedirs(www_path, exist_ok=True)
+                os.makedirs(tv_dir, exist_ok=True)
 
                 # Create a simple text file as placeholder indicator
                 # and a dark image
                 placeholder_data = self._create_drm_placeholder()
 
                 # Save as current.jpg (actually PNG but browsers handle it)
-                file_path = os.path.join(www_path, "current.jpg")
+                file_path = os.path.join(tv_dir, "current.jpg")
                 with open(file_path, "wb") as f:
                     f.write(placeholder_data)
 
                 # Save DRM marker file
-                drm_marker = os.path.join(www_path, "current_drm.txt")
+                drm_marker = os.path.join(tv_dir, "current_drm.txt")
                 with open(drm_marker, "w") as f:
                     f.write(f"DRM Protected: {content_id}\n")
 
@@ -780,24 +893,33 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 )
 
                 if thumbnail_data and len(thumbnail_data) > 1:
-                    www_path = self._hass.config.path("www", "frame_art")
+                    tv_dir = self._tv_dir
+                    # V7: personal images in personal/, store in store/, rest in other/
+                    if content_id.startswith("MY_F"):
+                        subdir = "personal"
+                    elif content_id.startswith("SAM-"):
+                        subdir = "store"
+                    else:
+                        subdir = "other"
 
                     def _write_thumbnails():
-                        os.makedirs(www_path, exist_ok=True)
+                        os.makedirs(tv_dir, exist_ok=True)
+                        sub_path = os.path.join(tv_dir, subdir)
+                        os.makedirs(sub_path, exist_ok=True)
 
                         # Remove DRM marker if it exists
-                        drm_marker = os.path.join(www_path, "current_drm.txt")
+                        drm_marker = os.path.join(tv_dir, "current_drm.txt")
                         if os.path.exists(drm_marker):
                             os.remove(drm_marker)
 
                         # Save as current.jpg
-                        file_path = os.path.join(www_path, "current.jpg")
+                        file_path = os.path.join(tv_dir, "current.jpg")
                         with open(file_path, "wb") as f:
                             f.write(thumbnail_data)
 
-                        # Also save with content_id name for gallery
+                        # Also save with content_id name in the appropriate subdir
                         content_file = f"{content_id.replace(':', '_')}.jpg"
-                        content_path = os.path.join(www_path, content_file)
+                        content_path = os.path.join(sub_path, content_file)
                         with open(content_path, "wb") as f:
                             f.write(thumbnail_data)
 
@@ -891,7 +1013,12 @@ class FrameArtSensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the state attributes."""
-        attrs = {}
+        # V7: expose the entry_id and thumbnail folder so users can configure
+        # their gallery card with the right path (one per TV).
+        attrs = {
+            "entry_id": self._entry.entry_id,
+            "thumbnail_folder": f"/local/frame_art/{self._entry.entry_id}",
+        }
 
         if self.coordinator.data:
             data = self.coordinator.data
@@ -1177,12 +1304,20 @@ class FrameArtSensor(CoordinatorEntity, SensorEntity):
             if thumbnail_data:
                 import os
 
-                www_path = self.hass.config.path("www", "frame_art")
+                tv_dir = self.coordinator._tv_dir
+                entry_id = self.coordinator._entry.entry_id
+                if content_id.startswith("MY_F"):
+                    subdir = "personal"
+                elif content_id.startswith("SAM-"):
+                    subdir = "store"
+                else:
+                    subdir = "other"
+                sub_path = os.path.join(tv_dir, subdir)
 
                 def _write_thumbnail():
-                    os.makedirs(www_path, exist_ok=True)
+                    os.makedirs(sub_path, exist_ok=True)
                     file_name = f"{content_id.replace(':', '_')}.jpg"
-                    file_path = os.path.join(www_path, file_name)
+                    file_path = os.path.join(sub_path, file_name)
                     with open(file_path, "wb") as f:
                         f.write(thumbnail_data)
                     return file_name
@@ -1193,7 +1328,7 @@ class FrameArtSensor(CoordinatorEntity, SensorEntity):
                     "service": "get_thumbnail",
                     "success": True,
                     "content_id": content_id,
-                    "thumbnail_url": f"/local/frame_art/{file_name}",
+                    "thumbnail_url": f"/local/frame_art/{entry_id}/{subdir}/{file_name}",
                     "size": len(thumbnail_data),
                 }
             else:

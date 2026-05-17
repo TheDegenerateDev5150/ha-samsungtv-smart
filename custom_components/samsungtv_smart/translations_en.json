@@ -160,7 +160,8 @@
           "ext_power_entity": "External Power Entity",
           "use_mute_check": "Use Mute State for Power Detection",
           "dump_apps": "Debug: Dump Applications",
-          "toggle_art_mode": "Toggle Art Mode on Power"
+          "toggle_art_mode": "Toggle Art Mode on Power",
+          "content_list_interval": "Frame Art: content list refresh interval (seconds)"
         }
       },
       "save_exit": {

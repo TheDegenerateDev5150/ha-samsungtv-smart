@@ -145,7 +145,8 @@
           "power_on_delay": "Seconds to delay power ON status",
           "ping_port": "Ping Port (0 = auto)",
           "ext_power_entity": "External Power Entity",
-          "toggle_art_mode": "Toggle Art Mode on Power"
+          "toggle_art_mode": "Toggle Art Mode on Power",
+          "content_list_interval": "Frame Art: content list refresh interval (seconds)"
         }
       },
       "sync_ent": {

@@ -13,7 +13,7 @@
  * Usage Example:
  * type: custom:folder-gallery-card
  * title: My Art Gallery
- * folder: /local/frame_art/personal
+ * folder: /local/frame_art/{entry_id}/personal
  * columns: 4
  * image_height: 150px
  * action:
@@ -118,7 +118,7 @@ class FolderGalleryCard extends HTMLElement {
         
         if (Array.isArray(fileList) && fileList.length > 0) {
           this._images = fileList.map(f => {
-            // f = "/config/www/frame_art/store/SAM-S100808.jpg"
+            // f = "/config/www/frame_art/{entry_id}/store/SAM-S100808.jpg"
             // On veut juste "SAM-S100808.jpg"
             const fullPath = String(f);
             const filename = fullPath.match(/[^\/]+$/)?.[0] || fullPath;
