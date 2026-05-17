@@ -33,21 +33,55 @@ The `entry_id` is a 32-character hex string. To find yours, open Developer Tools
 - `entry_id` - the unique identifier for this TV
 - `thumbnail_folder` - the full `/local/...` path you can use in Lovelace cards
 
-### Lovelace card configuration
+### Post-migration checklist
 
-If you use the bundled `folder-gallery-card.js`, update the `folder:` option in your card config:
+After upgrading, three things in your configuration may need updating because they reference the old flat path. Use the `entry_id` attribute exposed on the `sensor.<tv_name>_frame_art` entity (Developer Tools -> States) to find your per-TV identifier.
 
-**Before:**
+**1. Lovelace gallery cards** (the bundled `folder-gallery-card.js` or any `custom:folder-gallery-card`):
+
 ```yaml
+# Before
 type: custom:folder-gallery-card
 folder: /local/frame_art/personal
-```
 
-**After (replace `YOUR_ENTRY_ID` with your actual entry_id):**
-```yaml
+# After (replace YOUR_ENTRY_ID with the value from the sensor attribute)
 type: custom:folder-gallery-card
 folder: /local/frame_art/YOUR_ENTRY_ID/personal
 ```
+
+**2. `local_file` cameras** declared in `configuration.yaml`:
+
+```yaml
+# Before
+camera:
+  - platform: local_file
+    name: Frame art Thumbnail
+    file_path: /config/www/frame_art/current.jpg
+
+# After
+camera:
+  - platform: local_file
+    name: Frame art Thumbnail
+    file_path: /config/www/frame_art/YOUR_ENTRY_ID/current.jpg
+```
+
+**3. `folder` sensors** (the HA `folder` integration, if you've added one to watch the thumbnail directory):
+
+```yaml
+# Before
+sensor:
+  - platform: folder
+    folder: /config/www/frame_art
+
+# After
+sensor:
+  - platform: folder
+    folder: /config/www/frame_art/YOUR_ENTRY_ID
+```
+
+Note that HA may require you to allowlist the new path under `homeassistant.allowlist_external_dirs` if you had the old one allowlisted.
+
+After updating, restart Home Assistant and the warnings about missing `/config/www/frame_art/current.jpg` will stop.
 
 ### Automatic migration
 
@@ -71,7 +105,11 @@ The Frame Art sensor itself still refreshes every 15 seconds for cheap state (cu
 
 ## Breaking changes
 
-- Lovelace cards pointing to `/local/frame_art/personal/` (or similar without the entry_id) need to be updated. See above.
+The thumbnail folder layout changed from flat to per-TV. Anything in your HA configuration that references `/config/www/frame_art/` (or `/local/frame_art/` for URLs) needs to be updated to include the per-TV `entry_id`. See the post-migration checklist above. Specifically affected:
+
+- Lovelace cards (gallery card or any other card displaying thumbnails)
+- `local_file` camera entities in `configuration.yaml`
+- `folder` sensor entities in `configuration.yaml`
 
 ## Bug fixes carried forward from 6.13.x
 
