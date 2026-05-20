@@ -42,13 +42,13 @@ class FolderGalleryCard extends HTMLElement {
   }
 
   setConfig(config) {
-    if (!config.folder) {
-      throw new Error('You need to define a folder');
+    if (!config.folder && !config.sensor && !config.folder_sensor && !config.image_list) {
+      throw new Error('You need to define at least one of: folder, sensor, folder_sensor, or image_list');
     }
     
     this._config = {
       title: config.title || '',
-      folder: config.folder,
+      folder: config.folder || null,
       columns: config.columns || 4,
       image_height: config.image_height || '150px',
       aspect_ratio: config.aspect_ratio || null, // e.g., "1" for square, "16/9" for landscape, "3/4" for portrait
@@ -104,6 +104,29 @@ class FolderGalleryCard extends HTMLElement {
   updateImages() {
     if (!this._hass) return;
     
+    // Determine the folder URL once for all branches below.
+    // Priority order:
+    //   1. Explicit `config.folder` (URL path, e.g. /local/...)
+    //   2. Derived from the sensor's `path` attribute when it lives under
+    //      /config/www/ (typical HA `platform: folder` setup), by mapping
+    //      /config/www/... → /local/...
+    // If neither yields a usable URL, `folder` stays empty and per-image
+    // fallbacks may apply below (image_list with absolute URLs, etc.).
+    let folder = (this._config.folder || '').replace(/\/+$/, '');
+    if (!folder) {
+      const sensorEntity = this._config.folder_sensor || this._config.sensor;
+      if (sensorEntity) {
+        const sensorPath = this._hass.states[sensorEntity]?.attributes?.path;
+        if (typeof sensorPath === 'string') {
+          const cleaned = sensorPath.replace(/\/+$/, '');
+          if (cleaned.startsWith('/config/www/')) {
+            folder = cleaned.replace(/^\/config\/www\//, '/local/');
+            console.log('[FolderGallery] Auto-derived folder URL from sensor:', folder);
+          }
+        }
+      }
+    }
+    
     let images = [];
     
     // Priority 1: folder_sensor (platform: folder)
@@ -113,9 +136,6 @@ class FolderGalleryCard extends HTMLElement {
         let fileList = folderState.attributes.file_list;
         
         console.log('[FolderGallery] folder_sensor file_list:', fileList, 'type:', typeof fileList, 'isArray:', Array.isArray(fileList));
-        
-        // Ensure folder path doesn't have trailing slash
-        const folder = (this._config.folder || '').replace(/\/+$/, '');
         
         // Convert to array if needed
         if (typeof fileList === 'string') {
@@ -157,7 +177,6 @@ class FolderGalleryCard extends HTMLElement {
         // about the YAML-only `folder_sensor` parameter.
         let fileList = sensorState.attributes.file_list;
         if (fileList !== undefined) {
-          const folder = (this._config.folder || '').replace(/\/+$/, '');
           if (typeof fileList === 'string') {
             fileList = fileList.split(',').map(f => f.trim()).filter(f => f);
           }
@@ -191,8 +210,8 @@ class FolderGalleryCard extends HTMLElement {
       images = this._config.image_list;
     }
 
-    // Normalize image format for methods 2 & 3
-    const folder = (this._config.folder || '').replace(/\/+$/, '');
+    // Normalize image format for methods 2 & 3 (uses the outer `folder`
+    // computed at the top of updateImages, which may be explicit or derived)
     
     this._images = images.map(img => {
       if (typeof img === 'string') {
