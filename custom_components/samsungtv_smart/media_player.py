@@ -2654,6 +2654,30 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             if content_id:
                 _LOGGER.info("Frame Art: Upload successful, content_id=%s", content_id)
 
+                # Post-upload phantom action: nudge the TV's art subsystem so
+                # it finalizes indexing of the freshly uploaded image. Without
+                # this, get_thumbnail() returns "No thumbnail data received"
+                # for several seconds (sometimes minutes) after upload — the
+                # TV serves the new thumbnail only after some art-API
+                # interaction has occurred. Listing personal artwork
+                # (category MY-C0002) forces enumeration of MY-* IDs which
+                # appears to trigger the thumbnail-readiness path. Done
+                # synchronously so that the caller can immediately invoke
+                # art_get_thumbnail on the returned content_id and succeed.
+                try:
+                    await asyncio.sleep(2)
+                    await self._art_api.available(category="MY-C0002")
+                    _LOGGER.debug(
+                        "Frame Art: Post-upload phantom action completed for %s",
+                        content_id,
+                    )
+                except Exception as ex:
+                    _LOGGER.debug(
+                        "Frame Art: Post-upload phantom action failed "
+                        "(non-fatal): %s",
+                        ex,
+                    )
+
                 # Force immediate update 🚀
                 await self._force_art_coordinator_refresh()
 
