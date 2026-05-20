@@ -2678,6 +2678,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                         await self._art_api.select_image(
                             current_id, category=None, show=True
                         )
+                        await asyncio.sleep(1.5)
                         _LOGGER.debug(
                             "Frame Art: Post-upload nudge (re-selected current %s) for upload %s",
                             current_id,
