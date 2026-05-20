@@ -70,24 +70,30 @@ class FolderGalleryCard extends HTMLElement {
   set hass(hass) {
     const oldHass = this._hass;
     this._hass = hass;
-    
-    // Anti-flicker: Only update if folder_sensor state actually changed
-    if (this._config.folder_sensor && oldHass) {
-      const oldState = oldHass.states[this._config.folder_sensor];
-      const newState = hass.states[this._config.folder_sensor];
-      
-      // Compare file_list attribute to detect real changes
-      const oldFiles = oldState?.attributes?.file_list;
-      const newFiles = newState?.attributes?.file_list;
-      
-      // Skip re-render if file_list is unchanged (prevents flickering)
-      if (JSON.stringify(oldFiles) === JSON.stringify(newFiles)) {
+
+    // Anti-flicker: skip re-render if the configured sensor's data hasn't
+    // changed. Considers both `folder_sensor` (YAML) and `sensor` (visual
+    // editor writes here), and compares all attributes the card consumes.
+    const sensorEntity = this._config.folder_sensor || this._config.sensor;
+    if (sensorEntity && oldHass) {
+      const buildKey = (attrs) => attrs ? JSON.stringify({
+        file_list: attrs.file_list,
+        images: attrs.images,
+        thumbnails: attrs.thumbnails,
+        items: attrs.items
+      }) : null;
+
+      const oldKey = buildKey(oldHass.states[sensorEntity]?.attributes);
+      const newKey = buildKey(hass.states[sensorEntity]?.attributes);
+
+      // Skip re-render if no relevant attribute changed (prevents flickering)
+      if (oldKey === newKey) {
         return; // No changes detected, skip expensive re-render
       }
-      
-      console.log('[FolderGallery] file_list changed, updating gallery');
+
+      console.log('[FolderGallery] sensor data changed, updating gallery');
     }
-    
+
     this.updateImages();
   }
 
@@ -141,11 +147,39 @@ class FolderGalleryCard extends HTMLElement {
       }
     }
     
-    // Priority 2: sensor with images/file_list/thumbnails attribute
+    // Priority 2: sensor (auto-detect folder platform vs custom attribute)
     if (this._config.sensor) {
       const sensorState = this._hass.states[this._config.sensor];
       if (sensorState && sensorState.attributes) {
-        images = sensorState.attributes.images || 
+        // First, treat it as a folder platform sensor if file_list exists.
+        // This lets users wire `sensor.<folder>` directly from the visual
+        // editor (which writes to `config.sensor`) without having to know
+        // about the YAML-only `folder_sensor` parameter.
+        let fileList = sensorState.attributes.file_list;
+        if (fileList !== undefined) {
+          const folder = (this._config.folder || '').replace(/\/+$/, '');
+          if (typeof fileList === 'string') {
+            fileList = fileList.split(',').map(f => f.trim()).filter(f => f);
+          }
+          if (Array.isArray(fileList) && fileList.length > 0) {
+            this._images = fileList.map(f => {
+              const fullPath = String(f);
+              const filename = fullPath.match(/[^\/]+$/)?.[0] || fullPath;
+              const content_id = filename.replace(/\.[^/.]+$/, '');
+              return {
+                path: `${folder}/${filename}`,
+                filename: filename,
+                name: content_id,
+                content_id: content_id
+              };
+            });
+            console.log('[FolderGallery] sensor (folder platform) processed', this._images.length, 'images');
+            this.renderGallery();
+            return;
+          }
+        }
+        // Fallback: generic sensor with images/thumbnails/items attribute
+        images = sensorState.attributes.images ||
                  sensorState.attributes.thumbnails ||
                  sensorState.attributes.items ||
                  [];
@@ -739,7 +773,7 @@ class FolderGalleryCardEditor extends HTMLElement {
       
       <div class="form-row">
         <label>Sensor (provides image list)</label>
-        <input type="text" id="sensor" value="${this._config.sensor || ''}" placeholder="sensor.my_images">
+        <input type="text" id="sensor" value="${this._config.sensor || ''}" placeholder="sensor.your_folder_sensor">
       </div>
       
       <div class="form-row">
@@ -792,7 +826,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c FOLDER-GALLERY-CARD %c v1.1.0 ',
+  '%c FOLDER-GALLERY-CARD %c v1.2.0 ',
   'color: white; background: #03a9f4; font-weight: bold;',
   'color: #03a9f4; background: white; font-weight: bold;'
 );
