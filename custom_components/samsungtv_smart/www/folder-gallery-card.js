@@ -13,7 +13,7 @@
  * Usage Example:
  * type: custom:folder-gallery-card
  * title: My Art Gallery
- * folder: /local/frame_art/personal
+ * folder: /local/frame_art/{entry_id}/personal
  * columns: 4
  * image_height: 150px
  * action:
@@ -42,13 +42,13 @@ class FolderGalleryCard extends HTMLElement {
   }
 
   setConfig(config) {
-    if (!config.folder) {
-      throw new Error('You need to define a folder');
+    if (!config.folder && !config.sensor && !config.folder_sensor && !config.image_list) {
+      throw new Error('You need to define at least one of: folder, sensor, folder_sensor, or image_list');
     }
     
     this._config = {
       title: config.title || '',
-      folder: config.folder,
+      folder: config.folder || null,
       columns: config.columns || 4,
       image_height: config.image_height || '150px',
       aspect_ratio: config.aspect_ratio || null, // e.g., "1" for square, "16/9" for landscape, "3/4" for portrait
@@ -70,24 +70,30 @@ class FolderGalleryCard extends HTMLElement {
   set hass(hass) {
     const oldHass = this._hass;
     this._hass = hass;
-    
-    // Anti-flicker: Only update if folder_sensor state actually changed
-    if (this._config.folder_sensor && oldHass) {
-      const oldState = oldHass.states[this._config.folder_sensor];
-      const newState = hass.states[this._config.folder_sensor];
-      
-      // Compare file_list attribute to detect real changes
-      const oldFiles = oldState?.attributes?.file_list;
-      const newFiles = newState?.attributes?.file_list;
-      
-      // Skip re-render if file_list is unchanged (prevents flickering)
-      if (JSON.stringify(oldFiles) === JSON.stringify(newFiles)) {
+
+    // Anti-flicker: skip re-render if the configured sensor's data hasn't
+    // changed. Considers both `folder_sensor` (YAML) and `sensor` (visual
+    // editor writes here), and compares all attributes the card consumes.
+    const sensorEntity = this._config.folder_sensor || this._config.sensor;
+    if (sensorEntity && oldHass) {
+      const buildKey = (attrs) => attrs ? JSON.stringify({
+        file_list: attrs.file_list,
+        images: attrs.images,
+        thumbnails: attrs.thumbnails,
+        items: attrs.items
+      }) : null;
+
+      const oldKey = buildKey(oldHass.states[sensorEntity]?.attributes);
+      const newKey = buildKey(hass.states[sensorEntity]?.attributes);
+
+      // Skip re-render if no relevant attribute changed (prevents flickering)
+      if (oldKey === newKey) {
         return; // No changes detected, skip expensive re-render
       }
-      
-      console.log('[FolderGallery] file_list changed, updating gallery');
+
+      console.log('[FolderGallery] sensor data changed, updating gallery');
     }
-    
+
     this.updateImages();
   }
 
@@ -97,6 +103,29 @@ class FolderGalleryCard extends HTMLElement {
 
   updateImages() {
     if (!this._hass) return;
+    
+    // Determine the folder URL once for all branches below.
+    // Priority order:
+    //   1. Explicit `config.folder` (URL path, e.g. /local/...)
+    //   2. Derived from the sensor's `path` attribute when it lives under
+    //      /config/www/ (typical HA `platform: folder` setup), by mapping
+    //      /config/www/... → /local/...
+    // If neither yields a usable URL, `folder` stays empty and per-image
+    // fallbacks may apply below (image_list with absolute URLs, etc.).
+    let folder = (this._config.folder || '').replace(/\/+$/, '');
+    if (!folder) {
+      const sensorEntity = this._config.folder_sensor || this._config.sensor;
+      if (sensorEntity) {
+        const sensorPath = this._hass.states[sensorEntity]?.attributes?.path;
+        if (typeof sensorPath === 'string') {
+          const cleaned = sensorPath.replace(/\/+$/, '');
+          if (cleaned.startsWith('/config/www/')) {
+            folder = cleaned.replace(/^\/config\/www\//, '/local/');
+            console.log('[FolderGallery] Auto-derived folder URL from sensor:', folder);
+          }
+        }
+      }
+    }
     
     let images = [];
     
@@ -108,9 +137,6 @@ class FolderGalleryCard extends HTMLElement {
         
         console.log('[FolderGallery] folder_sensor file_list:', fileList, 'type:', typeof fileList, 'isArray:', Array.isArray(fileList));
         
-        // Ensure folder path doesn't have trailing slash
-        const folder = (this._config.folder || '').replace(/\/+$/, '');
-        
         // Convert to array if needed
         if (typeof fileList === 'string') {
           fileList = fileList.split(',').map(f => f.trim()).filter(f => f);
@@ -118,7 +144,7 @@ class FolderGalleryCard extends HTMLElement {
         
         if (Array.isArray(fileList) && fileList.length > 0) {
           this._images = fileList.map(f => {
-            // f = "/config/www/frame_art/store/SAM-S100808.jpg"
+            // f = "/config/www/frame_art/{entry_id}/store/SAM-S100808.jpg"
             // On veut juste "SAM-S100808.jpg"
             const fullPath = String(f);
             const filename = fullPath.match(/[^\/]+$/)?.[0] || fullPath;
@@ -141,11 +167,38 @@ class FolderGalleryCard extends HTMLElement {
       }
     }
     
-    // Priority 2: sensor with images/file_list/thumbnails attribute
+    // Priority 2: sensor (auto-detect folder platform vs custom attribute)
     if (this._config.sensor) {
       const sensorState = this._hass.states[this._config.sensor];
       if (sensorState && sensorState.attributes) {
-        images = sensorState.attributes.images || 
+        // First, treat it as a folder platform sensor if file_list exists.
+        // This lets users wire `sensor.<folder>` directly from the visual
+        // editor (which writes to `config.sensor`) without having to know
+        // about the YAML-only `folder_sensor` parameter.
+        let fileList = sensorState.attributes.file_list;
+        if (fileList !== undefined) {
+          if (typeof fileList === 'string') {
+            fileList = fileList.split(',').map(f => f.trim()).filter(f => f);
+          }
+          if (Array.isArray(fileList) && fileList.length > 0) {
+            this._images = fileList.map(f => {
+              const fullPath = String(f);
+              const filename = fullPath.match(/[^\/]+$/)?.[0] || fullPath;
+              const content_id = filename.replace(/\.[^/.]+$/, '');
+              return {
+                path: `${folder}/${filename}`,
+                filename: filename,
+                name: content_id,
+                content_id: content_id
+              };
+            });
+            console.log('[FolderGallery] sensor (folder platform) processed', this._images.length, 'images');
+            this.renderGallery();
+            return;
+          }
+        }
+        // Fallback: generic sensor with images/thumbnails/items attribute
+        images = sensorState.attributes.images ||
                  sensorState.attributes.thumbnails ||
                  sensorState.attributes.items ||
                  [];
@@ -157,8 +210,8 @@ class FolderGalleryCard extends HTMLElement {
       images = this._config.image_list;
     }
 
-    // Normalize image format for methods 2 & 3
-    const folder = (this._config.folder || '').replace(/\/+$/, '');
+    // Normalize image format for methods 2 & 3 (uses the outer `folder`
+    // computed at the top of updateImages, which may be explicit or derived)
     
     this._images = images.map(img => {
       if (typeof img === 'string') {
@@ -739,7 +792,7 @@ class FolderGalleryCardEditor extends HTMLElement {
       
       <div class="form-row">
         <label>Sensor (provides image list)</label>
-        <input type="text" id="sensor" value="${this._config.sensor || ''}" placeholder="sensor.my_images">
+        <input type="text" id="sensor" value="${this._config.sensor || ''}" placeholder="sensor.your_folder_sensor">
       </div>
       
       <div class="form-row">
@@ -792,7 +845,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c FOLDER-GALLERY-CARD %c v1.1.0 ',
+  '%c FOLDER-GALLERY-CARD %c v1.2.0 ',
   'color: white; background: #03a9f4; font-weight: bold;',
   'color: #03a9f4; background: white; font-weight: bold;'
 );
