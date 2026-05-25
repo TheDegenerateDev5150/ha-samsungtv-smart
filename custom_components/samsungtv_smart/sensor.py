@@ -121,10 +121,10 @@ async def async_setup_entry(
             )
 
     if is_supported:
-        # Create www/frame_art directory if it doesn't exist
+        # Create www/frame_art/{entry_id} directory if it doesn't exist
         import os
 
-        www_path = hass.config.path("www", "frame_art")
+        www_path = hass.config.path("www", "frame_art", entry.entry_id)
         try:
             os.makedirs(www_path, exist_ok=True)
             _LOGGER.debug("Frame Art directory ready: %s", www_path)
@@ -362,7 +362,9 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             data["art_mode"] = "off"
             # Keep current_thumbnail_url from last known state (for Lovelace display)
             if self._has_current_thumbnail():
-                data["current_thumbnail_url"] = "/local/frame_art/current.jpg"
+                data["current_thumbnail_url"] = (
+                    f"/local/frame_art/{self._entry.entry_id}/current.jpg"
+                )
             # Keep artwork_count from previous data if available
             if self.data and self.data.get("artwork_count") is not None:
                 data["artwork_count"] = self.data["artwork_count"]
@@ -465,7 +467,9 @@ class FrameArtCoordinator(DataUpdateCoordinator):
 
             # If we have a saved thumbnail, use it
             if self._has_current_thumbnail():
-                data["current_thumbnail_url"] = "/local/frame_art/current.jpg"
+                data["current_thumbnail_url"] = (
+                    f"/local/frame_art/{self._entry.entry_id}/current.jpg"
+                )
 
             # Get artwork count (less frequently, only if art_mode is on)
             if data["art_mode"] == "on":
@@ -601,7 +605,9 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         """Check if current thumbnail file exists."""
         import os
 
-        www_path = self._hass.config.path("www", "frame_art", "current.jpg")
+        www_path = self._hass.config.path(
+            "www", "frame_art", self._entry.entry_id, "current.jpg"
+        )
         return os.path.isfile(www_path)
 
     def _create_error_placeholder(self) -> bytes:
@@ -744,10 +750,9 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         try:
             import os
 
-            www_path = self._hass.config.path("www", "frame_art")
+            www_path = self._hass.config.path("www", "frame_art", self._entry.entry_id)
 
             def _write_placeholder():
-                os.makedirs(www_path, exist_ok=True)
 
                 # Create a simple text file as placeholder indicator
                 # and a dark image
@@ -867,7 +872,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
 
         if thumbnail_data:
             # Success - save the thumbnail and clear any error markers
-            www_path = self._hass.config.path("www", "frame_art")
+            www_path = self._hass.config.path("www", "frame_art", self._entry.entry_id)
 
             def _write_thumbnails():
                 os.makedirs(www_path, exist_ok=True)
@@ -1255,7 +1260,9 @@ class FrameArtSensor(CoordinatorEntity, SensorEntity):
             if thumbnail_data:
                 import os
 
-                www_path = self.hass.config.path("www", "frame_art")
+                www_path = self.hass.config.path(
+                    "www", "frame_art", self._entry.entry_id
+                )
 
                 def _write_thumbnail():
                     os.makedirs(www_path, exist_ok=True)
@@ -1271,7 +1278,7 @@ class FrameArtSensor(CoordinatorEntity, SensorEntity):
                     "service": "get_thumbnail",
                     "success": True,
                     "content_id": content_id,
-                    "thumbnail_url": f"/local/frame_art/{file_name}",
+                    "thumbnail_url": f"/local/frame_art/{self._entry.entry_id}/{file_name}",
                     "size": len(thumbnail_data),
                 }
             else:
