@@ -39,16 +39,12 @@ from .const import (
     AUTH_METHOD_OAUTH,
     CONF_API_KEY,
     CONF_AUTH_METHOD,
-    CONF_CONTENT_LIST_INTERVAL,
     CONF_DEVICE_ID,
     CONF_IS_FRAME_TV,
     CONF_OAUTH_TOKEN,
-    CONF_SUPPORTS_GET_BRIGHTNESS,
-    CONF_SUPPORTS_GET_COLOR_TEMPERATURE,
     CONF_WS_NAME,
     DATA_ART_API,
     DATA_CFG,
-    DEFAULT_CONTENT_LIST_INTERVAL,
     DEFAULT_PORT,
     DOMAIN,
     WS_PREFIX,
@@ -58,52 +54,6 @@ _LOGGER = logging.getLogger(__name__)
 
 # Update interval for the Frame Art sensor (reduced for faster manual updates)
 SCAN_INTERVAL = timedelta(seconds=15)
-
-
-def _migrate_legacy_thumbnails(legacy_dir: str, tv_dir: str) -> None:
-    """Move pre-V7 flat thumbnails into the per-TV subdirectory.
-
-    Runs once per config entry, only when both:
-    - the old www/frame_art/current.jpg exists, and
-    - the new www/frame_art/{entry_id}/current.jpg does NOT exist.
-
-    Designed to be safe to call repeatedly: it's a no-op once migration is
-    done. Called from a worker thread (file I/O).
-    """
-    import os
-    import shutil
-
-    new_current = os.path.join(tv_dir, "current.jpg")
-    legacy_current = os.path.join(legacy_dir, "current.jpg")
-    if not os.path.isfile(legacy_current) or os.path.isfile(new_current):
-        return
-
-    _LOGGER.info(
-        "Frame Art: migrating legacy flat thumbnails to per-TV directory %s",
-        tv_dir,
-    )
-    try:
-        # Move every *.jpg in the legacy root into the TV dir.
-        # Known subdirectories (personal/, store/, other/) are moved wholesale.
-        # Anything else is left alone.
-        for item in os.listdir(legacy_dir):
-            src = os.path.join(legacy_dir, item)
-            dst = os.path.join(tv_dir, item)
-            if os.path.isfile(src) and src.endswith(".jpg"):
-                shutil.move(src, dst)
-            elif os.path.isdir(src) and item in ("personal", "store", "other"):
-                if not os.path.exists(dst):
-                    shutil.move(src, dst)
-        # Also move the DRM marker if present
-        drm_marker = os.path.join(legacy_dir, "current_drm.txt")
-        if os.path.isfile(drm_marker):
-            shutil.move(drm_marker, os.path.join(tv_dir, "current_drm.txt"))
-        _LOGGER.info("Frame Art: migration complete")
-    except Exception as ex:
-        _LOGGER.warning(
-            "Frame Art: migration failed, thumbnails may need manual move: %s",
-            ex,
-        )
 
 
 async def async_setup_entry(
@@ -171,50 +121,15 @@ async def async_setup_entry(
             )
 
     if is_supported:
-        # V7: per-TV thumbnail directory www/frame_art/{entry_id}/.
-        # Each config entry (i.e. each TV) gets its own subdirectory so that
-        # multi-Frame setups don't overwrite each other's current.jpg.
+        # Create www/frame_art directory if it doesn't exist
         import os
 
-        tv_dir = hass.config.path("www", "frame_art", entry.entry_id)
+        www_path = hass.config.path("www", "frame_art")
         try:
-            os.makedirs(tv_dir, exist_ok=True)
-            _LOGGER.debug("Frame Art directory ready: %s", tv_dir)
+            os.makedirs(www_path, exist_ok=True)
+            _LOGGER.debug("Frame Art directory ready: %s", www_path)
         except Exception as ex:
             _LOGGER.warning("Could not create frame_art directory: %s", ex)
-
-        # V7: migrate legacy flat layout if present
-        await hass.async_add_executor_job(
-            _migrate_legacy_thumbnails,
-            hass.config.path("www", "frame_art"),
-            tv_dir,
-        )
-
-        # V7: restore persisted brightness/color-temperature capability flags
-        # so we don't pay the per-cycle WS probe on TVs already known to
-        # not support those direct requests (e.g. Frame 2024).
-        supports_brightness = entry.data.get(CONF_SUPPORTS_GET_BRIGHTNESS)
-        supports_color_temp = entry.data.get(CONF_SUPPORTS_GET_COLOR_TEMPERATURE)
-        if supports_brightness is not None:
-            art_api._supports_get_brightness = supports_brightness
-        if supports_color_temp is not None:
-            art_api._supports_get_color_temperature = supports_color_temp
-
-        # Install a callback so art_api can persist newly-learned capabilities.
-        def _persist_capability(name: str, value: bool) -> None:
-            """Persist a learned capability flag into entry.data."""
-            if entry.data.get(name) == value:
-                return
-            hass.config_entries.async_update_entry(
-                entry, data={**entry.data, name: value}
-            )
-            _LOGGER.debug(
-                "Frame Art: persisted capability %s=%s in entry data",
-                name,
-                value,
-            )
-
-        art_api._capability_persist_callback = _persist_capability
 
         # Store art_api in hass.data for sharing with media_player
         hass.data[DOMAIN][entry.entry_id][DATA_ART_API] = art_api
@@ -389,18 +304,6 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         self._entry = entry
         self._hass = hass
         self._last_content_id: str | None = None
-        # V7: per-TV thumbnail root: www/frame_art/{entry_id}/
-        self._tv_dir: str = hass.config.path("www", "frame_art", entry.entry_id)
-        # V7: throttle the (expensive) get_content_list call. The user-facing
-        # cycle time comes from options (default 5 min). We translate it into
-        # a counter against SCAN_INTERVAL so the sensor keeps refreshing the
-        # cheap stuff (current_artwork, slideshow_status) every 15 s.
-        interval_seconds = entry.options.get(
-            CONF_CONTENT_LIST_INTERVAL, DEFAULT_CONTENT_LIST_INTERVAL
-        )
-        scan_seconds = SCAN_INTERVAL.total_seconds()
-        self._content_list_cycle = max(1, int(interval_seconds // scan_seconds))
-        self._content_list_counter = 0  # 0 => fetch on next cycle
         # Enabled by default - thumbnails are fetched for current artwork
         self._thumbnail_fetch_enabled = True
         self._thumbnail_failures = 0
@@ -459,7 +362,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             data["art_mode"] = "off"
             # Keep current_thumbnail_url from last known state (for Lovelace display)
             if self._has_current_thumbnail():
-                data["current_thumbnail_url"] = self.current_thumbnail_url
+                data["current_thumbnail_url"] = "/local/frame_art/current.jpg"
             # Keep artwork_count from previous data if available
             if self.data and self.data.get("artwork_count") is not None:
                 data["artwork_count"] = self.data["artwork_count"]
@@ -562,30 +465,18 @@ class FrameArtCoordinator(DataUpdateCoordinator):
 
             # If we have a saved thumbnail, use it
             if self._has_current_thumbnail():
-                data["current_thumbnail_url"] = self.current_thumbnail_url
+                data["current_thumbnail_url"] = "/local/frame_art/current.jpg"
 
-            # Get artwork count (less frequently, only if art_mode is on).
-            # V7: throttle the expensive get_content_list call. We only hit
-            # the TV every N cycles (N derived from CONF_CONTENT_LIST_INTERVAL,
-            # default 5 min). In between, we keep the previously-known count.
+            # Get artwork count (less frequently, only if art_mode is on)
             if data["art_mode"] == "on":
-                if self._content_list_counter <= 0:
-                    try:
-                        async with asyncio.timeout(15):
-                            artwork_list = await self._art_api.available()
-                            data["artwork_count"] = (
-                                len(artwork_list) if artwork_list else 0
-                            )
-                            self._content_list_counter = self._content_list_cycle
-                    except asyncio.TimeoutError:
-                        _LOGGER.debug("Timeout getting artwork list")
-                    except Exception as ex:
-                        _LOGGER.debug("Error getting artwork list: %s", ex)
-                else:
-                    self._content_list_counter -= 1
-                    # Carry forward the previous count so the UI doesn't flicker
-                    if self.data and self.data.get("artwork_count") is not None:
-                        data["artwork_count"] = self.data["artwork_count"]
+                try:
+                    async with asyncio.timeout(15):
+                        artwork_list = await self._art_api.available()
+                        data["artwork_count"] = len(artwork_list) if artwork_list else 0
+                except asyncio.TimeoutError:
+                    _LOGGER.debug("Timeout getting artwork list")
+                except Exception as ex:
+                    _LOGGER.debug("Error getting artwork list: %s", ex)
 
             # Get slideshow status with timeout
             try:
@@ -706,21 +597,20 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Could not get media_player art_mode_status: %s", ex)
         return None
 
-    @property
-    def current_thumbnail_url(self) -> str:
-        """Return the HA /local URL for this TV's current.jpg."""
-        return f"/local/frame_art/{self._entry.entry_id}/current.jpg"
-
     def _has_current_thumbnail(self) -> bool:
         """Check if current thumbnail file exists."""
         import os
 
-        return os.path.isfile(os.path.join(self._tv_dir, "current.jpg"))
+        www_path = self._hass.config.path("www", "frame_art", "current.jpg")
+        return os.path.isfile(www_path)
 
-    def _create_drm_placeholder(self) -> bytes:
-        """Create a DRM Protected placeholder image.
+    def _create_error_placeholder(self) -> bytes:
+        """Create a generic "download failed" placeholder image.
 
-        Creates a dark image with visual indication that content is DRM protected.
+        Creates a dark image indicating the thumbnail could not be downloaded.
+        This is NOT a DRM indicator: thumbnails themselves are never DRM
+        protected, so a failed download is always a transient transport error
+        (TV busy, WebSocket lag, etc.), not a content restriction.
         Uses PIL if available for better quality, otherwise creates a basic PNG.
         """
         try:
@@ -736,27 +626,30 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 [10, 10, width - 10, height - 10], outline=(60, 60, 70), width=2
             )
 
-            # Draw lock icon (simple representation)
-            lock_x, lock_y = width // 2, height // 2 - 30
-            # Lock body
+            # Draw warning/error icon (triangle with exclamation mark)
+            icon_x, icon_y = width // 2, height // 2 - 35
+            # Triangle outline
+            triangle = [
+                (icon_x, icon_y - 25),
+                (icon_x - 28, icon_y + 22),
+                (icon_x + 28, icon_y + 22),
+            ]
+            draw.polygon(triangle, fill=(80, 80, 90), outline=(180, 160, 90))
+            # Exclamation mark stem
             draw.rectangle(
-                [lock_x - 25, lock_y, lock_x + 25, lock_y + 40],
-                fill=(80, 80, 90),
-                outline=(100, 100, 110),
+                [icon_x - 2, icon_y - 10, icon_x + 2, icon_y + 8],
+                fill=(220, 200, 120),
             )
-            # Lock shackle
-            draw.arc(
-                [lock_x - 18, lock_y - 25, lock_x + 18, lock_y + 5],
-                0,
-                180,
-                fill=(100, 100, 110),
-                width=4,
+            # Exclamation mark dot
+            draw.rectangle(
+                [icon_x - 2, icon_y + 13, icon_x + 2, icon_y + 17],
+                fill=(220, 200, 120),
             )
 
             # Try to use a font, fall back to default
             try:
                 font_large = ImageFont.truetype(
-                    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 24
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22
                 )
                 font_small = ImageFont.truetype(
                     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14
@@ -766,18 +659,22 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 font_small = ImageFont.load_default()
 
             # Draw text
-            text1 = "DRM Protected"
-            text2 = "Art Store Content"
+            text1 = "Oops!"
+            text2 = "Something went wrong"
+            text3 = "downloading thumbnail"
 
             # Center text
             bbox1 = draw.textbbox((0, 0), text1, font=font_large)
             bbox2 = draw.textbbox((0, 0), text2, font=font_small)
+            bbox3 = draw.textbbox((0, 0), text3, font=font_small)
 
             x1 = (width - (bbox1[2] - bbox1[0])) // 2
             x2 = (width - (bbox2[2] - bbox2[0])) // 2
+            x3 = (width - (bbox3[2] - bbox3[0])) // 2
 
-            draw.text((x1, lock_y + 55), text1, fill=(200, 200, 210), font=font_large)
-            draw.text((x2, lock_y + 85), text2, fill=(140, 140, 150), font=font_small)
+            draw.text((x1, icon_y + 50), text1, fill=(220, 200, 120), font=font_large)
+            draw.text((x2, icon_y + 85), text2, fill=(200, 200, 210), font=font_small)
+            draw.text((x3, icon_y + 105), text3, fill=(200, 200, 210), font=font_small)
 
             # Save to bytes
             import io
@@ -836,144 +733,203 @@ class FrameArtCoordinator(DataUpdateCoordinator):
 
             return signature + ihdr + idat + iend
 
-    async def _save_drm_placeholder(self, content_id: str) -> None:
-        """Save a DRM placeholder image when thumbnail fetch fails due to DRM."""
+    async def _save_error_placeholder(self, content_id: str) -> None:
+        """Save a generic error placeholder image when thumbnail fetch fails.
+
+        This is called after all retry attempts have failed. The cause is
+        almost always a transient transport issue (TV busy, WebSocket lag,
+        Art API returning empty data), NOT DRM - thumbnails are never DRM
+        protected even when the underlying artwork is.
+        """
         try:
             import os
 
-            tv_dir = self._tv_dir
+            www_path = self._hass.config.path("www", "frame_art")
 
             def _write_placeholder():
-                os.makedirs(tv_dir, exist_ok=True)
+                os.makedirs(www_path, exist_ok=True)
 
                 # Create a simple text file as placeholder indicator
                 # and a dark image
-                placeholder_data = self._create_drm_placeholder()
+                placeholder_data = self._create_error_placeholder()
 
                 # Save as current.jpg (actually PNG but browsers handle it)
-                file_path = os.path.join(tv_dir, "current.jpg")
+                file_path = os.path.join(www_path, "current.jpg")
                 with open(file_path, "wb") as f:
                     f.write(placeholder_data)
 
-                # Save DRM marker file
-                drm_marker = os.path.join(tv_dir, "current_drm.txt")
-                with open(drm_marker, "w") as f:
-                    f.write(f"DRM Protected: {content_id}\n")
+                # Save error marker file
+                error_marker = os.path.join(www_path, "current_error.txt")
+                with open(error_marker, "w") as f:
+                    f.write(f"Thumbnail download failed: {content_id}\n")
+
+                # Clean up legacy DRM marker from previous versions, if any
+                legacy_marker = os.path.join(www_path, "current_drm.txt")
+                if os.path.exists(legacy_marker):
+                    try:
+                        os.remove(legacy_marker)
+                    except OSError:
+                        pass
 
                 return file_path
 
             await self._hass.async_add_executor_job(_write_placeholder)
-            _LOGGER.debug("Saved DRM placeholder for %s", content_id)
+            _LOGGER.debug("Saved error placeholder for %s", content_id)
 
         except Exception as ex:
-            _LOGGER.debug("Error saving DRM placeholder: %s", ex)
+            _LOGGER.debug("Error saving error placeholder: %s", ex)
 
     async def _fetch_and_save_thumbnail(self, content_id: str) -> None:
-        """Fetch and save thumbnail in background (non-blocking)."""
+        """Fetch and save thumbnail in background (non-blocking).
+
+        Uses retry logic to handle transient failures: the Samsung Art API
+        sometimes returns 0 bytes when the TV is busy or the WebSocket is
+        slow to respond. These are NOT DRM failures (thumbnails are never
+        DRM protected) - retrying after a short delay usually succeeds.
+        """
         import os
 
         _LOGGER.info("Frame Art: Starting thumbnail fetch for %s", content_id)
 
-        # Check if this is a Store image (SAM-S*) - these are DRM protected
-        is_store_image = content_id.startswith("SAM-S")
-        if is_store_image:
+        # Note: SAM-S* content is from the Art Store and the underlying
+        # artwork may be DRM-protected, but the thumbnail itself is never
+        # DRM-protected. A 0-byte response is always a transport failure.
+        if content_id.startswith("SAM-S"):
             _LOGGER.debug(
-                "Frame Art: %s is a Store image (may be DRM protected)", content_id
+                "Frame Art: %s is a Store image "
+                "(content may be DRM, thumbnail is not)",
+                content_id,
             )
 
-        try:
-            async with asyncio.timeout(20):  # Longer timeout for thumbnails
-                _LOGGER.debug("Frame Art: Calling get_thumbnail API for %s", content_id)
-                thumbnail_data = await self._art_api.get_thumbnail(content_id)
+        # Retry logic: up to 3 attempts with progressive delays.
+        # Delays are between attempts (no delay after the final attempt).
+        max_retries = 3
+        retry_delays = [1, 2, 5]  # seconds
+        thumbnail_data = None
+        last_error = None
 
-                _LOGGER.info(
-                    "Frame Art: get_thumbnail returned %d bytes for %s",
-                    len(thumbnail_data) if thumbnail_data else 0,
+        for attempt in range(max_retries):
+            try:
+                async with asyncio.timeout(15):
+                    _LOGGER.debug(
+                        "Frame Art: get_thumbnail attempt %d/%d for %s",
+                        attempt + 1,
+                        max_retries,
+                        content_id,
+                    )
+                    data = await self._art_api.get_thumbnail(content_id)
+                    received = len(data) if data else 0
+
+                    if data and received > 1:
+                        thumbnail_data = data
+                        _LOGGER.info(
+                            "Frame Art: get_thumbnail returned %d bytes for %s "
+                            "(attempt %d/%d)",
+                            received,
+                            content_id,
+                            attempt + 1,
+                            max_retries,
+                        )
+                        break
+
+                    # 0 (or 1) bytes - transient transport failure, will retry
+                    last_error = f"got {received} bytes"
+                    _LOGGER.debug(
+                        "Frame Art: Empty thumbnail data for %s on attempt "
+                        "%d/%d (%s)",
+                        content_id,
+                        attempt + 1,
+                        max_retries,
+                        last_error,
+                    )
+
+            except asyncio.TimeoutError:
+                last_error = "timeout (15s)"
+                _LOGGER.debug(
+                    "Frame Art: Timeout on attempt %d/%d for %s",
+                    attempt + 1,
+                    max_retries,
                     content_id,
                 )
-
-                if thumbnail_data and len(thumbnail_data) > 1:
-                    tv_dir = self._tv_dir
-                    # V7: personal images in personal/, store in store/, rest in other/
-                    if content_id.startswith("MY_F"):
-                        subdir = "personal"
-                    elif content_id.startswith("SAM-"):
-                        subdir = "store"
-                    else:
-                        subdir = "other"
-
-                    def _write_thumbnails():
-                        os.makedirs(tv_dir, exist_ok=True)
-                        sub_path = os.path.join(tv_dir, subdir)
-                        os.makedirs(sub_path, exist_ok=True)
-
-                        # Remove DRM marker if it exists
-                        drm_marker = os.path.join(tv_dir, "current_drm.txt")
-                        if os.path.exists(drm_marker):
-                            os.remove(drm_marker)
-
-                        # Save as current.jpg
-                        file_path = os.path.join(tv_dir, "current.jpg")
-                        with open(file_path, "wb") as f:
-                            f.write(thumbnail_data)
-
-                        # Also save with content_id name in the appropriate subdir
-                        content_file = f"{content_id.replace(':', '_')}.jpg"
-                        content_path = os.path.join(sub_path, content_file)
-                        with open(content_path, "wb") as f:
-                            f.write(thumbnail_data)
-
-                        _LOGGER.info("Frame Art: Written thumbnail to %s", file_path)
-                        return file_path, content_path
-
-                    # Run file I/O in executor to avoid blocking
-                    await self._hass.async_add_executor_job(_write_thumbnails)
-
-                    _LOGGER.info(
-                        "Frame Art: Successfully saved thumbnail for %s", content_id
-                    )
-                    self._thumbnail_failures = 0
-
-                    # Trigger state update
-                    self.async_set_updated_data(self.data)
-                else:
-                    # No data or empty data - likely DRM protected
-                    _LOGGER.info(
-                        "Frame Art: No thumbnail data for %s (got %d bytes, DRM protected?)",
-                        content_id,
-                        len(thumbnail_data) if thumbnail_data else 0,
-                    )
-                    await self._save_drm_placeholder(content_id)
-
-        except asyncio.TimeoutError:
-            self._thumbnail_failures += 1
-            _LOGGER.warning(
-                "Frame Art: Timeout fetching thumbnail for %s (failure %d/3)",
-                content_id,
-                self._thumbnail_failures,
-            )
-
-            # For store images, save DRM placeholder instead of backing off
-            if is_store_image:
-                await self._save_drm_placeholder(content_id)
-            elif self._thumbnail_failures >= 3:
-                # Temporary backoff: pause automatic thumbnail fetch for 5 minutes,
-                # then retry. This prevents hammering the TV during startup or
-                # connectivity issues while still recovering automatically.
-                self._thumbnail_backoff_until = time.time() + 300  # 5 minutes
-                _LOGGER.warning(
-                    "Frame Art: Too many thumbnail timeouts (%d), pausing automatic "
-                    "fetch for 5 minutes. Will retry automatically.",
-                    self._thumbnail_failures,
+            except Exception as ex:
+                last_error = str(ex)
+                _LOGGER.debug(
+                    "Frame Art: Error on attempt %d/%d for %s: %s",
+                    attempt + 1,
+                    max_retries,
+                    content_id,
+                    ex,
                 )
 
-        except Exception as ex:
+            # Wait before next attempt (skipped after the last attempt)
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delays[attempt])
+
+        if thumbnail_data:
+            # Success - save the thumbnail and clear any error markers
+            www_path = self._hass.config.path("www", "frame_art")
+
+            def _write_thumbnails():
+                os.makedirs(www_path, exist_ok=True)
+
+                # Remove any stale error/DRM markers (legacy and current)
+                for marker_name in ("current_error.txt", "current_drm.txt"):
+                    marker_path = os.path.join(www_path, marker_name)
+                    if os.path.exists(marker_path):
+                        try:
+                            os.remove(marker_path)
+                        except OSError:
+                            pass
+
+                # Save as current.jpg
+                file_path = os.path.join(www_path, "current.jpg")
+                with open(file_path, "wb") as f:
+                    f.write(thumbnail_data)
+
+                # Also save with content_id name for gallery
+                content_file = f"{content_id.replace(':', '_')}.jpg"
+                content_path = os.path.join(www_path, content_file)
+                with open(content_path, "wb") as f:
+                    f.write(thumbnail_data)
+
+                _LOGGER.info("Frame Art: Written thumbnail to %s", file_path)
+                return file_path, content_path
+
+            # Run file I/O in executor to avoid blocking
+            await self._hass.async_add_executor_job(_write_thumbnails)
+
+            _LOGGER.info("Frame Art: Successfully saved thumbnail for %s", content_id)
+            self._thumbnail_failures = 0
+
+            # Trigger state update
+            self.async_set_updated_data(self.data)
+            return
+
+        # All retries failed - save generic error placeholder.
+        # This is NOT a DRM situation: thumbnails are never DRM protected.
+        # The cause is a transient transport failure (TV busy, WebSocket
+        # lag, Art API returning empty). The placeholder is overwritten
+        # automatically next time the fetch succeeds.
+        self._thumbnail_failures += 1
+        _LOGGER.warning(
+            "Frame Art: Could not download thumbnail for %s after %d "
+            "attempts (last error: %s). This is a transient transport "
+            "failure, not a DRM issue.",
+            content_id,
+            max_retries,
+            last_error,
+        )
+        await self._save_error_placeholder(content_id)
+
+        # If we've had too many consecutive failures, back off automatic
+        # fetching for 5 minutes to avoid hammering a struggling TV.
+        if self._thumbnail_failures >= 3:
+            self._thumbnail_backoff_until = time.time() + 300  # 5 minutes
             _LOGGER.warning(
-                "Frame Art: Error fetching thumbnail for %s: %s", content_id, ex
+                "Frame Art: Too many thumbnail failures (%d), pausing "
+                "automatic fetch for 5 minutes. Will retry automatically.",
+                self._thumbnail_failures,
             )
-            # For store images, assume DRM and save placeholder
-            if is_store_image:
-                await self._save_drm_placeholder(content_id)
 
 
 class FrameArtSensor(CoordinatorEntity, SensorEntity):
@@ -1013,12 +969,7 @@ class FrameArtSensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the state attributes."""
-        # V7: expose the entry_id and thumbnail folder so users can configure
-        # their gallery card with the right path (one per TV).
-        attrs = {
-            "entry_id": self._entry.entry_id,
-            "thumbnail_folder": f"/local/frame_art/{self._entry.entry_id}",
-        }
+        attrs = {}
 
         if self.coordinator.data:
             data = self.coordinator.data
@@ -1304,20 +1255,12 @@ class FrameArtSensor(CoordinatorEntity, SensorEntity):
             if thumbnail_data:
                 import os
 
-                tv_dir = self.coordinator._tv_dir
-                entry_id = self.coordinator._entry.entry_id
-                if content_id.startswith("MY_F"):
-                    subdir = "personal"
-                elif content_id.startswith("SAM-"):
-                    subdir = "store"
-                else:
-                    subdir = "other"
-                sub_path = os.path.join(tv_dir, subdir)
+                www_path = self.hass.config.path("www", "frame_art")
 
                 def _write_thumbnail():
-                    os.makedirs(sub_path, exist_ok=True)
+                    os.makedirs(www_path, exist_ok=True)
                     file_name = f"{content_id.replace(':', '_')}.jpg"
-                    file_path = os.path.join(sub_path, file_name)
+                    file_path = os.path.join(www_path, file_name)
                     with open(file_path, "wb") as f:
                         f.write(thumbnail_data)
                     return file_name
@@ -1328,7 +1271,7 @@ class FrameArtSensor(CoordinatorEntity, SensorEntity):
                     "service": "get_thumbnail",
                     "success": True,
                     "content_id": content_id,
-                    "thumbnail_url": f"/local/frame_art/{entry_id}/{subdir}/{file_name}",
+                    "thumbnail_url": f"/local/frame_art/{file_name}",
                     "size": len(thumbnail_data),
                 }
             else:
