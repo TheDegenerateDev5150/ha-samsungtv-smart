@@ -2654,49 +2654,6 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             if content_id:
                 _LOGGER.info("Frame Art: Upload successful, content_id=%s", content_id)
 
-                # Post-upload phantom action: nudge the TV's art subsystem so
-                # it serves thumbnails for freshly uploaded images. Without
-                # this, get_thumbnail_list() returns error -1 for the new
-                # content_id, sometimes for several minutes after upload.
-                #
-                # Empirically observed: passive reads (get_current_artwork,
-                # get_content_list / available()) do NOT wake the thumbnail
-                # subsystem — only select_image does. We re-select the
-                # currently displayed artwork: visually a no-op (the same
-                # image stays on screen), but it nudges the TV into a state
-                # where the new thumbnail becomes downloadable.
-                #
-                # Done synchronously so that the caller can immediately
-                # invoke art_get_thumbnail on the returned content_id and
-                # succeed. Wrapped in try/except so the upload still
-                # reports success if the nudge fails.
-                try:
-                    await asyncio.sleep(1)
-                    current = await self._art_api.get_current()
-                    current_id = current.get("content_id") if current else None
-                    if current_id:
-                        await self._art_api.select_image(
-                            current_id, category=None, show=True
-                        )
-                        await asyncio.sleep(1.5)
-                        _LOGGER.debug(
-                            "Frame Art: Post-upload nudge (re-selected current %s) for upload %s",
-                            current_id,
-                            content_id,
-                        )
-                    else:
-                        # Fallback: at least force a content list enumeration
-                        await self._art_api.available(category="MY-C0002")
-                        _LOGGER.debug(
-                            "Frame Art: Post-upload nudge (available fallback, no current_id) for %s",
-                            content_id,
-                        )
-                except Exception as ex:
-                    _LOGGER.debug(
-                        "Frame Art: Post-upload nudge failed (non-fatal): %s",
-                        ex,
-                    )
-
                 # Force immediate update 🚀
                 await self._force_art_coordinator_refresh()
 
@@ -2735,9 +2692,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         """Get thumbnail for a specific piece of artwork.
 
         If save_to_file is True, saves the thumbnail to:
-        - /config/www/frame_art/{entry_id}/personal/ for user-uploaded images (MY_F*)
-        - /config/www/frame_art/{entry_id}/store/ for Samsung Art Store images (SAM-*)
-        - /config/www/frame_art/{entry_id}/other/ for other content types
+        - /config/www/frame_art/personal/ for user-uploaded images (MY_F*)
+        - /config/www/frame_art/store/ for Samsung Art Store images (SAM-*)
+        - /config/www/frame_art/other/ for other content types
 
         If force_download is False, checks if file already exists before downloading.
         """
@@ -2758,12 +2715,10 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             else:
                 subdir = "other"
 
-            # V7: per-TV directory path: www/frame_art/{entry_id}/{subdir}/
-            tv_dir = self.hass.config.path("www", "frame_art", self._entry_id)
-            www_path = os.path.join(tv_dir, subdir)
+            # Create directory path
+            www_path = self.hass.config.path("www", "frame_art", self._entry_id, subdir)
             file_name = f"{content_id.replace(':', '_')}.jpg"
             file_path = os.path.join(www_path, file_name)
-            local_url = f"/local/frame_art/{self._entry_id}/{subdir}/{file_name}"
 
             # Check if file already exists (unless force_download=True)
             if save_to_file and not force_download:
@@ -2780,10 +2735,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                     result = {
                         "service": "art_get_thumbnail",
                         "content_id": content_id,
-                        "thumbnail_url": local_url,
-                        "thumbnail_path": file_path,
-                        "subdirectory": subdir,
-                        "cached": True,
+                        "thumbnail_url": f"/local/frame_art/{self._entry_id}/{subdir}/{file_name}",
                         "message": "File already exists",
                     }
                     self._store_art_result(result)
@@ -2857,7 +2809,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                         )
 
                         # Add URL to result
-                        result["thumbnail_url"] = local_url
+                        result["thumbnail_url"] = (
+                            f"/local/frame_art/{self._entry_id}/{subdir}/{file_name}"
+                        )
                         result["thumbnail_path"] = file_path
                         result["subdirectory"] = subdir
                         _LOGGER.debug("Saved thumbnail to %s", file_path)
@@ -2904,7 +2858,6 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         # Determine which directories to clean
         dirs_to_clean = []
-        # V7: per-TV directory www/frame_art/{entry_id}/
         base_path = self.hass.config.path("www", "frame_art", self._entry_id)
 
         if favorites_only:
@@ -2999,9 +2952,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         - All artworks (if no filters specified)
 
         Saves thumbnails to organized subdirectories:
-        - /config/www/frame_art/{entry_id}/personal/ for user-uploaded images (MY_F*)
-        - /config/www/frame_art/{entry_id}/store/ for Samsung Art Store images (SAM-*)
-        - /config/www/frame_art/{entry_id}/other/ for other content types
+        - /config/www/frame_art/personal/ for user-uploaded images (MY_F*)
+        - /config/www/frame_art/store/ for Samsung Art Store images (SAM-*)
+        - /config/www/frame_art/other/ for other content types
 
         If force_download=False, skips files that already exist.
         If cleanup_orphans=True, removes local files not in the current artwork list.
