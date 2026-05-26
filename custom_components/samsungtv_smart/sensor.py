@@ -886,14 +886,23 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                         except OSError:
                             pass
 
-                # Save as current.jpg
+                # Save as current.jpg (always at the entry_id root for Lovelace)
                 file_path = os.path.join(www_path, "current.jpg")
                 with open(file_path, "wb") as f:
                     f.write(thumbnail_data)
 
-                # Also save with content_id name for gallery
+                # Also save with content_id name in the appropriate subfolder
+                # (personal/ for MY_F*, store/ for SAM-*, other/ for the rest)
+                if content_id.startswith("MY_F"):
+                    subdir = "personal"
+                elif content_id.startswith("SAM-"):
+                    subdir = "store"
+                else:
+                    subdir = "other"
+                content_dir = os.path.join(www_path, subdir)
+                os.makedirs(content_dir, exist_ok=True)
                 content_file = f"{content_id.replace(':', '_')}.jpg"
-                content_path = os.path.join(www_path, content_file)
+                content_path = os.path.join(content_dir, content_file)
                 with open(content_path, "wb") as f:
                     f.write(thumbnail_data)
 
@@ -1265,20 +1274,31 @@ class FrameArtSensor(CoordinatorEntity, SensorEntity):
                 )
 
                 def _write_thumbnail():
-                    os.makedirs(www_path, exist_ok=True)
+                    if content_id.startswith("MY_F"):
+                        subdir = "personal"
+                    elif content_id.startswith("SAM-"):
+                        subdir = "store"
+                    else:
+                        subdir = "other"
+                    content_dir = os.path.join(www_path, subdir)
+                    os.makedirs(content_dir, exist_ok=True)
                     file_name = f"{content_id.replace(':', '_')}.jpg"
-                    file_path = os.path.join(www_path, file_name)
+                    file_path = os.path.join(content_dir, file_name)
                     with open(file_path, "wb") as f:
                         f.write(thumbnail_data)
-                    return file_name
+                    return subdir, file_name
 
-                file_name = await self.hass.async_add_executor_job(_write_thumbnail)
+                subdir, file_name = await self.hass.async_add_executor_job(
+                    _write_thumbnail
+                )
 
                 result = {
                     "service": "get_thumbnail",
                     "success": True,
                     "content_id": content_id,
-                    "thumbnail_url": f"/local/frame_art/{self._entry.entry_id}/{file_name}",
+                    "thumbnail_url": (
+                        f"/local/frame_art/{self._entry.entry_id}/{subdir}/{file_name}"
+                    ),
                     "size": len(thumbnail_data),
                 }
             else:
