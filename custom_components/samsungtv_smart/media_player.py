@@ -2743,7 +2743,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
             # Download thumbnail with improved retry logic
             max_retries = 3
-            retry_delays = [0.5, 1.0, 2.0]  # Progressive delays
+            retry_delays = [1, 2, 5]  # Progressive delays (aligned with sensor.py)
             thumbnail_data = None
             last_error = None
 
