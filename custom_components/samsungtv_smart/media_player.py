@@ -304,7 +304,7 @@ async def async_setup_entry(
             vol.Optional("favorites_only", default=False): cv.boolean,
             vol.Optional("personal_only", default=False): cv.boolean,
             vol.Optional("force_download", default=False): cv.boolean,
-            vol.Optional("cleanup_orphans", default=False): cv.boolean,
+            vol.Optional("cleanup_orphans", default=True): cv.boolean,
         },
         "async_art_get_thumbnails_batch",
     )
@@ -2944,7 +2944,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         favorites_only: bool = False,
         personal_only: bool = False,
         force_download: bool = False,
-        cleanup_orphans: bool = False,
+        cleanup_orphans: bool = True,
     ) -> dict:
         """Download thumbnails for multiple artworks.
 
