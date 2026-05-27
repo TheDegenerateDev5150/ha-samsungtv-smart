@@ -117,11 +117,11 @@ class SamsungTVAsyncArt:
         # Flag = None means "unknown, probe once"; True/False is the learned state.
         self._supports_get_brightness: bool | None = None
         self._supports_get_color_temperature: bool | None = None
-        # V7: optional callback installed by sensor.py to persist learned
-        # capability flags into the config entry so they survive restarts.
-        # Signature: (name: str, value: bool) -> None. The name is the
-        # const key (CONF_SUPPORTS_GET_BRIGHTNESS / CONF_SUPPORTS_GET_COLOR_TEMPERATURE).
-        self._capability_persist_callback = None
+        # Capability flag: True = TV supports get_thumbnail_list (pre-2024 TVs,
+        # streams all thumbnails over a single socket connection — fast).
+        # False = TV returns error -1 (2024-2025 Tizen), must use get_thumbnail
+        # one-by-one. None = not yet probed (set on first call to get_thumbnail).
+        self._supports_thumbnail_list: bool | None = None
 
     def _get_uuid(self) -> str:
         """Generate a new UUID for art requests."""
@@ -753,7 +753,14 @@ class SamsungTVAsyncArt:
             return {}
 
     async def get_thumbnail(self, content_id: str) -> bytes | None:
-        """Get thumbnail for a specific piece of art."""
+        """Get thumbnail for a specific piece of art.
+
+        Strategy (learned once per session via _supports_thumbnail_list):
+        - Unknown (None): probe get_thumbnail_list; cache the result for the session.
+        - True (pre-2024 TVs): use get_thumbnail_list directly — fast single-socket path.
+        - False (2024-2025 Tizen): skip get_thumbnail_list entirely and go straight to
+          get_thumbnail, saving one useless WebSocket round-trip per image.
+        """
         _LOGGER.debug("Art API: Getting thumbnail for %s", content_id)
 
         # For SAM-S (Art Store) images, warm up the TV by calling get_content_list first
@@ -773,13 +780,31 @@ class SamsungTVAsyncArt:
             # Small delay to let TV prepare
             await asyncio.sleep(0.1)
 
-        # Try get_thumbnail_list first for better compatibility with 2024 TVs
-        _LOGGER.debug("Art API: Trying get_thumbnail_list first for %s", content_id)
-        result = await self._get_thumbnail_via_list(content_id)
-        if result:
-            return result
+        # Only try get_thumbnail_list if the TV is known (or not yet probed) to support it
+        if self._supports_thumbnail_list is not False:
+            _LOGGER.debug(
+                "Art API: Trying get_thumbnail_list for %s (capability=%s)",
+                content_id,
+                self._supports_thumbnail_list,
+            )
+            result = await self._get_thumbnail_via_list(content_id)
+            if result:
+                if self._supports_thumbnail_list is None:
+                    _LOGGER.info(
+                        "Art API: TV supports get_thumbnail_list — "
+                        "fast path active for this session"
+                    )
+                    self._supports_thumbnail_list = True
+                return result
 
-        _LOGGER.debug("Art API: get_thumbnail_list failed, trying simple get_thumbnail")
+            if self._supports_thumbnail_list is None:
+                _LOGGER.info(
+                    "Art API: TV does not support get_thumbnail_list (error -1) — "
+                    "using get_thumbnail for all subsequent calls this session"
+                )
+                self._supports_thumbnail_list = False
+
+        _LOGGER.debug("Art API: Using get_thumbnail direct for %s", content_id)
 
         # Send the request and get connection info
         data = await self._send_art_request(
@@ -1167,27 +1192,6 @@ class SamsungTVAsyncArt:
         self._artmode_settings_cache = None
         self._artmode_settings_cache_ts = 0.0
 
-    def _persist_capability(self, name: str, value: bool) -> None:
-        """Notify the integration that a capability flag has been learned.
-
-        Maps the short internal name to the const key used in entry.data and
-        forwards to the callback installed by sensor.py (if any). No-op when
-        running outside HA (unit tests) where the callback is absent.
-        """
-        if self._capability_persist_callback is None:
-            return
-        key_map = {
-            "brightness": "supports_get_brightness",
-            "color_temperature": "supports_get_color_temperature",
-        }
-        key = key_map.get(name)
-        if not key:
-            return
-        try:
-            self._capability_persist_callback(key, value)
-        except Exception as ex:
-            _LOGGER.debug("Art API: capability persist callback failed: %s", ex)
-
     async def get_brightness(self) -> dict | None:
         """Get current art mode brightness.
 
@@ -1213,7 +1217,6 @@ class SamsungTVAsyncArt:
                         "enabling fast path"
                     )
                     self._supports_get_brightness = True
-                    self._persist_capability("brightness", True)
                 return data
             if self._supports_get_brightness is None:
                 _LOGGER.info(
@@ -1221,7 +1224,6 @@ class SamsungTVAsyncArt:
                     "falling back to get_artmode_settings for future polls"
                 )
                 self._supports_get_brightness = False
-                self._persist_capability("brightness", False)
 
         return await self.get_artmode_settings("brightness")
 
@@ -1256,7 +1258,6 @@ class SamsungTVAsyncArt:
                         "enabling fast path"
                     )
                     self._supports_get_color_temperature = True
-                    self._persist_capability("color_temperature", True)
                 return data
             if self._supports_get_color_temperature is None:
                 _LOGGER.info(
@@ -1264,7 +1265,6 @@ class SamsungTVAsyncArt:
                     "1 s; falling back to get_artmode_settings for future polls"
                 )
                 self._supports_get_color_temperature = False
-                self._persist_capability("color_temperature", False)
 
         return await self.get_artmode_settings("color_temperature")
 
