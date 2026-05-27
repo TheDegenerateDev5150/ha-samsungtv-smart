@@ -304,7 +304,7 @@ async def async_setup_entry(
             vol.Optional("favorites_only", default=False): cv.boolean,
             vol.Optional("personal_only", default=False): cv.boolean,
             vol.Optional("force_download", default=False): cv.boolean,
-            vol.Optional("cleanup_orphans", default=False): cv.boolean,
+            vol.Optional("cleanup_orphans", default=True): cv.boolean,
         },
         "async_art_get_thumbnails_batch",
     )
@@ -2736,6 +2736,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                         "service": "art_get_thumbnail",
                         "content_id": content_id,
                         "thumbnail_url": f"/local/frame_art/{self._entry_id}/{subdir}/{file_name}",
+                        "thumbnail_path": file_path,
+                        "subdirectory": subdir,
+                        "cached": True,
                         "message": "File already exists",
                     }
                     self._store_art_result(result)
@@ -2941,7 +2944,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         favorites_only: bool = False,
         personal_only: bool = False,
         force_download: bool = False,
-        cleanup_orphans: bool = False,
+        cleanup_orphans: bool = True,
     ) -> dict:
         """Download thumbnails for multiple artworks.
 
@@ -3014,15 +3017,120 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
             _LOGGER.info(
                 "Starting batch thumbnail download for %d artworks "
-                "(force_download=%s, cleanup_orphans=%s)",
+                "(force_download=%s, cleanup_orphans=%s, "
+                "batch_capable=%s)",
                 total,
                 force_download,
                 cleanup_orphans,
+                self._art_api._supports_thumbnail_list,
             )
+
+            # ------------------------------------------------------------------
+            # Fast-path: true batch via get_thumbnail_list.
+            # Pre-2024 TVs stream all thumbnails over a single socket in one
+            # request — much faster than the sequential loop below.
+            # 2024-2025 Tizen returns error -1 → falls through immediately.
+            # SAM-* images are excluded (they need a warm-up call beforehand).
+            # ------------------------------------------------------------------
+            import os
+
+            batch_succeeded_ids: set[str] = set()
+            if (
+                self._art_api._supports_thumbnail_list is not False
+                and not force_download
+            ):
+                non_cached_non_sam = []
+                for _aw in artwork_list:
+                    _cid = _aw.get("content_id")
+                    if not _cid or _cid.startswith("SAM-"):
+                        continue
+                    _subdir = "personal" if _cid.startswith("MY_F") else "other"
+                    _wpath = self.hass.config.path(
+                        "www", "frame_art", self._entry_id, _subdir
+                    )
+                    _fname = f"{_cid.replace(':', '_')}.jpg"
+                    if not os.path.isfile(os.path.join(_wpath, _fname)):
+                        non_cached_non_sam.append(_cid)
+
+                if non_cached_non_sam:
+                    _LOGGER.info(
+                        "Trying true batch for %d non-cached artworks",
+                        len(non_cached_non_sam),
+                    )
+                    _BATCH_CHUNK = 20
+                    _batch_ok = True
+                    for _i in range(0, len(non_cached_non_sam), _BATCH_CHUNK):
+                        _chunk = non_cached_non_sam[_i : _i + _BATCH_CHUNK]
+                        try:
+                            _batch_data = await self._art_api.get_thumbnail_list(
+                                [{"content_id": c} for c in _chunk]
+                            )
+                            if not _batch_data:
+                                _LOGGER.info(
+                                    "get_thumbnail_list returned empty — "
+                                    "TV does not support batch; "
+                                    "switching to sequential"
+                                )
+                                self._art_api._supports_thumbnail_list = False
+                                _batch_ok = False
+                                break
+
+                            for _fname_key, _data in _batch_data.items():
+                                _bcid = _fname_key.rsplit(".", 1)[0]
+                                _bsubdir = (
+                                    "personal" if _bcid.startswith("MY_F") else "other"
+                                )
+                                _bwpath = self.hass.config.path(
+                                    "www", "frame_art", self._entry_id, _bsubdir
+                                )
+                                _bfname = f"{_bcid.replace(':', '_')}.jpg"
+
+                                def _write_batch(p=_bwpath, n=_bfname, d=_data):
+                                    os.makedirs(p, exist_ok=True)
+                                    fp = os.path.join(p, n)
+                                    with open(fp, "wb") as fh:
+                                        fh.write(d)
+                                    return fp
+
+                                _bfp = await self.hass.async_add_executor_job(
+                                    _write_batch
+                                )
+                                downloaded.append(
+                                    {
+                                        "content_id": _bcid,
+                                        "url": f"/local/frame_art/{self._entry_id}/{_bsubdir}/{_bfname}",
+                                        "path": _bfp,
+                                        "subdirectory": _bsubdir,
+                                    }
+                                )
+                                batch_succeeded_ids.add(_bcid)
+
+                        except Exception as _bex:
+                            _LOGGER.debug(
+                                "Batch chunk failed (%s) → sequential: %s",
+                                _chunk[0] if _chunk else "?",
+                                _bex,
+                            )
+                            self._art_api._supports_thumbnail_list = False
+                            _batch_ok = False
+                            break
+
+                    if _batch_ok and batch_succeeded_ids:
+                        _LOGGER.info(
+                            "True batch completed: %d artworks in one pass",
+                            len(batch_succeeded_ids),
+                        )
 
             for idx, artwork in enumerate(artwork_list, 1):
                 content_id = artwork.get("content_id")
                 if not content_id:
+                    continue
+
+                # Already handled by the true batch pass above
+                if content_id in batch_succeeded_ids:
+                    skipped.append(
+                        {"content_id": content_id, "reason": "Batch downloaded"}
+                    )
                     continue
 
                 try:
