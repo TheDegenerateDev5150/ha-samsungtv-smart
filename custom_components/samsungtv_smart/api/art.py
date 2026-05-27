@@ -781,26 +781,24 @@ class SamsungTVAsyncArt:
             await asyncio.sleep(0.1)
 
         # Only try get_thumbnail_list if the TV is known (or not yet probed) to support it.
-        # SAM-* (Art Store) images are excluded: they consistently return error -1 on
-        # get_thumbnail_list regardless of TV model, so skip straight to the direct socket.
-        # Note: we never permanently set _supports_thumbnail_list to False — a single
-        # error at startup (TV not ready yet) would wrongly disable the fast path for
-        # the entire session. Instead we always probe and only cache on success (True).
-        if not is_artstore:
-            _LOGGER.debug(
-                "Art API: Trying get_thumbnail_list for %s (capability=%s)",
-                content_id,
-                self._supports_thumbnail_list,
-            )
-            result = await self._get_thumbnail_via_list(content_id)
-            if result:
-                if self._supports_thumbnail_list is None:
-                    _LOGGER.info(
-                        "Art API: TV supports get_thumbnail_list — "
-                        "fast path active for this session"
-                    )
-                    self._supports_thumbnail_list = True
-                return result
+        # Always try _get_thumbnail_via_list first — it works for both MY_F* and SAM-*
+        # on most TV models. Only the direct socket fallback (get_thumbnail) fails for
+        # SAM-* images. Never set the flag to False: a startup error (TV not ready)
+        # must not permanently disable the fast path for the whole session.
+        _LOGGER.debug(
+            "Art API: Trying get_thumbnail_list for %s (capability=%s)",
+            content_id,
+            self._supports_thumbnail_list,
+        )
+        result = await self._get_thumbnail_via_list(content_id)
+        if result:
+            if self._supports_thumbnail_list is None:
+                _LOGGER.info(
+                    "Art API: TV supports get_thumbnail_list — "
+                    "fast path active for this session"
+                )
+                self._supports_thumbnail_list = True
+            return result
 
         _LOGGER.debug("Art API: Using get_thumbnail direct for %s", content_id)
 
