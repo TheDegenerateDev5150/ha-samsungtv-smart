@@ -917,6 +917,17 @@ class SamsungTVInfo:
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Samsung TV integration."""
+    # Clean up legacy translations_en.json (removed in b7, not deleted by HACS)
+    _legacy = hass.config.path(
+        "custom_components", "samsungtv_smart", "translations_en.json"
+    )
+    if os.path.isfile(_legacy):
+        try:
+            os.remove(_legacy)
+            _LOGGER.info("Removed obsolete translations_en.json")
+        except OSError as ex:
+            _LOGGER.debug("Could not remove translations_en.json: %s", ex)
+
     if not is_valid_ha_version():
         msg = (
             "This integration require at least HomeAssistant version"
