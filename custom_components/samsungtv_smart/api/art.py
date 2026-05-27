@@ -780,8 +780,10 @@ class SamsungTVAsyncArt:
             # Small delay to let TV prepare
             await asyncio.sleep(0.1)
 
-        # Only try get_thumbnail_list if the TV is known (or not yet probed) to support it
-        if self._supports_thumbnail_list is not False:
+        # Only try get_thumbnail_list if the TV is known (or not yet probed) to support it.
+        # SAM-* (Art Store) images are excluded: they consistently return error -1 on
+        # get_thumbnail_list regardless of TV model, so skip straight to the direct socket.
+        if self._supports_thumbnail_list is not False and not is_artstore:
             _LOGGER.debug(
                 "Art API: Trying get_thumbnail_list for %s (capability=%s)",
                 content_id,
