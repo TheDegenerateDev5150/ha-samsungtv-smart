@@ -142,6 +142,14 @@ async def async_setup_entry(
             FrameArtSensor(coordinator, entry, art_api, device_name, device_unique_id)
         )
 
+        # Add folder sensors for each thumbnail subdirectory.
+        # These mirror HA's platform:folder format (file_list, path, bytes…)
+        # with a stable unique_id so entity_ids never shuffle on restart.
+        for subdir in ("personal", "store", "other"):
+            entities.append(
+                FrameArtFolderSensor(hass, entry, subdir, device_name, device_unique_id)
+            )
+
         # Schedule first refresh in background (non-blocking)
         hass.async_create_background_task(
             coordinator.async_request_refresh(),
@@ -910,6 +918,92 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 "fetch for 5 minutes. Will retry automatically.",
                 self._thumbnail_failures,
             )
+
+
+class FrameArtFolderSensor(SensorEntity):
+    """Sensor exposing the thumbnail file list for one frame_art subdirectory.
+
+    Mirrors the HA platform:folder sensor format (state = total size in MB,
+    attributes: path, filter, number_of_files, bytes, file_list) so that
+    folder-gallery-card can use it directly via folder_sensor.
+
+    The unique_id is stable across restarts, so entity_ids never shuffle.
+    """
+
+    _attr_icon = "mdi:folder-image"
+    _attr_native_unit_of_measurement = "MB"
+    _attr_should_poll = True
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        subdir: str,
+        device_name: str,
+        device_unique_id: str,
+    ) -> None:
+        """Initialize the folder sensor."""
+        self.hass = hass
+        self._entry = entry
+        self._subdir = subdir  # "personal", "store", or "other"
+        self._attr_unique_id = f"{entry.entry_id}_folder_{subdir}"
+        self._attr_name = f"{device_name} {subdir}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device_unique_id)},
+        )
+        self._files: list[str] = []
+        self._total_bytes: int = 0
+
+    @property
+    def scan_interval(self):
+        """Scan every 5 minutes."""
+        from datetime import timedelta
+
+        return timedelta(minutes=5)
+
+    @property
+    def native_value(self) -> float:
+        """Return total size in MB (mirrors platform:folder behaviour)."""
+        return round(self._total_bytes / (1024 * 1024), 2)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return file list and metadata compatible with platform:folder."""
+        www_path = self.hass.config.path(
+            "www", "frame_art", self._entry.entry_id, self._subdir
+        )
+        return {
+            "path": f"{www_path}/",
+            "filter": "*.jpg",
+            "number_of_files": len(self._files),
+            "bytes": self._total_bytes,
+            "file_list": self._files,
+        }
+
+    async def async_update(self) -> None:
+        """Scan the subdirectory and refresh file list + total size."""
+        import os
+
+        www_path = self.hass.config.path(
+            "www", "frame_art", self._entry.entry_id, self._subdir
+        )
+
+        def _scan() -> tuple[list[str], int]:
+            files: list[str] = []
+            total: int = 0
+            if not os.path.isdir(www_path):
+                return files, total
+            for fname in sorted(os.listdir(www_path)):
+                if fname.lower().endswith(".jpg"):
+                    fpath = os.path.join(www_path, fname)
+                    files.append(fpath)
+                    try:
+                        total += os.path.getsize(fpath)
+                    except OSError:
+                        pass
+            return files, total
+
+        self._files, self._total_bytes = await self.hass.async_add_executor_job(_scan)
 
 
 class FrameArtSensor(CoordinatorEntity, SensorEntity):
