@@ -792,7 +792,7 @@ class FolderGalleryCardEditor extends HTMLElement {
       
       <div class="form-row">
         <label>Sensor (provides image list)</label>
-        <input type="text" id="sensor" value="${this._config.sensor || ''}" placeholder="sensor.your_folder_sensor">
+        <input type="text" id="folder_sensor" value="${this._config.folder_sensor || this._config.sensor || ''}" placeholder="sensor.your_folder_sensor">
       </div>
       
       <div class="form-row">
@@ -807,7 +807,7 @@ class FolderGalleryCardEditor extends HTMLElement {
     `;
 
     // Add event listeners
-    ['title', 'folder', 'sensor', 'columns', 'image_height'].forEach(field => {
+    ['title', 'folder', 'folder_sensor', 'columns', 'image_height'].forEach(field => {
       const input = this.shadowRoot.getElementById(field);
       if (input) {
         input.addEventListener('change', (e) => {
