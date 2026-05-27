@@ -783,7 +783,10 @@ class SamsungTVAsyncArt:
         # Only try get_thumbnail_list if the TV is known (or not yet probed) to support it.
         # SAM-* (Art Store) images are excluded: they consistently return error -1 on
         # get_thumbnail_list regardless of TV model, so skip straight to the direct socket.
-        if self._supports_thumbnail_list is not False and not is_artstore:
+        # Note: we never permanently set _supports_thumbnail_list to False — a single
+        # error at startup (TV not ready yet) would wrongly disable the fast path for
+        # the entire session. Instead we always probe and only cache on success (True).
+        if not is_artstore:
             _LOGGER.debug(
                 "Art API: Trying get_thumbnail_list for %s (capability=%s)",
                 content_id,
@@ -798,13 +801,6 @@ class SamsungTVAsyncArt:
                     )
                     self._supports_thumbnail_list = True
                 return result
-
-            if self._supports_thumbnail_list is None:
-                _LOGGER.info(
-                    "Art API: TV does not support get_thumbnail_list (error -1) — "
-                    "using get_thumbnail for all subsequent calls this session"
-                )
-                self._supports_thumbnail_list = False
 
         _LOGGER.debug("Art API: Using get_thumbnail direct for %s", content_id)
 
