@@ -101,6 +101,7 @@ from .const import (
     CONF_PING_PORT,
     CONF_POWER_ON_METHOD,
     CONF_SHOW_CHANNEL_NR,
+    CONF_SLIDESHOW_API,
     CONF_SOURCE_LIST,
     CONF_ST_ENTRY_UNIQUE_ID,
     CONF_SYNC_TURN_OFF,
@@ -3311,30 +3312,50 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             _LOGGER.error("Error setting favourite status: %s", ex)
             return {"error": str(ex)}
 
-    async def _log_artmode_settings_diag(self, context: str) -> None:
-        """[DIAG] One-shot dump of get_artmode_settings payload.
+    def _get_active_slideshow_api(self) -> str:
+        """Return the slideshow API name the TV is known to speak.
 
-        Temporary diagnostic helper for Frame TV slideshow capability
-        discovery (issue #18). Probes the full art mode settings payload
-        from the TV and logs it at INFO so we can identify whether
-        Samsung exposes the list of valid slideshow / auto-rotation
-        durations as a settings descriptor (with valid_values, min/max,
-        or enum). Fires whenever art_set_slideshow or art_set_auto_rotation
-        is called, after Art Mode is confirmed ready. To remove once
-        capability format is confirmed.
+        Reads the value persisted in entry data by the coordinator's
+        one-shot detection. Falls back to ``"slideshow"`` (the modern
+        Frame TV API, used by 2024+ models) when detection hasn't run
+        yet or was inconclusive — this preserves the historical default
+        behavior for users upgrading from earlier releases.
         """
-        try:
-            settings = await self._art_api.get_artmode_settings()
-            _LOGGER.info(
-                "Frame Art: [DIAG %s] get_artmode_settings payload = %r",
-                context,
-                settings,
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None:
+            return "slideshow"
+        return entry.data.get(CONF_SLIDESHOW_API) or "slideshow"
+
+    async def _set_slideshow_via_active_api(
+        self,
+        duration_minutes: int,
+        shuffle: bool,
+        category_id: int,
+    ) -> None:
+        """Route a slideshow SET call to whichever API the TV speaks.
+
+        Called by both art_set_slideshow and art_set_auto_rotation —
+        the two service names are aliases that target the same TV
+        feature; the integration just sends the request to the
+        endpoint the TV actually responds to (detected and persisted
+        by the coordinator).
+        """
+        active_api = self._get_active_slideshow_api()
+        _LOGGER.debug(
+            "Frame Art: routing slideshow set via %r API "
+            "(duration=%d min, shuffle=%s, category=%d)",
+            active_api,
+            duration_minutes,
+            shuffle,
+            category_id,
+        )
+        if active_api == "auto_rotation":
+            await self._art_api.set_auto_rotation_status(
+                duration_minutes, shuffle, category_id
             )
-        except Exception as ex:  # noqa: BLE001 — diagnostic must never raise
-            _LOGGER.warning(
-                "Frame Art: [DIAG %s] get_artmode_settings failed: %s",
-                context,
-                ex,
+        else:
+            await self._art_api.set_slideshow_status(
+                duration_minutes, shuffle, category_id
             )
 
     async def async_art_set_slideshow(
@@ -3350,6 +3371,10 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         minutes (e.g. '30', '30min', '180'). The set of durations the
         TV actually supports varies by Frame model and firmware — values
         outside the TV's supported set may be silently ignored by the TV.
+
+        The request is routed to ``slideshow_status`` or
+        ``auto_rotation_status`` depending on what the coordinator
+        detected the TV listens to.
         """
         if not await self._ensure_frame_tv_check():
             _LOGGER.warning("Frame TV art mode is not supported on this device")
@@ -3383,25 +3408,15 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         if not await self._ensure_art_mode_ready():
             return {"error": "Failed to turn on TV"}
 
-        # [DIAG #18] Capture the full art mode settings payload to confirm
-        # whether the TV exposes slideshow/auto_rotation capability metadata.
-        await self._log_artmode_settings_diag("slideshow")
-
         try:
-            _LOGGER.debug(
-                "Frame Art: Setting slideshow duration=%s (%d min), shuffle=%s, category=%d",
-                duration,
-                duration_minutes,
-                shuffle,
-                category_id,
-            )
-            await self._art_api.set_slideshow_status(
+            await self._set_slideshow_via_active_api(
                 duration_minutes, shuffle, category_id
             )
             return {
                 "success": True,
                 "duration": duration,
                 "duration_minutes": duration_minutes,
+                "api": self._get_active_slideshow_api(),
             }
         except Exception as ex:
             _LOGGER.error("Error setting slideshow: %s", ex)
@@ -3415,11 +3430,15 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
     ) -> dict:
         """Configure auto rotation settings.
 
+        Functionally identical to ``art_set_slideshow``: both service
+        names are aliases that target the Frame TV's artwork rotation
+        feature. The integration routes the request to whichever
+        underlying Samsung API the TV responds to
+        (``slideshow_status`` or ``auto_rotation_status``).
+
         Duration accepts the named presets '3min', '15min', '1h', '12h',
         '1d', '7d', or any other integer-coercible string representing
-        minutes (e.g. '30', '30min', '180'). The set of durations the
-        TV actually supports varies by Frame model and firmware — values
-        outside the TV's supported set may be silently ignored by the TV.
+        minutes (e.g. '30', '30min', '180').
         """
         if not await self._ensure_frame_tv_check():
             _LOGGER.warning("Frame TV art mode is not supported on this device")
@@ -3452,25 +3471,15 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         if not await self._ensure_art_mode_ready():
             return {"error": "Failed to turn on TV"}
 
-        # [DIAG #18] Capture the full art mode settings payload to confirm
-        # whether the TV exposes slideshow/auto_rotation capability metadata.
-        await self._log_artmode_settings_diag("auto_rotation")
-
         try:
-            _LOGGER.debug(
-                "Frame Art: Setting auto rotation duration=%s (%d min), shuffle=%s, category=%d",
-                duration,
-                duration_minutes,
-                shuffle,
-                category_id,
-            )
-            await self._art_api.set_auto_rotation_status(
+            await self._set_slideshow_via_active_api(
                 duration_minutes, shuffle, category_id
             )
             return {
                 "success": True,
                 "duration": duration,
                 "duration_minutes": duration_minutes,
+                "api": self._get_active_slideshow_api(),
             }
         except Exception as ex:
             _LOGGER.error("Error setting auto rotation: %s", ex)
