@@ -473,7 +473,11 @@ art_set_slideshow:
 
 art_set_auto_rotation:
   name: Set Auto Rotation
-  description: Configure automatic artwork rotation settings.
+  description: >-
+    Configure automatic artwork rotation. Functionally identical to
+    art_set_slideshow — both service names are aliases that target the
+    Frame TV's artwork rotation feature; the integration routes the
+    request to whichever underlying Samsung API the TV responds to.
   fields:
     entity_id:
       name: Entity Name
