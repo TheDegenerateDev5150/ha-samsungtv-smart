@@ -2721,7 +2721,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 subdir = "other"
 
             # Create directory path
-            www_path = self.hass.config.path("www", "frame_art", subdir)
+            www_path = self.hass.config.path("www", "frame_art", self._entry_id, subdir)
             file_name = f"{content_id.replace(':', '_')}.jpg"
             file_path = os.path.join(www_path, file_name)
 
@@ -2740,7 +2740,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                     result = {
                         "service": "art_get_thumbnail",
                         "content_id": content_id,
-                        "thumbnail_url": f"/local/frame_art/{subdir}/{file_name}",
+                        "thumbnail_url": f"/local/frame_art/{self._entry_id}/{subdir}/{file_name}",
                         "thumbnail_path": file_path,
                         "subdirectory": subdir,
                         "cached": True,
@@ -2751,7 +2751,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
             # Download thumbnail with improved retry logic
             max_retries = 3
-            retry_delays = [0.5, 1.0, 2.0]  # Progressive delays
+            retry_delays = [1, 2, 5]  # Progressive delays (aligned with sensor.py)
             thumbnail_data = None
             last_error = None
 
@@ -2818,7 +2818,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
                         # Add URL to result
                         result["thumbnail_url"] = (
-                            f"/local/frame_art/{subdir}/{file_name}"
+                            f"/local/frame_art/{self._entry_id}/{subdir}/{file_name}"
                         )
                         result["thumbnail_path"] = file_path
                         result["subdirectory"] = subdir
@@ -2866,7 +2866,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         # Determine which directories to clean
         dirs_to_clean = []
-        base_path = self.hass.config.path("www", "frame_art")
+        base_path = self.hass.config.path("www", "frame_art", self._entry_id)
 
         if favorites_only:
             # Favorites are typically SAM-* (store) images
@@ -3022,10 +3022,12 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
             _LOGGER.info(
                 "Starting batch thumbnail download for %d artworks "
-                "(force_download=%s, cleanup_orphans=%s)",
+                "(force_download=%s, cleanup_orphans=%s, "
+                "batch_capable=%s)",
                 total,
                 force_download,
                 cleanup_orphans,
+                self._art_api._supports_thumbnail_list,
             )
 
             for idx, artwork in enumerate(artwork_list, 1):
