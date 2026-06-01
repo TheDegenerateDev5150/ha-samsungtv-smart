@@ -431,11 +431,15 @@ art_set_slideshow:
           integration: samsungtv_smart
     duration:
       name: Duration
-      description: Duration for each image
+      description: >-
+        Rotation interval. Pick a preset or enter a custom value
+        (e.g. "30", "30min", "180") if your Frame model supports
+        durations outside the presets.
       required: true
       example: "15min"
       selector:
         select:
+          custom_value: true
           options:
             - label: "3 minutes"
               value: "3min"
@@ -480,11 +484,15 @@ art_set_auto_rotation:
           integration: samsungtv_smart
     duration:
       name: Duration
-      description: Duration for each image
+      description: >-
+        Rotation interval. Pick a preset or enter a custom value
+        (e.g. "30", "30min", "180") if your Frame model supports
+        durations outside the presets.
       required: true
       example: "1h"
       selector:
         select:
+          custom_value: true
           options:
             - label: "3 minutes"
               value: "3min"
