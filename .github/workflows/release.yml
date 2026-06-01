@@ -1,55 +1,72 @@
 name: "Release"
-
 on:
   release:
     types:
       - "published"
-
 permissions:
   contents: write
-
 jobs:
+  detect-branch:
+    name: "Detect target branch from release type"
+    runs-on: ubuntu-latest
+    outputs:
+      target_branch: ${{ steps.detect.outputs.branch }}
+    steps:
+      - name: "Determine target branch"
+        id: detect
+        run: |
+          # Pre-releases (betas, rc) target the dev branch v7-multi-frame.
+          # Stable releases target master.
+          # Override via tag pattern as a safety net for ambiguous cases.
+          TAG="${{ github.event.release.tag_name }}"
+          IS_PRERELEASE="${{ github.event.release.prerelease }}"
+          if [[ "$IS_PRERELEASE" == "true" ]] || [[ "$TAG" =~ ^7\.0\.0[a-zA-Z] ]]; then
+            BRANCH="v7-multi-frame"
+          else
+            BRANCH="master"
+          fi
+          echo "Release tag: $TAG (prerelease=$IS_PRERELEASE) -> target branch: $BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
   update-manifest:
     name: "Update manifest version"
     runs-on: ubuntu-latest
+    needs: detect-branch
     steps:
-      - name: "Checkout master branch"
+      - name: "Checkout target branch"
         uses: actions/checkout@v4
         with:
-          ref: refs/heads/master
+          ref: refs/heads/${{ needs.detect-branch.outputs.target_branch }}
           fetch-depth: 1
           token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: "Update manifest.json"
         run: |
           jq '.version = "${{ github.event.release.tag_name }}"' \
             custom_components/samsungtv_smart/manifest.json > tmp.json
           mv tmp.json custom_components/samsungtv_smart/manifest.json
-
       - name: "Commit and push"
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add custom_components/samsungtv_smart/manifest.json
-          git diff --staged --quiet || git commit -m "chore: bump manifest version to ${{ github.event.release.tag_name }}"
-          git push origin refs/heads/master
+          git diff --staged --quiet || \
+            git commit -m "chore: bump manifest version to ${{ github.event.release.tag_name }}"
+          git push origin refs/heads/${{ needs.detect-branch.outputs.target_branch }}
 
   release:
     name: "Release"
     runs-on: ubuntu-latest
-    needs: update-manifest
+    needs: [detect-branch, update-manifest]
     steps:
       - name: "Checkout the repository"
         uses: actions/checkout@v4
         with:
-          ref: refs/heads/master
-
+          ref: refs/heads/${{ needs.detect-branch.outputs.target_branch }}
       - name: "ZIP the integration directory"
         shell: bash
         run: |
           cd "${{ github.workspace }}/custom_components/samsungtv_smart"
           zip samsungtv_smart.zip -r ./
-
       - name: "Upload the ZIP file to the release"
         uses: softprops/action-gh-release@v2.0.8
         with:
