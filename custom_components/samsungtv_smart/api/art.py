@@ -117,11 +117,6 @@ class SamsungTVAsyncArt:
         # Flag = None means "unknown, probe once"; True/False is the learned state.
         self._supports_get_brightness: bool | None = None
         self._supports_get_color_temperature: bool | None = None
-        # Capability flag: True = TV supports get_thumbnail_list (pre-2024 TVs,
-        # streams all thumbnails over a single socket connection — fast).
-        # False = TV returns error -1 (2024-2025 Tizen), must use get_thumbnail
-        # one-by-one. None = not yet probed (set on first call to get_thumbnail).
-        self._supports_thumbnail_list: bool | None = None
 
     def _get_uuid(self) -> str:
         """Generate a new UUID for art requests."""
@@ -753,14 +748,7 @@ class SamsungTVAsyncArt:
             return {}
 
     async def get_thumbnail(self, content_id: str) -> bytes | None:
-        """Get thumbnail for a specific piece of art.
-
-        Strategy (learned once per session via _supports_thumbnail_list):
-        - Unknown (None): probe get_thumbnail_list; cache the result for the session.
-        - True (pre-2024 TVs): use get_thumbnail_list directly — fast single-socket path.
-        - False (2024-2025 Tizen): skip get_thumbnail_list entirely and go straight to
-          get_thumbnail, saving one useless WebSocket round-trip per image.
-        """
+        """Get thumbnail for a specific piece of art."""
         _LOGGER.debug("Art API: Getting thumbnail for %s", content_id)
 
         # For SAM-S (Art Store) images, warm up the TV by calling get_content_list first
@@ -780,27 +768,13 @@ class SamsungTVAsyncArt:
             # Small delay to let TV prepare
             await asyncio.sleep(0.1)
 
-        # Only try get_thumbnail_list if the TV is known (or not yet probed) to support it.
-        # Always try _get_thumbnail_via_list first — it works for both MY_F* and SAM-*
-        # on most TV models. Only the direct socket fallback (get_thumbnail) fails for
-        # SAM-* images. Never set the flag to False: a startup error (TV not ready)
-        # must not permanently disable the fast path for the whole session.
-        _LOGGER.debug(
-            "Art API: Trying get_thumbnail_list for %s (capability=%s)",
-            content_id,
-            self._supports_thumbnail_list,
-        )
+        # Try get_thumbnail_list first for better compatibility with 2024 TVs
+        _LOGGER.debug("Art API: Trying get_thumbnail_list first for %s", content_id)
         result = await self._get_thumbnail_via_list(content_id)
         if result:
-            if self._supports_thumbnail_list is None:
-                _LOGGER.info(
-                    "Art API: TV supports get_thumbnail_list — "
-                    "fast path active for this session"
-                )
-                self._supports_thumbnail_list = True
             return result
 
-        _LOGGER.debug("Art API: Using get_thumbnail direct for %s", content_id)
+        _LOGGER.debug("Art API: get_thumbnail_list failed, trying simple get_thumbnail")
 
         # Send the request and get connection info
         data = await self._send_art_request(
@@ -1317,6 +1291,55 @@ class SamsungTVAsyncArt:
             }
         )
         return data is not None
+
+    async def detect_slideshow_api(self, timeout: float = 3.0) -> str | None:
+        """Detect which slideshow API the TV speaks.
+
+        Samsung split Frame TV slideshow control across firmware
+        generations: newer models (2024+) typically respond to
+        ``slideshow_status``, while some older Frames respond only to
+        the parallel ``auto_rotation_status`` API. Both APIs accept the
+        same (duration, shuffle, category) payload.
+
+        Probes both endpoints read-only (no side effects on the TV's
+        slideshow state) and returns:
+          * ``"slideshow"`` if only ``get_slideshow_status`` returned
+            a usable response, or if both did (slideshow is the
+            canonical newer-firmware path)
+          * ``"auto_rotation"`` if only ``get_auto_rotation_status``
+            returned a usable response
+          * ``None`` if neither responded — caller should retry later
+            and fall back to the default in the meantime
+        """
+
+        def _is_usable(response) -> bool:
+            return isinstance(response, dict) and "value" in response
+
+        slideshow_ok = False
+        try:
+            async with asyncio.timeout(timeout):
+                slideshow_ok = _is_usable(await self.get_slideshow_status())
+        except (asyncio.TimeoutError, Exception) as ex:  # noqa: BLE001
+            _LOGGER.debug(
+                "Art API: detect_slideshow_api: get_slideshow_status probe failed: %s",
+                ex,
+            )
+
+        auto_rotation_ok = False
+        try:
+            async with asyncio.timeout(timeout):
+                auto_rotation_ok = _is_usable(await self.get_auto_rotation_status())
+        except (asyncio.TimeoutError, Exception) as ex:  # noqa: BLE001
+            _LOGGER.debug(
+                "Art API: detect_slideshow_api: get_auto_rotation_status probe failed: %s",
+                ex,
+            )
+
+        if slideshow_ok:
+            return "slideshow"
+        if auto_rotation_ok:
+            return "auto_rotation"
+        return None
 
     async def upload(
         self,
