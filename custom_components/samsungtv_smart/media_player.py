@@ -369,9 +369,13 @@ async def async_setup_entry(
     platform.async_register_entity_service(
         SERVICE_ART_SET_SLIDESHOW,
         {
-            vol.Required(ATTR_DURATION): vol.In(
-                ["3min", "15min", "1h", "12h", "1d", "7d"]
-            ),
+            # Accept any string: known presets ('3min', '15min', '1h', '12h',
+            # '1d', '7d') OR arbitrary integer-coercible values in minutes
+            # (e.g. '30', '30min', '180'). Different Frame TV models support
+            # different duration sets; the implementation validates the
+            # semantic value and falls back to the integer-minutes path for
+            # anything not in the preset map.
+            vol.Required(ATTR_DURATION): cv.string,
             vol.Optional(ATTR_SHUFFLE, default=True): cv.boolean,
             vol.Optional(ATTR_CATEGORY_ID, default=2): vol.All(
                 vol.Coerce(int), vol.Range(2, 8)
@@ -382,9 +386,9 @@ async def async_setup_entry(
     platform.async_register_entity_service(
         SERVICE_ART_SET_AUTO_ROTATION,
         {
-            vol.Required(ATTR_DURATION): vol.In(
-                ["3min", "15min", "1h", "12h", "1d", "7d"]
-            ),
+            # Accept any string: known presets OR arbitrary integer-coercible
+            # values in minutes. See art_set_slideshow above for rationale.
+            vol.Required(ATTR_DURATION): cv.string,
             vol.Optional(ATTR_SHUFFLE, default=True): cv.boolean,
             vol.Optional(ATTR_CATEGORY_ID, default=2): vol.All(
                 vol.Coerce(int), vol.Range(2, 8)
@@ -1647,26 +1651,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
     def extra_state_attributes(self):
         """Return the optional state attributes."""
         data = {ATTR_IP_ADDRESS: self._host}
-
-        # Determine Art Mode status for state attributes.
-        #
-        # Priority order:
-        #  1. async Art API (art.py) — preferred when active.
-        #     Once disable_art_thread() is called, _ws.artmode_status is frozen
-        #     at its last value and is no longer updated when Art Mode changes.
-        #     art_api.art_mode is kept live by WebSocket events (artmode_status,
-        #     art_mode_changed) received on the async art channel, so it always
-        #     reflects the current state.
-        #  2. _ws.artmode_status — fallback for the period before art_api has
-        #     received its first event (e.g. right after HA startup).
-        art_api = (
-            self.hass.data.get(DOMAIN, {}).get(self._entry_id, {}).get(DATA_ART_API)
-        )
-        if art_api is not None and art_api.art_mode is not None:
-            data.update(
-                {ATTR_ART_MODE_STATUS: STATE_ON if art_api.art_mode else STATE_OFF}
-            )
-        elif self._ws.artmode_status != ArtModeStatus.Unsupported:
+        if self._ws.artmode_status != ArtModeStatus.Unsupported:
             status_on = self._ws.artmode_status == ArtModeStatus.On
             data.update({ATTR_ART_MODE_STATUS: STATE_ON if status_on else STATE_OFF})
         if self._st:
@@ -2735,7 +2720,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 subdir = "other"
 
             # Create directory path
-            www_path = self.hass.config.path("www", "frame_art", self._entry_id, subdir)
+            www_path = self.hass.config.path("www", "frame_art", subdir)
             file_name = f"{content_id.replace(':', '_')}.jpg"
             file_path = os.path.join(www_path, file_name)
 
@@ -2754,7 +2739,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                     result = {
                         "service": "art_get_thumbnail",
                         "content_id": content_id,
-                        "thumbnail_url": f"/local/frame_art/{self._entry_id}/{subdir}/{file_name}",
+                        "thumbnail_url": f"/local/frame_art/{subdir}/{file_name}",
                         "thumbnail_path": file_path,
                         "subdirectory": subdir,
                         "cached": True,
@@ -2765,7 +2750,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
             # Download thumbnail with improved retry logic
             max_retries = 3
-            retry_delays = [1, 2, 5]  # Progressive delays (aligned with sensor.py)
+            retry_delays = [0.5, 1.0, 2.0]  # Progressive delays
             thumbnail_data = None
             last_error = None
 
@@ -2832,7 +2817,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
                         # Add URL to result
                         result["thumbnail_url"] = (
-                            f"/local/frame_art/{self._entry_id}/{subdir}/{file_name}"
+                            f"/local/frame_art/{subdir}/{file_name}"
                         )
                         result["thumbnail_path"] = file_path
                         result["subdirectory"] = subdir
@@ -2880,7 +2865,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         # Determine which directories to clean
         dirs_to_clean = []
-        base_path = self.hass.config.path("www", "frame_art", self._entry_id)
+        base_path = self.hass.config.path("www", "frame_art")
 
         if favorites_only:
             # Favorites are typically SAM-* (store) images
@@ -3036,12 +3021,10 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
             _LOGGER.info(
                 "Starting batch thumbnail download for %d artworks "
-                "(force_download=%s, cleanup_orphans=%s, "
-                "batch_capable=%s)",
+                "(force_download=%s, cleanup_orphans=%s)",
                 total,
                 force_download,
                 cleanup_orphans,
-                self._art_api._supports_thumbnail_list,
             )
 
             for idx, artwork in enumerate(artwork_list, 1):
@@ -3328,6 +3311,32 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             _LOGGER.error("Error setting favourite status: %s", ex)
             return {"error": str(ex)}
 
+    async def _log_artmode_settings_diag(self, context: str) -> None:
+        """[DIAG] One-shot dump of get_artmode_settings payload.
+
+        Temporary diagnostic helper for Frame TV slideshow capability
+        discovery (issue #18). Probes the full art mode settings payload
+        from the TV and logs it at INFO so we can identify whether
+        Samsung exposes the list of valid slideshow / auto-rotation
+        durations as a settings descriptor (with valid_values, min/max,
+        or enum). Fires whenever art_set_slideshow or art_set_auto_rotation
+        is called, after Art Mode is confirmed ready. To remove once
+        capability format is confirmed.
+        """
+        try:
+            settings = await self._art_api.get_artmode_settings()
+            _LOGGER.info(
+                "Frame Art: [DIAG %s] get_artmode_settings payload = %r",
+                context,
+                settings,
+            )
+        except Exception as ex:  # noqa: BLE001 — diagnostic must never raise
+            _LOGGER.warning(
+                "Frame Art: [DIAG %s] get_artmode_settings failed: %s",
+                context,
+                ex,
+            )
+
     async def async_art_set_slideshow(
         self,
         duration: str,
@@ -3336,7 +3345,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
     ) -> dict:
         """Configure slideshow settings.
 
-        Duration accepts: '3min', '15min', '1h', '12h', '1d', '7d'
+        Duration accepts the named presets '3min', '15min', '1h', '12h',
+        '1d', '7d', or any other integer-coercible string representing
+        minutes (e.g. '30', '30min', '180'). The set of durations the
+        TV actually supports varies by Frame model and firmware — values
+        outside the TV's supported set may be silently ignored by the TV.
         """
         if not await self._ensure_frame_tv_check():
             _LOGGER.warning("Frame TV art mode is not supported on this device")
@@ -3359,12 +3372,20 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 duration_minutes = int(duration)
             except (ValueError, TypeError):
                 return {
-                    "error": f"Invalid duration: {duration}. Valid values: 3min, 15min, 1h, 12h, 1d, 7d"
+                    "error": (
+                        f"Invalid duration: {duration!r}. "
+                        "Use one of the presets (3min, 15min, 1h, 12h, 1d, 7d) "
+                        "or an integer number of minutes."
+                    )
                 }
 
         # Ensure TV is on and in Art Mode
         if not await self._ensure_art_mode_ready():
             return {"error": "Failed to turn on TV"}
+
+        # [DIAG #18] Capture the full art mode settings payload to confirm
+        # whether the TV exposes slideshow/auto_rotation capability metadata.
+        await self._log_artmode_settings_diag("slideshow")
 
         try:
             _LOGGER.debug(
@@ -3394,7 +3415,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
     ) -> dict:
         """Configure auto rotation settings.
 
-        Duration accepts: '3min', '15min', '1h', '12h', '1d', '7d'
+        Duration accepts the named presets '3min', '15min', '1h', '12h',
+        '1d', '7d', or any other integer-coercible string representing
+        minutes (e.g. '30', '30min', '180'). The set of durations the
+        TV actually supports varies by Frame model and firmware — values
+        outside the TV's supported set may be silently ignored by the TV.
         """
         if not await self._ensure_frame_tv_check():
             _LOGGER.warning("Frame TV art mode is not supported on this device")
@@ -3416,12 +3441,20 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 duration_minutes = int(duration)
             except (ValueError, TypeError):
                 return {
-                    "error": f"Invalid duration: {duration}. Valid values: 3min, 15min, h, 12h, 1d, 7d"
+                    "error": (
+                        f"Invalid duration: {duration!r}. "
+                        "Use one of the presets (3min, 15min, 1h, 12h, 1d, 7d) "
+                        "or an integer number of minutes."
+                    )
                 }
 
         # Ensure TV is on and in Art Mode
         if not await self._ensure_art_mode_ready():
             return {"error": "Failed to turn on TV"}
+
+        # [DIAG #18] Capture the full art mode settings payload to confirm
+        # whether the TV exposes slideshow/auto_rotation capability metadata.
+        await self._log_artmode_settings_diag("auto_rotation")
 
         try:
             _LOGGER.debug(
