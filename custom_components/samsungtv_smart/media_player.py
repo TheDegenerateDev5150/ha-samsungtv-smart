@@ -1652,7 +1652,26 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
     def extra_state_attributes(self):
         """Return the optional state attributes."""
         data = {ATTR_IP_ADDRESS: self._host}
-        if self._ws.artmode_status != ArtModeStatus.Unsupported:
+
+        # Determine Art Mode status for state attributes.
+        #
+        # Priority order:
+        #  1. async Art API (art.py) — preferred when active.
+        #     Once disable_art_thread() is called, _ws.artmode_status is frozen
+        #     at its last value and is no longer updated when Art Mode changes.
+        #     art_api.art_mode is kept live by WebSocket events (artmode_status,
+        #     art_mode_changed) received on the async art channel, so it always
+        #     reflects the current state.
+        #  2. _ws.artmode_status — fallback for the period before art_api has
+        #     received its first event (e.g. right after HA startup).
+        art_api = (
+            self.hass.data.get(DOMAIN, {}).get(self._entry_id, {}).get(DATA_ART_API)
+        )
+        if art_api is not None and art_api.art_mode is not None:
+            data.update(
+                {ATTR_ART_MODE_STATUS: STATE_ON if art_api.art_mode else STATE_OFF}
+            )
+        elif self._ws.artmode_status != ArtModeStatus.Unsupported:
             status_on = self._ws.artmode_status == ArtModeStatus.On
             data.update({ATTR_ART_MODE_STATUS: STATE_ON if status_on else STATE_OFF})
         if self._st:
