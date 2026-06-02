@@ -54,6 +54,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_platform
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.service import CONF_SERVICE_ENTITY_ID, async_call_from_config
@@ -697,6 +698,29 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             finally:
                 set_oauth_refresh_in_progress(self._entry_id, False)
 
+    def _raise_oauth_issue(self) -> None:
+        """Surface a Repairs issue when SmartThings OAuth can't be refreshed.
+
+        Uses the issue registry so the alert shows up in
+        Settings -> Repairs, is translatable, and is automatically
+        cleared once a refresh succeeds again.
+        """
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        device_name = entry.title if entry else (self.name or "this Samsung TV")
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            f"oauth_auth_failed_{self._entry_id}",
+            is_fixable=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key="oauth_auth_failed",
+            translation_placeholders={"device_name": device_name},
+        )
+
+    def _clear_oauth_issue(self) -> None:
+        """Clear the OAuth Repairs issue once a refresh succeeds."""
+        ir.async_delete_issue(self.hass, DOMAIN, f"oauth_auth_failed_{self._entry_id}")
+
     async def _do_oauth_refresh(self) -> bool:
         """Perform the actual OAuth token refresh."""
         # Get current entry to check token expiration
@@ -716,6 +740,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 "OAuth token does not contain refresh_token - token cannot be refreshed. "
                 "Please reconfigure the integration with OAuth."
             )
+            self._raise_oauth_issue()
             return False
 
         expires_at = oauth_token.get("expires_at", 0)
@@ -769,6 +794,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                     "Go to Settings > Devices & Services > Application Credentials "
                     "and add credentials for Samsung TV Smart, then reconfigure the integration."
                 )
+                self._raise_oauth_issue()
                 return False
 
             new_token = await implementation.async_refresh_token(oauth_token)
@@ -797,6 +823,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 "OAuth token refreshed successfully, new expiration in %.0f seconds",
                 new_token.get("expires_at", 0) - time.time(),
             )
+            self._clear_oauth_issue()
             return True
 
         except Exception as ex:
@@ -805,6 +832,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 "You may need to reconfigure the integration with OAuth.",
                 ex,
             )
+            self._raise_oauth_issue()
             return False
 
     async def async_added_to_hass(self):
