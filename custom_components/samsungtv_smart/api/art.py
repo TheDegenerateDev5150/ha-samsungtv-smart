@@ -1055,7 +1055,26 @@ class SamsungTVAsyncArt:
                 "value": mode,
             }
         )
-        return data is not None
+        if data is not None:
+            return True
+        # Fallback for older Frames (e.g. 2020/2021): these confirm the change
+        # by broadcasting an `art_mode_changed` event that carries no
+        # request_id, so it never matches the pending request and the send
+        # above times out even though the TV did switch. The event handler
+        # already updates self.art_mode from that broadcast, so trust it here
+        # rather than reporting a false failure. If the TV genuinely did not
+        # change, self.art_mode won't match the requested state and we still
+        # return False — so the success path is unchanged.
+        desired = mode == "on"
+        if self.art_mode == desired:
+            _LOGGER.debug(
+                "Art API: set_artmode(%s) timed out, but an art_mode_changed "
+                "broadcast confirms state=%s; treating as success",
+                mode,
+                self.art_mode,
+            )
+            return True
+        return False
 
     async def set_favourite(self, content_id: str, status: str = "on") -> bool:
         """Add or remove artwork from favorites."""
