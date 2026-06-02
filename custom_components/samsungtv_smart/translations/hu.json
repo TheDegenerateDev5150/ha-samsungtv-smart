@@ -178,5 +178,11 @@
         "oauth2_implementation_unavailable": {
             "message": "OAuth2 credentials are not configured. Please add SmartThings credentials in Settings → Devices & Services → Application Credentials."
         }
+    },
+    "issues": {
+        "oauth_auth_failed": {
+            "title": "A SmartThings hitelesítése sikertelen: {device_name}",
+            "description": "A Home Assistant nem tudta frissíteni a SmartThings hozzáférési tokent ehhez: **{device_name}**. A frissítési token már nem érvényes — ez akkor fordulhat elő, ha a tokent visszavonták, lejárt, vagy a SmartThings lecserélte.\n\nA SmartThings-alapú funkciók (bekapcsolási állapot, képmód, forrásválasztás) nem működnek, amíg újra nem csatlakozik.\n\nA javításhoz lépjen a **Beállítások → Eszközök és szolgáltatások → Samsung TV Smart** menübe, válassza ki az érintett bejegyzést, válassza az **Újrakonfigurálás** lehetőséget, és jelentkezzen be ismét a Samsung-fiókkal."
+        }
     }
 }

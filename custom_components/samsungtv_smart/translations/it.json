@@ -178,5 +178,11 @@
         "oauth2_implementation_unavailable": {
             "message": "OAuth2 credentials are not configured. Please add SmartThings credentials in Settings → Devices & Services → Application Credentials."
         }
+    },
+    "issues": {
+        "oauth_auth_failed": {
+            "title": "Autenticazione SmartThings non riuscita per {device_name}",
+            "description": "Home Assistant non è riuscito ad aggiornare il token di accesso SmartThings per **{device_name}**. Il token di aggiornamento non è più valido: può accadere quando il token viene revocato, scade o viene ruotato da SmartThings.\n\nLe funzioni basate su SmartThings (stato di accensione, modalità immagine, selezione sorgente) non funzioneranno finché non ti riconnetterai.\n\nPer risolvere, vai su **Impostazioni → Dispositivi e servizi → Samsung TV Smart**, seleziona la voce interessata, scegli **Riconfigura** e accedi nuovamente con Samsung."
+        }
     }
 }
