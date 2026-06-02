@@ -10,6 +10,7 @@ Ready-to-use configuration files for Frame Art integration.
 - **[scripts.yaml](scripts.yaml)** - 15+ utility scripts
 - **[automations.yaml](automations.yaml)** - 20+ automation examples
 - **[lovelace.yaml](lovelace.yaml)** - Complete interactive gallery dashboard
+- **[slideshow-duration-input-select.yaml](slideshow-duration-input-select.yaml)** - Dropdown helper + automation to set the slideshow duration (including "Off", which stops the slideshow but keeps Art Mode on)
 
 ---
 
@@ -121,6 +122,26 @@ Use `lovelace.yaml` as template for your Frame Art dashboard.
 - Quick action buttons
 
 **Multiple layout options included** (4-column, 3-column, 2-column, mobile).
+
+---
+
+### slideshow-duration-input-select.yaml
+
+**A dropdown to control the slideshow duration**, as an alternative to one
+button per fixed duration.
+
+- `input_select.frame_art_slideshow_duration` with **Off / 3min / 15min /
+  30min / 1h / 12h / 1d / 7d**
+- An automation applies the selection via `samsungtv_smart.art_set_slideshow`
+  (shuffle on by default)
+- **"Off"** stops the slideshow but **keeps Art Mode on** (the service ensures
+  Art Mode is active before sending the command)
+- Works on both newer (slideshow) and older (auto-rotation) Frames — the v7
+  routing picks the right API automatically
+- Includes a guard so it doesn't re-fire on Home Assistant restart
+
+Change the `media_player.samsung_frame` target to your TV. For multiple Frames,
+duplicate the helper + automation with distinct names.
 
 ---
 
