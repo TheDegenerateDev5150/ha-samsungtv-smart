@@ -940,12 +940,23 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             self.async_set_updated_data(self.data)
             return
 
-        # All retries failed — save generic error placeholder.
+        # All retries failed. Before showing an error placeholder, try to
+        # reuse a copy of this artwork that a previous cycle already saved
+        # under personal/store/other. The live thumbnail fetch is flaky on
+        # some Frame models, but once an image has been downloaded it stays
+        # valid — so an earlier copy is a much better fallback than a generic
+        # "image unavailable" placeholder.
+        # (Fallback approach contributed by @PrestonMcAfee.)
+        if await self._restore_current_from_cache(content_id):
+            return
+
+        # No cached copy available — save generic error placeholder.
         # NOT a DRM issue: thumbnails are never DRM-protected.
         self._thumbnail_failures += 1
         _LOGGER.warning(
             "Frame Art: Could not download thumbnail for %s after %d attempts "
-            "(last error: %s). Transient transport failure, not DRM.",
+            "(last error: %s), and no cached copy was found. "
+            "Transient transport failure, not DRM.",
             content_id,
             max_retries,
             last_error,
@@ -959,6 +970,74 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 "fetch for 5 minutes. Will retry automatically.",
                 self._thumbnail_failures,
             )
+
+    @staticmethod
+    def _subdir_for_content(content_id: str) -> str:
+        """Classify an artwork content_id into its thumbnail subfolder.
+
+        Mirrors the classification used when thumbnails are first saved:
+        personal (MY_F*), store (SAM-*), or other.
+        """
+        if content_id.startswith("MY_F"):
+            return "personal"
+        if content_id.startswith("SAM-"):
+            return "store"
+        return "other"
+
+    async def _restore_current_from_cache(self, content_id: str) -> bool:
+        """Reuse a previously-downloaded thumbnail as current.jpg.
+
+        When the live thumbnail fetch fails (a transient TV/WebSocket issue),
+        fall back to the copy saved under personal/store/other during an
+        earlier successful download, instead of showing an error placeholder.
+
+        Returns True if a cached copy was found and promoted to current.jpg.
+        """
+        import os
+        import shutil
+
+        www_path = self._hass.config.path("www", "frame_art", self._entry.entry_id)
+        subdir = self._subdir_for_content(content_id)
+        content_file = f"{content_id.replace(':', '_')}.jpg"
+        cached_path = os.path.join(www_path, subdir, content_file)
+
+        def _promote() -> bool:
+            if not os.path.isfile(cached_path):
+                return False
+            os.makedirs(www_path, exist_ok=True)
+            current_path = os.path.join(www_path, "current.jpg")
+            shutil.copyfile(cached_path, current_path)
+            # Clear any stale error/DRM markers from previous failures.
+            for marker_name in ("current_error.txt", "current_drm.txt"):
+                marker_path = os.path.join(www_path, marker_name)
+                if os.path.exists(marker_path):
+                    try:
+                        os.remove(marker_path)
+                    except OSError:
+                        pass
+            return True
+
+        try:
+            promoted = await self._hass.async_add_executor_job(_promote)
+        except Exception as ex:  # noqa: BLE001
+            _LOGGER.debug(
+                "Frame Art: error restoring cached thumbnail for %s: %s",
+                content_id,
+                ex,
+            )
+            return False
+
+        if promoted:
+            _LOGGER.info(
+                "Frame Art: live thumbnail fetch failed for %s; reused cached "
+                "copy from %s/ as current.jpg",
+                content_id,
+                subdir,
+            )
+            self._thumbnail_failures = 0
+            self.async_set_updated_data(self.data)
+
+        return promoted
 
 
 class FrameArtFolderSensor(SensorEntity):
