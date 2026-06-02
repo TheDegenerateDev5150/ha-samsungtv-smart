@@ -26,6 +26,8 @@ Configure on your HA instance the [native HA SmartThings integration](https://ww
 
 **Note:** starting from 30 December 2024 generated `personal access token (PAT)` have a duration of 24 hours as explained [here](https://developer.smartthings.com/docs/getting-started/authorization-and-permissions). For this reason use of `PAT` is not recommended because you should manually update your token every 24 hours. In case you can use the integration reconfigure option to update it.<br/>
 
+**Note (v7):** if the integration can no longer refresh its SmartThings token (revoked, expired, or rotated server-side), it raises an alert in **Settings → Repairs** ("SmartThings authentication failed for …") with the steps to re-authenticate. The alert clears automatically once authentication is restored.<br/>
+
 ### Configure Home Assistant
 
 Once the SmartThings token has been generated, you need to configure the integration with it in order to make it work as explained in the main guide. If you previously
