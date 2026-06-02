@@ -73,6 +73,21 @@ Main Frame Art sensor with current status and artwork information.
 | `current_thumbnail_url` | URL to current artwork thumbnail |
 | `artwork_count` | Total number of available artworks |
 | `slideshow_status` | Slideshow active status |
+| `entry_id` | This TV's config-entry ID (used in the per-TV thumbnail path) |
+| `thumbnail_folder` | Ready-to-use `/local/frame_art/{entry_id}` base path |
+
+### Sensors: `sensor.samsung_*_personal` / `_store` / `_other`
+
+**Auto-created in v7** — one trio per Frame TV, tracking each thumbnail
+subdirectory under the per-TV folder. No manual configuration needed.
+
+**State:** folder size in MB (icon `mdi:folder-image`)
+
+**Attributes:** `path`, `filter`, `number_of_files`, `bytes`, `file_list`
+
+The `file_list` attribute is consumed directly by the bundled gallery card's
+`folder_sensor` option, so you can build galleries without declaring any manual
+`folder` platform sensor. See the [Frame Art Gallery guide](Frame_Art_Gallery.md).
 
 ### Sensor: `sensor.samsung_*_illuminance`
 
@@ -358,6 +373,14 @@ target:
 
 ### Slideshow & Auto-Rotation
 
+> **Frame generations.** Samsung uses two different APIs for this feature
+> depending on firmware. Newer Frames (2024+) use `slideshow_status`; older
+> Frames (≈2020–2021) only support `auto_rotation_status`. The integration
+> detects which one your TV speaks on first use, persists the choice, and routes
+> all reads/writes automatically. **`art_set_slideshow` and
+> `art_set_auto_rotation` are therefore interchangeable aliases** — use either on
+> any model.
+
 #### `samsungtv_smart.art_set_slideshow`
 
 Configure artwork slideshow.
@@ -369,7 +392,9 @@ Configure artwork slideshow.
 | `shuffle` | boolean | No | `true` | Randomize order |
 | `category_id` | integer | No | `2` | Category (2=Personal, 4=Favorites) |
 
-**Duration Options:** `3min`, `15min`, `1h`, `12h`, `1d`, `7d`
+**Duration Options:** `3min`, `15min`, `1h`, `12h`, `1d`, `7d` — or any integer
+number of minutes (e.g. `30`, `180`). Some models reject durations outside a
+supported set; rejections are logged rather than failing silently.
 
 ```yaml
 service: samsungtv_smart.art_set_slideshow
@@ -383,7 +408,9 @@ data:
 
 #### `samsungtv_smart.art_set_auto_rotation`
 
-Configure auto-rotation (similar to slideshow).
+Functionally identical to `art_set_slideshow` (alias). Provided for clarity and
+backward compatibility; the integration routes it to whichever API the TV
+responds to.
 
 **Parameters:** Same as `art_set_slideshow`
 

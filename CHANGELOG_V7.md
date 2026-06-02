@@ -2,9 +2,12 @@
 
 ## Highlights
 
-- **Multi-Frame TV support**: Each Frame TV now writes its thumbnails to a per-TV subdirectory, so multi-Frame setups no longer overwrite each other's `current.jpg`.
+- **Multi-Frame TV support**: Each Frame TV now writes its thumbnails to a per-TV subdirectory, so multi-Frame setups no longer overwrite each other's `current.jpg`. Each TV also gains three auto-created folder sensors (`sensor.<tv>_personal` / `_store` / `_other`) exposing folder size and a `file_list` attribute for gallery cards.
+- **Generation-aware slideshow / auto-rotation** (resolves #18): the integration detects whether each Frame speaks `slideshow_status` (2024+) or `auto_rotation_status` (older ≈2020–2021 models) and routes to it automatically. `art_set_slideshow` and `art_set_auto_rotation` are now functional aliases that work on any model.
 - **Reduced WebSocket traffic**: the expensive `get_content_list` call is now throttled to a configurable interval (default 5 minutes, was 15 seconds).
 - **Persistent capability detection**: brightness and color-temperature TV support is now learned once and remembered across restarts, removing the per-startup probe delay on TVs (like Frame 2024) that don't implement the dedicated requests.
+- **Repairs alert on auth failure**: when the SmartThings OAuth token can no longer be refreshed, a translatable issue is raised in Settings → Repairs with remediation steps, and cleared automatically when auth recovers.
+- **Thumbnail fallback**: when a live thumbnail fetch fails, a previously-downloaded copy is reused instead of an error placeholder (contributed by @prestonmcafee).
 
 ## What changed for users
 
@@ -102,6 +105,26 @@ A new field has been added to the advanced options screen:
 - **Frame Art: content list refresh interval (seconds)** - default 300 (5 min). Lower values keep the gallery counter fresher at the cost of more WebSocket traffic; higher values reduce TV load. Range 30-3600.
 
 The Frame Art sensor itself still refreshes every 15 seconds for cheap state (current artwork, slideshow status, art mode). Only the full content list (which lists every saved artwork on the TV) is throttled to this longer cycle.
+
+### Generation-aware slideshow / auto-rotation (resolves #18)
+
+Samsung Frame TVs don't all expose the same slideshow API. Newer models (2024+, `…LS03D…` and later) answer `slideshow_status`; older models (≈2020–2021, `…LS03T…`, `…LS03A…`) only answer the parallel `auto_rotation_status`. Previously, older Frames silently failed to start or report a slideshow.
+
+V7 detects which API each TV speaks (probing once and persisting the result in the config entry) and routes all reads and writes to it. As a result:
+
+- `art_set_slideshow` and `art_set_auto_rotation` are now functional **aliases** — either works on any Frame model; the integration sends the request to whichever API the TV actually responds to.
+- `slideshow_status` is now reported correctly on older Frames.
+- The `duration` field accepts custom integer-minute values (e.g. `30`, `45`, `180`) in addition to the presets `3min`, `15min`, `1h`, `12h`, `1d`, `7d`. Models that reject a duration now log it instead of failing silently.
+
+Thanks to @prestonmcafee for the multi-generation testing (2020 / 2021 / 2024) behind this fix.
+
+### Authentication failure now shows in Repairs
+
+When the SmartThings OAuth token can't be refreshed (revoked, expired, or rotated server-side), the integration raises a translatable issue in **Settings → Repairs** explaining the cause and pointing to the reconfigure flow. The issue is cleared automatically once a refresh succeeds. Available in en, fr, es, it, hu, pt-BR.
+
+### Thumbnail fallback
+
+If a live thumbnail fetch fails after retries, the integration now reuses a previously-downloaded copy of the same artwork (from `personal/`, `store/`, or `other/`) as `current.jpg` instead of writing an error placeholder. Contributed by @prestonmcafee.
 
 ## Breaking changes
 
