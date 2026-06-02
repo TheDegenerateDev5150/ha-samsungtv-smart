@@ -201,13 +201,26 @@ async def async_setup_entry(
                 if device.device_id == device_id:
                     continue
 
-                # Check if it's a child device
-                is_child = device.parent_device_id == device_id or (
-                    device.location_id == main_location_id
+                # Decide whether this device belongs to THIS TV.
+                # Prefer an explicit parent link: a device is a child only if
+                # its parent_device_id points at this TV. Fall back to the
+                # room/label heuristic ONLY for devices that have no parent
+                # link at all — otherwise, with multiple Frames in the same
+                # room, every TV entry would claim every "light sensor" in the
+                # room and collide on unique IDs (e.g. two TVs both registering
+                # <id>_illuminance for each other's light sensor).
+                if device.parent_device_id == device_id:
+                    is_child = True
+                elif (
+                    not device.parent_device_id
+                    and device.location_id == main_location_id
                     and main_room_id
                     and device.room_id == main_room_id
                     and "light sensor" in device.label.lower()
-                )
+                ):
+                    is_child = True
+                else:
+                    is_child = False
 
                 if is_child:
                     _LOGGER.debug(
