@@ -13,14 +13,30 @@ Ready-to-use configuration files for Frame Art integration.
 
 ---
 
+> ### ⚠️ v7 note — per-TV paths & auto-created folder sensors
+>
+> As of **v7**, thumbnails live under a **per-TV** folder keyed by the
+> config-entry ID: `/config/www/frame_art/{entry_id}/personal` (etc.), not the
+> old flat `/config/www/frame_art/personal`. Find your `{entry_id}` on the
+> `sensor.<tv_name>_frame_art` entity (Developer Tools → States).
+>
+> Also, v7 **auto-creates** folder sensors per TV
+> (`sensor.<tv_name>_personal` / `_store` / `_other`, each with a `file_list`
+> attribute), so the manual `platform: folder` sensors and the directory
+> `mkdir` below are only needed for custom setups. The examples below keep the
+> flat paths for readability — insert your `{entry_id}` when copying.
+
 ## Quick Start
 
 ### 1. Create Directory Structure
 
+The integration creates these automatically per TV. Manual creation is only
+needed if you build galleries outside the integration's managed folder:
+
 ```bash
-mkdir -p /config/www/frame_art/personal
-mkdir -p /config/www/frame_art/store
-mkdir -p /config/www/frame_art/other
+mkdir -p /config/www/frame_art/YOUR_ENTRY_ID/personal
+mkdir -p /config/www/frame_art/YOUR_ENTRY_ID/store
+mkdir -p /config/www/frame_art/YOUR_ENTRY_ID/other
 ```
 
 ### 2. Add Configuration
@@ -195,7 +211,7 @@ After adding scripts:
 1. Go to Developer Tools > Services
 2. Search for `script.frame_art_download_all`
 3. Call the service
-4. Check thumbnails in `/config/www/frame_art/`
+4. Check thumbnails in `/config/www/frame_art/{entry_id}/`
 
 ### Test Automations
 

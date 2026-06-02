@@ -10,15 +10,20 @@
 # ============================================
 
 # ===== SENSORS WITH PLATFORM =====
+# NOTE (v7): the integration now AUTO-CREATES folder sensors per TV
+#   sensor.<tv_name>_personal / _store / _other
+# each exposing a `file_list` attribute. The manual `platform: folder`
+# sensors below are OPTIONAL in v7 — keep them only for custom directories
+# the integration doesn't manage. Paths are now per-TV (include {entry_id}).
 sensor:
   # Track thumbnail files in store directory
   - platform: folder
-    folder: /config/www/frame_art/store
+    folder: /config/www/frame_art/YOUR_ENTRY_ID/store
     filter: "*.jpg"
     
   # Track thumbnail files in personal directory  
   - platform: folder
-    folder: /config/www/frame_art/personal
+    folder: /config/www/frame_art/YOUR_ENTRY_ID/personal
     filter: "*.jpg"
 
 # ===== TEMPLATE SENSORS =====
@@ -37,7 +42,7 @@ template:
             {% for item in state_attr('sensor.samsung_frame_art_list', 'content_list') or [] %}
               {% if item.category_id == 'MY-C0002' %}
                 {% set ns.images = ns.images + [{
-                  'path': '/local/frame_art/personal/' ~ item.content_id ~ '.jpg',
+                  'path': '/local/frame_art/YOUR_ENTRY_ID/personal/' ~ item.content_id ~ '.jpg',
                   'filename': item.content_id ~ '.jpg',
                   'name': item.content_id,
                   'content_id': item.content_id
@@ -59,7 +64,7 @@ template:
             {% for item in state_attr('sensor.samsung_frame_art_list', 'content_list') or [] %}
               {% if item.content_id.startswith('SAM-') %}
                 {% set ns.images = ns.images + [{
-                  'path': '/local/frame_art/store/' ~ item.content_id ~ '.jpg',
+                  'path': '/local/frame_art/YOUR_ENTRY_ID/store/' ~ item.content_id ~ '.jpg',
                   'filename': item.content_id ~ '.jpg',
                   'name': item.content_id,
                   'content_id': item.content_id
@@ -82,7 +87,7 @@ template:
               {% if item.category_id == 'MY-C0004' %}
                 {% set subdir = 'personal' if item.content_id.startswith('MY_F') else ('store' if item.content_id.startswith('SAM-') else 'other') %}
                 {% set ns.images = ns.images + [{
-                  'path': '/local/frame_art/' ~ subdir ~ '/' ~ item.content_id ~ '.jpg',
+                  'path': '/local/frame_art/YOUR_ENTRY_ID/' ~ subdir ~ '/' ~ item.content_id ~ '.jpg',
                   'filename': item.content_id ~ '.jpg',
                   'name': item.content_id,
                   'content_id': item.content_id,
