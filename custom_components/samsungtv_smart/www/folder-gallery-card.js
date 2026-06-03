@@ -432,6 +432,47 @@ class FolderGalleryCard extends HTMLElement {
         .lightbox-btn.danger:hover {
           background: #ef5350;
         }
+
+        /* Frame chooser (multi-frame upload routing) */
+        .frame-chooser {
+          display: none;
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(0,0,0,0.85);
+          z-index: 1000;
+          justify-content: center;
+          align-items: center;
+          flex-direction: column;
+          padding: 24px;
+        }
+
+        .frame-chooser.open {
+          display: flex;
+        }
+
+        .frame-chooser-title {
+          color: white;
+          font-size: 1.1em;
+          font-weight: 500;
+          margin-bottom: 16px;
+          text-align: center;
+        }
+
+        .frame-chooser-list {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          width: 100%;
+          max-width: 360px;
+        }
+
+        .frame-chooser-list .lightbox-btn {
+          width: 100%;
+          text-align: center;
+        }
       </style>
       
       <ha-card>
@@ -457,6 +498,11 @@ class FolderGalleryCard extends HTMLElement {
             <button class="lightbox-btn danger" id="lightbox-delete" style="display:none">🗑 Delete</button>
             <button class="lightbox-btn secondary" id="lightbox-close-btn">Close</button>
           </div>
+        </div>
+
+        <div class="frame-chooser" id="frame-chooser">
+          <div class="frame-chooser-title">Upload to which Frame?</div>
+          <div class="frame-chooser-list" id="frame-chooser-list"></div>
         </div>
       </ha-card>
     `;
@@ -663,15 +709,34 @@ class FolderGalleryCard extends HTMLElement {
   executeAction(imageData, actionConfig = null) {
     const action = actionConfig || this._config.action;
     if (!action || !this._hass) return;
+    if (!action.service) return;
+
+    // Multi-frame upload routing.
+    // When the action is an upload, the gallery points at a local photo
+    // source (folder not store/personal AND image not a SAM-/MY_ content id),
+    // and more than one Frame TV is present, ask the user which Frame to
+    // upload to instead of using the configured entity. Every other case
+    // keeps the original behaviour untouched.
+    if (this._isUploadAction(action) && this._isLocalPhotoSource(imageData)) {
+      const frames = this._discoverFrames();
+      if (frames.length > 1) {
+        this._openFrameChooser(imageData, action, frames);
+        return;
+      }
+    }
+
+    this._dispatchAction(imageData, action);
+  }
+
+  _dispatchAction(imageData, action, entityOverride = null) {
+    if (!action || !this._hass || !action.service) return Promise.resolve();
 
     const service = action.service;
-    if (!service) return;
-
     const [domain, serviceName] = service.split('.');
-    
+
     // Build service data with template substitution
     let serviceData = { ...(action.data || {}) };
-    
+
     // Replace templates
     const replaceTemplates = (obj) => {
       if (typeof obj === 'string') {
@@ -696,11 +761,22 @@ class FolderGalleryCard extends HTMLElement {
     serviceData = replaceTemplates(serviceData);
 
     // Add target if specified
-    const target = action.target ? replaceTemplates(action.target) : undefined;
+    let target = action.target ? replaceTemplates(action.target) : undefined;
+
+    // Route to the chosen Frame when an override is supplied. Preserve the
+    // configured placement: override target.entity_id if a target was used,
+    // otherwise set entity_id in the service data.
+    if (entityOverride) {
+      if (target && target.entity_id !== undefined) {
+        target = { ...target, entity_id: entityOverride };
+      } else {
+        serviceData = { ...serviceData, entity_id: entityOverride };
+      }
+    }
 
     console.log(`[FolderGalleryCard] Calling ${service}`, { serviceData, target });
 
-    this._hass.callService(domain, serviceName, serviceData, target)
+    return this._hass.callService(domain, serviceName, serviceData, target)
       .then(() => {
         // Visual feedback
         this.showToast(`Action executed: ${serviceName}`);
@@ -709,6 +785,106 @@ class FolderGalleryCard extends HTMLElement {
         console.error('[FolderGalleryCard] Service call failed:', err);
         this.showToast(`Error: ${err.message}`, true);
       });
+  }
+
+  _isUploadAction(action) {
+    const svc = (action.service || '').toLowerCase();
+    if (svc.endsWith('art_upload')) return true;
+    // Generic heuristic: an upload-style action carries a file_path payload.
+    return !!(action.data && Object.prototype.hasOwnProperty.call(action.data, 'file_path'));
+  }
+
+  _isLocalPhotoSource(imageData) {
+    // Guard 1: the configured folder must not be a TV-resident art folder
+    // (last path segment "store" or "personal").
+    const folder = (this._config.folder || '').replace(/\/+$/, '').toLowerCase();
+    const lastSeg = folder.split('/').pop() || '';
+    if (lastSeg === 'store' || lastSeg === 'personal') return false;
+
+    // Guard 2: the image must not already be a TV content id (SAM-/MY_).
+    const cid = String(imageData.content_id || imageData.name || '').toUpperCase();
+    const isTvContent =
+      cid.startsWith('SAM-') || cid.startsWith('SAM_') ||
+      cid.startsWith('MY-') || cid.startsWith('MY_');
+    return !isTvContent;
+  }
+
+  _discoverFrames() {
+    // A Frame TV exposes the `art_mode_status` attribute on its media_player
+    // (added by extra_state_attributes only when Art Mode is supported).
+    const frames = [];
+    const states = (this._hass && this._hass.states) || {};
+    for (const entityId in states) {
+      if (!entityId.startsWith('media_player.')) continue;
+      const st = states[entityId];
+      if (st && st.attributes &&
+          Object.prototype.hasOwnProperty.call(st.attributes, 'art_mode_status')) {
+        frames.push({
+          entity_id: entityId,
+          name: st.attributes.friendly_name || entityId
+        });
+      }
+    }
+    frames.sort((a, b) => a.name.localeCompare(b.name));
+    return frames;
+  }
+
+  _openFrameChooser(imageData, action, frames) {
+    const chooser = this.shadowRoot.getElementById('frame-chooser');
+    const list = this.shadowRoot.getElementById('frame-chooser-list');
+    if (!chooser || !list) {
+      // Fallback: chooser markup missing, dispatch to the first frame.
+      this._dispatchAction(imageData, action, frames[0] ? frames[0].entity_id : null);
+      return;
+    }
+
+    list.innerHTML = '';
+
+    // "All Frames" option
+    const allBtn = document.createElement('button');
+    allBtn.className = 'lightbox-btn';
+    allBtn.textContent = `⬆ All Frames (${frames.length})`;
+    allBtn.addEventListener('click', async () => {
+      this._closeFrameChooser();
+      this.showToast(`Uploading to all Frames (${frames.length})…`);
+      for (const f of frames) {
+        // Sequential: each upload is a heavy WebSocket transfer.
+        await this._dispatchAction(imageData, action, f.entity_id);
+      }
+    });
+    list.appendChild(allBtn);
+
+    // One option per frame
+    frames.forEach(f => {
+      const btn = document.createElement('button');
+      btn.className = 'lightbox-btn';
+      btn.textContent = f.name;
+      btn.addEventListener('click', () => {
+        this._closeFrameChooser();
+        this.showToast(`Upload → ${f.name}`);
+        this._dispatchAction(imageData, action, f.entity_id);
+      });
+      list.appendChild(btn);
+    });
+
+    // Cancel
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'lightbox-btn secondary';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => this._closeFrameChooser());
+    list.appendChild(cancelBtn);
+
+    // Dismiss on backdrop click
+    chooser.onclick = (e) => {
+      if (e.target === chooser) this._closeFrameChooser();
+    };
+
+    chooser.classList.add('open');
+  }
+
+  _closeFrameChooser() {
+    const chooser = this.shadowRoot.getElementById('frame-chooser');
+    if (chooser) chooser.classList.remove('open');
   }
 
   showToast(message, isError = false) {
@@ -845,7 +1021,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c FOLDER-GALLERY-CARD %c v1.2.0 ',
+  '%c FOLDER-GALLERY-CARD %c v1.3.0 ',
   'color: white; background: #03a9f4; font-weight: bold;',
   'color: #03a9f4; background: white; font-weight: bold;'
 );
