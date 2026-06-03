@@ -140,4 +140,10 @@ The thumbnail folder layout changed from flat to per-TV. Anything in your HA con
 - Fix issue #13 (azebro): repeated "Allow device" prompts on Frame 2024 firmware. Token is now sent on all WS channels (6.13.4).
 - REST URL port is no longer hard-coded.
 
+## Acknowledgements
 
+Special thanks to **@prestonmcafee** for the detailed, multi-generation testing behind this release. Running 2020, 2021, and 2024 Frame TVs side by side, he provided per-model state dumps, firmware versions, and methodical before/after logs that pinpointed the slideshow API split (#18), the `art_mode_changed`-without-request-id confirmation on older Frames (Art Mode activation fix), and suggested the cached-thumbnail fallback for `current.jpg`.
+
+## Beta status
+
+7.0.0b1 is a beta release. The multi-Frame thumbnail path migration runs only once and is irreversible. If you want to roll back, you'll need to manually move files from `www/frame_art/{entry_id}/` back to `www/frame_art/` before reinstalling an older version.

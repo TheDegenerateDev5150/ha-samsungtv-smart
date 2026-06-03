@@ -157,3 +157,21 @@ directories that fill in as artworks change on each TV.
 
 Rolling back requires manually moving files from `www/frame_art/{entry_id}/`
 back to `www/frame_art/` before reinstalling a 6.x release.
+
+---
+
+## Acknowledgements
+
+Special thanks to **@prestonmcafee**, whose detailed, multi-generation testing
+drove much of this release. Running 2020, 2021, and 2024 Frame TVs side by side,
+he supplied per-model state dumps, firmware versions, and methodical before/after
+logs that pinpointed two issues no single-TV setup would have surfaced:
+
+- the slideshow API split between `slideshow_status` (newer Frames) and
+  `auto_rotation_status` (older Frames), which is the basis of the
+  generation-aware routing (#18); and
+- the `art_mode_changed`-without-request-id confirmation on older Frames, which
+  is what the Art Mode activation fix relies on.
+
+He also suggested the cached-thumbnail fallback for `current.jpg`. Older Frame
+owners benefit directly from his work.
