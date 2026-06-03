@@ -25,6 +25,7 @@ Frame Art Gallery transforms your Home Assistant dashboard into an interactive a
 
 - 📸 Click thumbnails to display artwork on Frame TV
 - ⬆️ Upload your own images directly from HA to the Frame TV
+- 🖼️ Upload to a chosen Frame — or to **all** Frames at once — in multi-Frame setups
 - 🎨 Separate galleries for personal photos, favorites, and Art Store
 - 🔄 Auto-generated from actual TV content
 - 📱 Fully responsive layouts
@@ -402,6 +403,40 @@ action:
 1. Click any thumbnail → lightbox opens
 2. Click **⬆ Upload** → the image is sent to the Frame TV
 3. Once uploaded, the TV assigns a `MY_Fxxxx` content ID — the artwork is now accessible from the Frame TV's personal gallery
+
+### Uploading with Multiple Frame TVs
+
+If you have **more than one Frame TV**, the card no longer uploads blindly to the
+`entity_id` in your card config. When you click **⬆ Upload** on a local image, it
+opens an *"Upload to which Frame?"* chooser:
+
+- one button per Frame TV (by friendly name), which uploads to just that Frame
+- an **⬆ All Frames (N)** button, which uploads to every Frame in turn
+- **Cancel**
+
+The chosen Frame overrides the `entity_id` in your `action` for that upload, so a
+single card definition serves every Frame — you don't need a separate card per TV.
+
+A few details worth knowing:
+
+- **The chooser only appears for local-photo uploads.** It is shown when the
+  action is an upload (service ending in `art_upload`, or any action carrying a
+  `file_path`) **and** the gallery points at a local folder — i.e. the `folder`
+  path does not end in `store`/`personal` and the image isn't already a
+  `SAM-`/`MY_` artwork. Select/favourite/delete actions on TV-resident artwork are
+  unaffected and keep using the configured `entity_id`.
+- **Single-Frame setups are unchanged.** With exactly one Frame TV detected, the
+  upload goes straight through to the configured entity with no extra prompt.
+- **No configuration needed.** Frames are discovered automatically from the
+  `art_mode_status` attribute that the integration adds to each Frame's
+  `media_player`. Any Frame the integration manages shows up in the chooser.
+- **All Frames is sequential.** Each upload is a heavy WebSocket transfer, so the
+  card uploads to the Frames one after another rather than in parallel; a toast
+  reports progress per TV.
+
+You can keep the `entity_id` in your card's `action.target` — it remains the
+fallback for single-Frame installs and is overridden per upload when the chooser
+is used.
 
 ### Automate with a Script
 
