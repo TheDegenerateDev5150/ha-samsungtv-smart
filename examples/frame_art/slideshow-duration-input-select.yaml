@@ -17,6 +17,9 @@
 #     works on both newer (slideshow) and older (auto-rotation) Frames.
 #   - "30 minutes" is sent as the custom value "30". Some older models accept
 #     only a limited set of durations; if one is rejected it is logged.
+#   - The helper has no `initial:` — that way Home Assistant restores the
+#     last selected value across restarts, instead of resetting to "Off"
+#     every time. (Tip from @PrestonMcAfee.)
 #   - For multiple Frame TVs, duplicate the helper + automation with distinct
 #     names/entity_ids (e.g. _living, _bedroom) and point each automation at
 #     the matching media_player.
@@ -28,7 +31,6 @@ input_select:
   frame_art_slideshow_duration:
     name: Frame Art Slideshow
     icon: mdi:image-multiple
-    initial: "Off"
     options:
       - "Off"
       - "3 minutes"
@@ -88,3 +90,55 @@ automation:
 #   type: tile
 #   entity: input_select.frame_art_slideshow_duration
 #   name: Frame Art Slideshow
+
+# ----- 4) (Optional) Sync the dropdown from the TV on startup ---------------
+# Without this, the dropdown shows the last value HA had before restart, which
+# may not match the TV's actual current state (you may have changed it via the
+# physical remote in the meantime). The automation below reads the TV's
+# slideshow_status on Home Assistant start and updates the dropdown to match.
+#
+# Trade-off: when the dropdown changes, the "apply" automation above will
+# re-trigger and send the same duration back to the TV — a harmless no-op
+# but a tiny bit of extra traffic on startup. Comment out if you prefer
+# strict last-value restoration.
+#
+# automation:
+#   - alias: "Frame Art - sync slideshow dropdown from TV on startup"
+#     id: frame_art_sync_slideshow_dropdown
+#     trigger:
+#       - platform: homeassistant
+#         event: start
+#     action:
+#       # Wait for the Frame Art sensor to come up.
+#       - wait_template: >-
+#           {{ states('sensor.samsung_frame_frame_art') not in ['unknown', 'unavailable'] }}
+#         timeout: '00:01:00'
+#         continue_on_timeout: true
+#       # Small extra delay for slideshow_status attribute to be populated.
+#       - delay: '00:00:05'
+#       - variables:
+#           # Map the TV's reported slideshow value (minutes as string, or 'off')
+#           # back to the dropdown label.
+#           status_to_label:
+#             'off':    "Off"
+#             '3':      "3 minutes"
+#             '15':     "15 minutes"
+#             '30':     "30 minutes"
+#             '60':     "1 hour"
+#             '720':    "12 hours"
+#             '1440':   "1 day"
+#             '10080':  "7 days"
+#           current_status: >-
+#             {{ state_attr('sensor.samsung_frame_frame_art', 'slideshow_status') | string }}
+#           label: "{{ status_to_label.get(current_status) }}"
+#       # Only proceed if we mapped to a known option and it differs from the dropdown.
+#       - condition: template
+#         value_template: >-
+#           {{ label is not none
+#              and label != states('input_select.frame_art_slideshow_duration') }}
+#       - service: input_select.select_option
+#         target:
+#           entity_id: input_select.frame_art_slideshow_duration
+#         data:
+#           option: "{{ label }}"
+#     mode: single
