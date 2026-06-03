@@ -1066,6 +1066,10 @@ class FrameArtFolderSensor(SensorEntity):
     _attr_icon = "mdi:folder-image"
     _attr_native_unit_of_measurement = "MB"
     _attr_should_poll = True
+    # file_list grows with the number of thumbnails and can exceed the
+    # recorder's 16 KiB per-state attribute limit on TVs with many artworks.
+    # Keep it live for folder-gallery-card but out of the database history.
+    _unrecorded_attributes = frozenset({"file_list"})
 
     def __init__(
         self,
@@ -1143,6 +1147,12 @@ class FrameArtSensor(CoordinatorEntity, SensorEntity):
     """Sensor entity for Samsung Frame TV Art Mode."""
 
     _attr_icon = "mdi:image-frame"
+    # Keep the (potentially large) last service result out of the recorder.
+    # Service calls such as get_content_list or get_thumbnails_batch can store
+    # the full TV artwork list here, which easily exceeds the recorder's
+    # 16 KiB per-state attribute limit and bloats the database. The attribute
+    # is still exposed live for cards/automations; it just isn't recorded.
+    _unrecorded_attributes = frozenset({"last_service_result"})
 
     def __init__(
         self,
