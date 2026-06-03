@@ -27,9 +27,15 @@ from homeassistant.helpers.event import async_track_state_change_event
 
 from . import async_get_samsungtv_api_key
 from .api.art import SamsungTVAsyncArt
+from .api.ipcontrol import (
+    SamsungIPControl,
+    SamsungIPControlAuthError,
+    SamsungIPControlError,
+)
 from .const import (
     AUTH_METHOD_OAUTH,
     CONF_AUTH_METHOD,
+    CONF_IP_CONTROL_TOKEN,
     CONF_IS_FRAME_TV,
     CONF_WS_NAME,
     DATA_ART_API,
@@ -92,6 +98,7 @@ async def async_setup_entry(
             device_name=device_name,
             session=session,
             device_unique_id=device_unique_id,
+            host=host,
         )
     )
     _LOGGER.debug(
@@ -602,6 +609,7 @@ class SamsungTVPowerSwitch(SwitchEntity):
         device_name: str,
         session,
         device_unique_id: str,
+        host: str | None = None,
     ) -> None:
         """Initialize the power switch."""
         self.hass = hass
@@ -610,11 +618,32 @@ class SamsungTVPowerSwitch(SwitchEntity):
         self._session = session
         self._device_name = device_name
         self._device_unique_id = device_unique_id
+        self._host = host
         self._attr_unique_id = f"{entry.entry_id}_power"
         self._media_player_entity_id: str | None = None
         # Optimistic override — set temporarily by turn_on/turn_off for
         # instant UI feedback, cleared on next media_player state change.
         self._optimistic_state: bool | None = None
+        # IP Control client (lazy) and the token it was built with, so we can
+        # rebuild it transparently if the token changes (e.g. after re-pairing).
+        self._ip_control: SamsungIPControl | None = None
+        self._ip_control_token: str | None = None
+
+    def _get_ip_control(self) -> SamsungIPControl | None:
+        """Return an IP Control client if this TV is paired, else None.
+
+        The token is read live from entry.data so that pairing (done via the
+        options flow) takes effect immediately, with no reload required.
+        """
+        if not self._host:
+            return None
+        token = self._entry.data.get(CONF_IP_CONTROL_TOKEN)
+        if not token:
+            return None
+        if self._ip_control is None or self._ip_control_token != token:
+            self._ip_control = SamsungIPControl(self.hass, self._host, token=token)
+            self._ip_control_token = token
+        return self._ip_control
 
     async def _get_st_client(self):
         """Get SmartThings client with current (possibly refreshed) token."""
@@ -711,7 +740,37 @@ class SamsungTVPowerSwitch(SwitchEntity):
         return "mdi:power" if self.is_on else "mdi:power-off"
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the TV on — delegates to media_player.turn_on."""
+        """Turn the TV on.
+
+        Strategy:
+        - IP Control paired → powerOn via JSON-RPC (explicit, future-proof if
+          Samsung disables the WebSocket ports). Falls back on failure.
+        - Otherwise (or on failure) → media_player.turn_on, which uses WOL /
+          WebSocket as today.
+        """
+        self._optimistic_state = True
+        self.async_write_ha_state()
+
+        ip_control = self._get_ip_control()
+        if ip_control is not None:
+            try:
+                await ip_control.async_power_on()
+                _LOGGER.debug("Power switch: TV turned on via IP Control")
+                self.async_write_ha_state()
+                return
+            except SamsungIPControlAuthError as ex:
+                _LOGGER.warning(
+                    "Power switch: IP Control token rejected (%s) — re-pair via "
+                    "the integration options; falling back to media_player",
+                    ex,
+                )
+            except SamsungIPControlError as ex:
+                _LOGGER.debug(
+                    "Power switch: IP Control turn_on failed (%s), "
+                    "falling back to media_player",
+                    ex,
+                )
+
         entity_id = self._get_media_player_entity_id()
         if not entity_id:
             _LOGGER.warning(
@@ -720,8 +779,6 @@ class SamsungTVPowerSwitch(SwitchEntity):
             return
 
         _LOGGER.debug("Power switch: delegating turn_on to %s", entity_id)
-        self._optimistic_state = True
-        self.async_write_ha_state()
         await self.hass.services.async_call(
             "media_player",
             "turn_on",
@@ -734,11 +791,15 @@ class SamsungTVPowerSwitch(SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the TV off.
 
-        Strategy:
+        Priority:
         - SmartThings configured → Command.OFF (hardware-level, works regardless
           of TV state including Art Mode).
-        - No SmartThings → media_player.turn_off, which handles Art Mode natively
-          by sending KEY_POWER over WebSocket when artmode_status is On.
+        - IP Control paired → powerOff via JSON-RPC (explicit, works from Art
+          Mode, no cloud, future-proof if Samsung disables the WebSocket ports).
+        - Otherwise → media_player.turn_off (KEY_POWER over WebSocket). Note that
+          on Frame TVs this only toggles between viewing and Art Mode rather than
+          issuing a true power-off — which is exactly why the paths above are
+          preferred when available.
         """
         if self._device_id:
             # SmartThings path — bypasses HA state entirely
@@ -757,15 +818,37 @@ class SamsungTVPowerSwitch(SwitchEntity):
                     return
                 else:
                     _LOGGER.warning(
-                        "Power switch: SmartThings client unavailable, falling back to WebSocket"
+                        "Power switch: SmartThings client unavailable, falling back"
                     )
             except Exception as ex:
                 _LOGGER.warning(
-                    "Power switch: SmartThings turn_off failed (%s), falling back to WebSocket",
+                    "Power switch: SmartThings turn_off failed (%s), falling back",
                     ex,
                 )
 
-        # WebSocket fallback (or SmartThings failed) —
+        # IP Control path — explicit power-off, works from Art Mode.
+        ip_control = self._get_ip_control()
+        if ip_control is not None:
+            try:
+                await ip_control.async_power_off()
+                self._optimistic_state = False
+                self.async_write_ha_state()
+                _LOGGER.debug("Power switch: TV turned off via IP Control")
+                return
+            except SamsungIPControlAuthError as ex:
+                _LOGGER.warning(
+                    "Power switch: IP Control token rejected (%s) — re-pair via "
+                    "the integration options; falling back to WebSocket",
+                    ex,
+                )
+            except SamsungIPControlError as ex:
+                _LOGGER.debug(
+                    "Power switch: IP Control turn_off failed (%s), "
+                    "falling back to WebSocket",
+                    ex,
+                )
+
+        # WebSocket fallback —
         # media_player._turn_off() handles Art Mode via KEY_POWER natively
         entity_id = self._get_media_player_entity_id()
         if not entity_id:
