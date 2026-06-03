@@ -54,6 +54,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_platform
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.service import CONF_SERVICE_ENTITY_ID, async_call_from_config
@@ -101,6 +102,7 @@ from .const import (
     CONF_PING_PORT,
     CONF_POWER_ON_METHOD,
     CONF_SHOW_CHANNEL_NR,
+    CONF_SLIDESHOW_API,
     CONF_SOURCE_LIST,
     CONF_ST_ENTRY_UNIQUE_ID,
     CONF_SYNC_TURN_OFF,
@@ -369,9 +371,13 @@ async def async_setup_entry(
     platform.async_register_entity_service(
         SERVICE_ART_SET_SLIDESHOW,
         {
-            vol.Required(ATTR_DURATION): vol.In(
-                ["3min", "15min", "1h", "12h", "1d", "7d"]
-            ),
+            # Accept any string: known presets ('3min', '15min', '1h', '12h',
+            # '1d', '7d') OR arbitrary integer-coercible values in minutes
+            # (e.g. '30', '30min', '180'). Different Frame TV models support
+            # different duration sets; the implementation validates the
+            # semantic value and falls back to the integer-minutes path for
+            # anything not in the preset map.
+            vol.Required(ATTR_DURATION): cv.string,
             vol.Optional(ATTR_SHUFFLE, default=True): cv.boolean,
             vol.Optional(ATTR_CATEGORY_ID, default=2): vol.All(
                 vol.Coerce(int), vol.Range(2, 8)
@@ -382,9 +388,9 @@ async def async_setup_entry(
     platform.async_register_entity_service(
         SERVICE_ART_SET_AUTO_ROTATION,
         {
-            vol.Required(ATTR_DURATION): vol.In(
-                ["3min", "15min", "1h", "12h", "1d", "7d"]
-            ),
+            # Accept any string: known presets OR arbitrary integer-coercible
+            # values in minutes. See art_set_slideshow above for rationale.
+            vol.Required(ATTR_DURATION): cv.string,
             vol.Optional(ATTR_SHUFFLE, default=True): cv.boolean,
             vol.Optional(ATTR_CATEGORY_ID, default=2): vol.All(
                 vol.Coerce(int), vol.Range(2, 8)
@@ -692,6 +698,29 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             finally:
                 set_oauth_refresh_in_progress(self._entry_id, False)
 
+    def _raise_oauth_issue(self) -> None:
+        """Surface a Repairs issue when SmartThings OAuth can't be refreshed.
+
+        Uses the issue registry so the alert shows up in
+        Settings -> Repairs, is translatable, and is automatically
+        cleared once a refresh succeeds again.
+        """
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        device_name = entry.title if entry else (self.name or "this Samsung TV")
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            f"oauth_auth_failed_{self._entry_id}",
+            is_fixable=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key="oauth_auth_failed",
+            translation_placeholders={"device_name": device_name},
+        )
+
+    def _clear_oauth_issue(self) -> None:
+        """Clear the OAuth Repairs issue once a refresh succeeds."""
+        ir.async_delete_issue(self.hass, DOMAIN, f"oauth_auth_failed_{self._entry_id}")
+
     async def _do_oauth_refresh(self) -> bool:
         """Perform the actual OAuth token refresh."""
         # Get current entry to check token expiration
@@ -711,6 +740,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 "OAuth token does not contain refresh_token - token cannot be refreshed. "
                 "Please reconfigure the integration with OAuth."
             )
+            self._raise_oauth_issue()
             return False
 
         expires_at = oauth_token.get("expires_at", 0)
@@ -764,6 +794,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                     "Go to Settings > Devices & Services > Application Credentials "
                     "and add credentials for Samsung TV Smart, then reconfigure the integration."
                 )
+                self._raise_oauth_issue()
                 return False
 
             new_token = await implementation.async_refresh_token(oauth_token)
@@ -792,6 +823,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 "OAuth token refreshed successfully, new expiration in %.0f seconds",
                 new_token.get("expires_at", 0) - time.time(),
             )
+            self._clear_oauth_issue()
             return True
 
         except Exception as ex:
@@ -800,6 +832,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 "You may need to reconfigure the integration with OAuth.",
                 ex,
             )
+            self._raise_oauth_issue()
             return False
 
     async def async_added_to_hass(self):
@@ -1647,7 +1680,26 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
     def extra_state_attributes(self):
         """Return the optional state attributes."""
         data = {ATTR_IP_ADDRESS: self._host}
-        if self._ws.artmode_status != ArtModeStatus.Unsupported:
+
+        # Determine Art Mode status for state attributes.
+        #
+        # Priority order:
+        #  1. async Art API (art.py) — preferred when active.
+        #     Once disable_art_thread() is called, _ws.artmode_status is frozen
+        #     at its last value and is no longer updated when Art Mode changes.
+        #     art_api.art_mode is kept live by WebSocket events (artmode_status,
+        #     art_mode_changed) received on the async art channel, so it always
+        #     reflects the current state.
+        #  2. _ws.artmode_status — fallback for the period before art_api has
+        #     received its first event (e.g. right after HA startup).
+        art_api = (
+            self.hass.data.get(DOMAIN, {}).get(self._entry_id, {}).get(DATA_ART_API)
+        )
+        if art_api is not None and art_api.art_mode is not None:
+            data.update(
+                {ATTR_ART_MODE_STATUS: STATE_ON if art_api.art_mode else STATE_OFF}
+            )
+        elif self._ws.artmode_status != ArtModeStatus.Unsupported:
             status_on = self._ws.artmode_status == ArtModeStatus.On
             data.update({ATTR_ART_MODE_STATUS: STATE_ON if status_on else STATE_OFF})
         if self._st:
@@ -2716,7 +2768,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 subdir = "other"
 
             # Create directory path
-            www_path = self.hass.config.path("www", "frame_art", subdir)
+            www_path = self.hass.config.path("www", "frame_art", self._entry_id, subdir)
             file_name = f"{content_id.replace(':', '_')}.jpg"
             file_path = os.path.join(www_path, file_name)
 
@@ -2735,7 +2787,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                     result = {
                         "service": "art_get_thumbnail",
                         "content_id": content_id,
-                        "thumbnail_url": f"/local/frame_art/{subdir}/{file_name}",
+                        "thumbnail_url": f"/local/frame_art/{self._entry_id}/{subdir}/{file_name}",
                         "thumbnail_path": file_path,
                         "subdirectory": subdir,
                         "cached": True,
@@ -2746,7 +2798,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
             # Download thumbnail with improved retry logic
             max_retries = 3
-            retry_delays = [0.5, 1.0, 2.0]  # Progressive delays
+            retry_delays = [1, 2, 5]  # Progressive delays (aligned with sensor.py)
             thumbnail_data = None
             last_error = None
 
@@ -2813,7 +2865,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
                         # Add URL to result
                         result["thumbnail_url"] = (
-                            f"/local/frame_art/{subdir}/{file_name}"
+                            f"/local/frame_art/{self._entry_id}/{subdir}/{file_name}"
                         )
                         result["thumbnail_path"] = file_path
                         result["subdirectory"] = subdir
@@ -2861,7 +2913,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         # Determine which directories to clean
         dirs_to_clean = []
-        base_path = self.hass.config.path("www", "frame_art")
+        base_path = self.hass.config.path("www", "frame_art", self._entry_id)
 
         if favorites_only:
             # Favorites are typically SAM-* (store) images
@@ -3017,10 +3069,12 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
             _LOGGER.info(
                 "Starting batch thumbnail download for %d artworks "
-                "(force_download=%s, cleanup_orphans=%s)",
+                "(force_download=%s, cleanup_orphans=%s, "
+                "batch_capable=%s)",
                 total,
                 force_download,
                 cleanup_orphans,
+                self._art_api._supports_thumbnail_list,
             )
 
             for idx, artwork in enumerate(artwork_list, 1):
@@ -3307,6 +3361,52 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             _LOGGER.error("Error setting favourite status: %s", ex)
             return {"error": str(ex)}
 
+    def _get_active_slideshow_api(self) -> str:
+        """Return the slideshow API name the TV is known to speak.
+
+        Reads the value persisted in entry data by the coordinator's
+        one-shot detection. Falls back to ``"slideshow"`` (the modern
+        Frame TV API, used by 2024+ models) when detection hasn't run
+        yet or was inconclusive — this preserves the historical default
+        behavior for users upgrading from earlier releases.
+        """
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None:
+            return "slideshow"
+        return entry.data.get(CONF_SLIDESHOW_API) or "slideshow"
+
+    async def _set_slideshow_via_active_api(
+        self,
+        duration_minutes: int,
+        shuffle: bool,
+        category_id: int,
+    ) -> None:
+        """Route a slideshow SET call to whichever API the TV speaks.
+
+        Called by both art_set_slideshow and art_set_auto_rotation —
+        the two service names are aliases that target the same TV
+        feature; the integration just sends the request to the
+        endpoint the TV actually responds to (detected and persisted
+        by the coordinator).
+        """
+        active_api = self._get_active_slideshow_api()
+        _LOGGER.debug(
+            "Frame Art: routing slideshow set via %r API "
+            "(duration=%d min, shuffle=%s, category=%d)",
+            active_api,
+            duration_minutes,
+            shuffle,
+            category_id,
+        )
+        if active_api == "auto_rotation":
+            await self._art_api.set_auto_rotation_status(
+                duration_minutes, shuffle, category_id
+            )
+        else:
+            await self._art_api.set_slideshow_status(
+                duration_minutes, shuffle, category_id
+            )
+
     async def async_art_set_slideshow(
         self,
         duration: str,
@@ -3315,7 +3415,15 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
     ) -> dict:
         """Configure slideshow settings.
 
-        Duration accepts: '3min', '15min', '1h', '12h', '1d', '7d'
+        Duration accepts the named presets '3min', '15min', '1h', '12h',
+        '1d', '7d', or any other integer-coercible string representing
+        minutes (e.g. '30', '30min', '180'). The set of durations the
+        TV actually supports varies by Frame model and firmware — values
+        outside the TV's supported set may be silently ignored by the TV.
+
+        The request is routed to ``slideshow_status`` or
+        ``auto_rotation_status`` depending on what the coordinator
+        detected the TV listens to.
         """
         if not await self._ensure_frame_tv_check():
             _LOGGER.warning("Frame TV art mode is not supported on this device")
@@ -3338,7 +3446,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 duration_minutes = int(duration)
             except (ValueError, TypeError):
                 return {
-                    "error": f"Invalid duration: {duration}. Valid values: 3min, 15min, 1h, 12h, 1d, 7d"
+                    "error": (
+                        f"Invalid duration: {duration!r}. "
+                        "Use one of the presets (3min, 15min, 1h, 12h, 1d, 7d) "
+                        "or an integer number of minutes."
+                    )
                 }
 
         # Ensure TV is on and in Art Mode
@@ -3346,20 +3458,14 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             return {"error": "Failed to turn on TV"}
 
         try:
-            _LOGGER.debug(
-                "Frame Art: Setting slideshow duration=%s (%d min), shuffle=%s, category=%d",
-                duration,
-                duration_minutes,
-                shuffle,
-                category_id,
-            )
-            await self._art_api.set_slideshow_status(
+            await self._set_slideshow_via_active_api(
                 duration_minutes, shuffle, category_id
             )
             return {
                 "success": True,
                 "duration": duration,
                 "duration_minutes": duration_minutes,
+                "api": self._get_active_slideshow_api(),
             }
         except Exception as ex:
             _LOGGER.error("Error setting slideshow: %s", ex)
@@ -3373,7 +3479,15 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
     ) -> dict:
         """Configure auto rotation settings.
 
-        Duration accepts: '3min', '15min', '1h', '12h', '1d', '7d'
+        Functionally identical to ``art_set_slideshow``: both service
+        names are aliases that target the Frame TV's artwork rotation
+        feature. The integration routes the request to whichever
+        underlying Samsung API the TV responds to
+        (``slideshow_status`` or ``auto_rotation_status``).
+
+        Duration accepts the named presets '3min', '15min', '1h', '12h',
+        '1d', '7d', or any other integer-coercible string representing
+        minutes (e.g. '30', '30min', '180').
         """
         if not await self._ensure_frame_tv_check():
             _LOGGER.warning("Frame TV art mode is not supported on this device")
@@ -3395,7 +3509,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 duration_minutes = int(duration)
             except (ValueError, TypeError):
                 return {
-                    "error": f"Invalid duration: {duration}. Valid values: 3min, 15min, h, 12h, 1d, 7d"
+                    "error": (
+                        f"Invalid duration: {duration!r}. "
+                        "Use one of the presets (3min, 15min, 1h, 12h, 1d, 7d) "
+                        "or an integer number of minutes."
+                    )
                 }
 
         # Ensure TV is on and in Art Mode
@@ -3403,20 +3521,14 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             return {"error": "Failed to turn on TV"}
 
         try:
-            _LOGGER.debug(
-                "Frame Art: Setting auto rotation duration=%s (%d min), shuffle=%s, category=%d",
-                duration,
-                duration_minutes,
-                shuffle,
-                category_id,
-            )
-            await self._art_api.set_auto_rotation_status(
+            await self._set_slideshow_via_active_api(
                 duration_minutes, shuffle, category_id
             )
             return {
                 "success": True,
                 "duration": duration,
                 "duration_minutes": duration_minutes,
+                "api": self._get_active_slideshow_api(),
             }
         except Exception as ex:
             _LOGGER.error("Error setting auto rotation: %s", ex)

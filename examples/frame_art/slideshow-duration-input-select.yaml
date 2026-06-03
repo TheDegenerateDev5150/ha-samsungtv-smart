@@ -1,0 +1,90 @@
+# ============================================================================
+# Frame Art - Slideshow duration via an input_select dropdown
+# ============================================================================
+# Gives you a single dropdown (including an "Off" entry) to control the Frame
+# Art slideshow duration, instead of one button per fixed duration.
+#
+# How it works:
+#   - input_select.frame_art_slideshow_duration  is the dropdown.
+#   - An automation watches it and calls samsungtv_smart.art_set_slideshow
+#     with the matching duration whenever you change the selection.
+#   - "Off" maps to duration "0", which the integration translates to the
+#     TV's "off" value to stop the slideshow.
+#
+# Notes:
+#   - art_set_slideshow and art_set_auto_rotation are aliases in v7; the
+#     integration routes to whichever API your Frame model speaks, so this
+#     works on both newer (slideshow) and older (auto-rotation) Frames.
+#   - "30 minutes" is sent as the custom value "30". Some older models accept
+#     only a limited set of durations; if one is rejected it is logged.
+#   - For multiple Frame TVs, duplicate the helper + automation with distinct
+#     names/entity_ids (e.g. _living, _bedroom) and point each automation at
+#     the matching media_player.
+# ============================================================================
+
+# ----- 1) The dropdown helper -------------------------------------------------
+# (You can also create this from Settings -> Devices & Services -> Helpers.)
+input_select:
+  frame_art_slideshow_duration:
+    name: Frame Art Slideshow
+    icon: mdi:image-multiple
+    initial: "Off"
+    options:
+      - "Off"
+      - "3 minutes"
+      - "15 minutes"
+      - "30 minutes"
+      - "1 hour"
+      - "12 hours"
+      - "1 day"
+      - "7 days"
+
+# ----- 2) The automation that applies the selection to the TV ----------------
+automation:
+  - alias: "Frame Art - apply slideshow duration"
+    id: frame_art_apply_slideshow_duration
+    trigger:
+      - platform: state
+        entity_id: input_select.frame_art_slideshow_duration
+    condition:
+      # Don't fire on Home Assistant restart (state restore) or when the
+      # helper momentarily becomes unavailable.
+      - condition: template
+        value_template: >-
+          {{ trigger.from_state is not none
+             and trigger.from_state.state not in ['unknown', 'unavailable'] }}
+    variables:
+      # Map the friendly label to the value art_set_slideshow expects.
+      duration_map:
+        "Off": "0"
+        "3 minutes": "3min"
+        "15 minutes": "15min"
+        "30 minutes": "30"
+        "1 hour": "1h"
+        "12 hours": "12h"
+        "1 day": "1d"
+        "7 days": "7d"
+      selected: "{{ trigger.to_state.state }}"
+    action:
+      - service: samsungtv_smart.art_set_slideshow
+        target:
+          entity_id: media_player.samsung_frame   # <-- change to your Frame TV
+        data:
+          duration: "{{ duration_map[selected] }}"
+          shuffle: true
+          category_id: 2
+    mode: single
+
+# ----- 3) (Optional) Lovelace control ----------------------------------------
+# Add this to a dashboard to expose the dropdown:
+#
+#   type: entities
+#   entities:
+#     - entity: input_select.frame_art_slideshow_duration
+#       name: Slideshow
+#
+# Or as a nicer tile:
+#
+#   type: tile
+#   entity: input_select.frame_art_slideshow_duration
+#   name: Frame Art Slideshow

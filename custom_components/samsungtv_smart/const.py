@@ -37,6 +37,21 @@ DATA_CFG_YAML = "cfg_yaml"
 DATA_OPTIONS = "options"
 DATA_ART_API = "art_api"  # Shared Frame Art API instance
 CONF_IS_FRAME_TV = "is_frame_tv"  # Persisted flag: TV confirmed as Frame TV
+# V7: persisted capability flags for the dedicated brightness / colour-temp
+# WebSocket requests. On TVs that don't respond (e.g. Frame 2024) we learn
+# this at runtime and remember it across restarts so we don't pay the probe
+# cost on every start.
+CONF_SUPPORTS_GET_BRIGHTNESS = "supports_get_brightness"
+CONF_SUPPORTS_GET_COLOR_TEMPERATURE = "supports_get_color_temperature"
+# V7: content list polling interval (seconds). The Frame Art sensor refreshes
+# at SCAN_INTERVAL (15 s) for cheap state, but the full get_content_list call
+# is now throttled to this longer cycle. Default 5 min, configurable via
+# advanced options.
+CONF_CONTENT_LIST_INTERVAL = "content_list_interval"
+DEFAULT_CONTENT_LIST_INTERVAL = 300
+MIN_CONTENT_LIST_INTERVAL = 30
+MAX_CONTENT_LIST_INTERVAL = 3600
+CONF_SLIDESHOW_API = "slideshow_api"  # Persisted: "slideshow" or "auto_rotation"
 LOCAL_LOGO_PATH = "local_logo_path"
 WS_PREFIX = "[Home Assistant]"
 

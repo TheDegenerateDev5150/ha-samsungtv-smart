@@ -32,6 +32,24 @@ Frame Art Gallery transforms your Home Assistant dashboard into an interactive a
 - 🖱️ Lightbox preview with smart context actions
 - 🧹 Automatic cleanup of orphaned thumbnails
 
+> ### ⚠️ v7 path change — read this first
+>
+> As of **v7**, thumbnails live in a **per-TV** folder keyed by the config-entry
+> ID, not the old flat `/local/frame_art/...` path:
+>
+> ```
+> /local/frame_art/{entry_id}/personal   (was: /local/frame_art/personal)
+> /local/frame_art/{entry_id}/store       (was: /local/frame_art/store)
+> /local/frame_art/{entry_id}/other       (was: /local/frame_art/other)
+> ```
+>
+> The examples below use the **old flat paths** for readability. When you copy
+> them, insert your TV's `{entry_id}` after `frame_art/`. Find it on the
+> `sensor.<tv_name>_frame_art` entity (Developer Tools → States): the `entry_id`
+> attribute is the value, and `thumbnail_folder` gives you the ready-to-use
+> `/local/...` base. The same applies to the `folder:` paths in the `folder`
+> sensors below and any `allowlist_external_dirs` entry.
+
 ---
 
 ## Requirements
@@ -42,12 +60,17 @@ Frame Art Gallery transforms your Home Assistant dashboard into an interactive a
 
 2. **Downloaded thumbnails** (see [Quick Start](#quick-start))
 
-3. **Folder sensor** for gallery updates:
+3. **Folder sensor** for gallery updates — **auto-created in v7**. The
+   integration registers `sensor.<tv_name>_personal`, `…_store`, and `…_other`
+   for each Frame TV (folder size in MB, with a `file_list` attribute). Point the
+   gallery card's `folder_sensor` at the relevant one. You only need to declare a
+   manual `folder` sensor if you want to watch a directory the integration
+   doesn't manage:
    ```yaml
-   # configuration.yaml
+   # configuration.yaml — optional / legacy only
    sensor:
      - platform: folder
-       folder: /config/www/frame_art/store
+       folder: /config/www/frame_art/YOUR_ENTRY_ID/store
        filter: "*.jpg"
        scan_interval: 30
    ```
@@ -95,14 +118,35 @@ data:
 **First run:** 2-5 minutes  
 **Subsequent runs:** 2-5 seconds (skips existing)
 
-### Step 3: Create Folder Sensor
+### Step 3: Folder Sensor
 
-Add to `configuration.yaml`:
+**v7 creates these for you automatically.** For every Frame TV, the integration
+registers three folder sensors that track each thumbnail subdirectory:
+
+| Entity | Tracks | State | Key attribute |
+|---|---|---|---|
+| `sensor.<tv_name>_personal` | `…/{entry_id}/personal/` | folder size (MB) | `file_list` |
+| `sensor.<tv_name>_store` | `…/{entry_id}/store/` | folder size (MB) | `file_list` |
+| `sensor.<tv_name>_other` | `…/{entry_id}/other/` | folder size (MB) | `file_list` |
+
+These expose a `file_list` attribute (plus `path`, `filter`, `number_of_files`,
+`bytes`), which is exactly what the gallery card's `folder_sensor` option reads —
+so you can point the card straight at them with **no manual configuration**:
+
+```yaml
+type: custom:folder-gallery-card
+folder_sensor: sensor.mastertv_store
+folder: /local/frame_art/YOUR_ENTRY_ID/store
+```
+
+**Legacy / optional:** if you prefer the built-in Home Assistant `folder`
+platform (for example to watch a custom directory the integration doesn't
+manage), you can still declare one manually — it also exposes `file_list`:
 
 ```yaml
 sensor:
   - platform: folder
-    folder: /config/www/frame_art/store
+    folder: /config/www/frame_art/YOUR_ENTRY_ID/store
     filter: "*.jpg"
     scan_interval: 30
 ```

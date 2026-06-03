@@ -252,6 +252,7 @@ Each configured TV creates the following entities:
 | `media_player.<tv_name>` | Media Player | Main TV control entity |
 | `switch.<tv_name>_art_mode` | Switch | Toggle Art Mode on/off (Frame TVs only) |
 | `sensor.<tv_name>_frame_art` | Sensor | Currently displayed artwork info (Frame TVs only) |
+| `sensor.<tv_name>_personal` / `_store` / `_other` | Sensor | Thumbnail folder size (MB) per subdirectory, with a `file_list` attribute for gallery cards (Frame TVs only, auto-created in v7) |
 | `select.<tv_name>_picture_mode` | Select | Change picture mode (Standard, Movie, etc.) |
 
 > **Note:** The `folder-gallery-card` Lovelace card is bundled with this integration and registered automatically. No manual installation or resource configuration required.
@@ -330,8 +331,8 @@ These services require a Samsung **Frame TV** with Art Mode. They are called on 
 | `samsungtv_smart.art_get_photo_filter_list` | List available photo filters |
 | `samsungtv_smart.art_get_matte_list` | List available matte styles |
 | `samsungtv_smart.art_set_favourite` | Add/remove artwork from favourites |
-| `samsungtv_smart.art_set_slideshow` | Configure slideshow (duration, shuffle, category) |
-| `samsungtv_smart.art_set_auto_rotation` | Configure auto-rotation (duration, shuffle, category) |
+| `samsungtv_smart.art_set_slideshow` | Configure slideshow (duration, shuffle, category). Alias of `art_set_auto_rotation` — auto-routed to whichever API the TV speaks |
+| `samsungtv_smart.art_set_auto_rotation` | Configure auto-rotation (duration, shuffle, category). Alias of `art_set_slideshow` — works on older Frames that don't support the slideshow API |
 
 #### Service Examples
 
@@ -378,6 +379,15 @@ data:
   category_id: 2
 ```
 
+> **Note on Frame generations.** The slideshow feature uses different underlying
+> APIs depending on firmware: newer Frames (2024+) use `slideshow_status`, while
+> older Frames (≈2020–2021) only support `auto_rotation_status`. The integration
+> detects which one your TV speaks on first use and routes automatically, so
+> `art_set_slideshow` and `art_set_auto_rotation` are interchangeable aliases —
+> use either. `duration` accepts the presets (`3min`, `15min`, `1h`, `12h`, `1d`,
+> `7d`) or any integer number of minutes (e.g. `30`, `180`); some models reject
+> values outside their supported set.
+
 ---
 
 ## Frame Art Mode
@@ -410,18 +420,33 @@ Available filters: `none`, `mono`, `original`, `ink`, `watercolor`, `oil`, `past
 
 ### Thumbnail Downloads
 
-Thumbnails are automatically organized and saved to:
+Thumbnails are automatically organized and saved to a **per-TV** directory keyed
+by the config-entry ID (new in v7 — see the v7 changelog for migration notes):
 
 ```
-config/www/frame_art/
+config/www/frame_art/{entry_id}/
+├── current.jpg  ← currently displayed artwork
 ├── personal/    ← user-uploaded photos (MY-F*)
 ├── store/       ← Samsung Art Store (SAM-*)
 └── other/       ← everything else
 ```
 
-These are then accessible via Home Assistant's `/local/` URL path, making them directly usable in Lovelace dashboards and galleries.
+Find your `{entry_id}` on the `sensor.<tv_name>_frame_art` entity (Developer
+Tools → States) — it's exposed as the `entry_id` attribute, and the ready-to-use
+URL base is in `thumbnail_folder`.
 
-**Smart caching**: thumbnails are only downloaded once. Subsequent calls to `art_get_thumbnail` or `art_get_thumbnails_batch` skip files that already exist, making batch operations fast on repeat runs. Use `force_download: true` to override.
+These are accessible via Home Assistant's `/local/` URL path, making them
+directly usable in Lovelace dashboards and galleries.
+
+**Smart caching**: thumbnails are only downloaded once. Subsequent calls to
+`art_get_thumbnail` or `art_get_thumbnails_batch` skip files that already exist,
+making batch operations fast on repeat runs. Use `force_download: true` to
+override.
+
+**Resilient `current.jpg`**: if a live thumbnail fetch for the current artwork
+fails (a transient TV/WebSocket hiccup), the integration reuses a previously
+downloaded copy of that artwork as `current.jpg` instead of showing an error
+placeholder. (Contributed by @prestonmcafee.)
 
 ## See Also
 
@@ -542,9 +567,18 @@ Mitigations built into this fork:
 
 ### OAuth2 — "Token refresh failed"
 
+If the SmartThings OAuth token can no longer be refreshed, the integration raises
+an alert in **Settings → Repairs** ("SmartThings authentication failed for …")
+explaining the cause and pointing you to the fix. The alert clears automatically
+once authentication is restored. To recover:
+
 1. Check internet connectivity from Home Assistant.
 2. Verify your OAuth app is still active by running `smartthings apps` in the SmartThings CLI.
 3. Re-authenticate: go to **Settings → Devices & Services → Samsung TV Smart → Reconfigure**.
+
+A refresh token can become invalid if it is revoked, expires, or is rotated by
+SmartThings (which can happen after repeated re-authentication). Reconfiguring
+issues a fresh token pair.
 
 ### Source list empty on Frame 2024 TVs
 

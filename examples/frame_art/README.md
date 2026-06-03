@@ -10,17 +10,34 @@ Ready-to-use configuration files for Frame Art integration.
 - **[scripts.yaml](scripts.yaml)** - 15+ utility scripts
 - **[automations.yaml](automations.yaml)** - 20+ automation examples
 - **[lovelace.yaml](lovelace.yaml)** - Complete interactive gallery dashboard
+- **[slideshow-duration-input-select.yaml](slideshow-duration-input-select.yaml)** - Dropdown helper + automation to set the slideshow duration (including "Off", which stops the slideshow but keeps Art Mode on)
 
 ---
+
+> ### ⚠️ v7 note — per-TV paths & auto-created folder sensors
+>
+> As of **v7**, thumbnails live under a **per-TV** folder keyed by the
+> config-entry ID: `/config/www/frame_art/{entry_id}/personal` (etc.), not the
+> old flat `/config/www/frame_art/personal`. Find your `{entry_id}` on the
+> `sensor.<tv_name>_frame_art` entity (Developer Tools → States).
+>
+> Also, v7 **auto-creates** folder sensors per TV
+> (`sensor.<tv_name>_personal` / `_store` / `_other`, each with a `file_list`
+> attribute), so the manual `platform: folder` sensors and the directory
+> `mkdir` below are only needed for custom setups. The examples below keep the
+> flat paths for readability — insert your `{entry_id}` when copying.
 
 ## Quick Start
 
 ### 1. Create Directory Structure
 
+The integration creates these automatically per TV. Manual creation is only
+needed if you build galleries outside the integration's managed folder:
+
 ```bash
-mkdir -p /config/www/frame_art/personal
-mkdir -p /config/www/frame_art/store
-mkdir -p /config/www/frame_art/other
+mkdir -p /config/www/frame_art/YOUR_ENTRY_ID/personal
+mkdir -p /config/www/frame_art/YOUR_ENTRY_ID/store
+mkdir -p /config/www/frame_art/YOUR_ENTRY_ID/other
 ```
 
 ### 2. Add Configuration
@@ -105,6 +122,26 @@ Use `lovelace.yaml` as template for your Frame Art dashboard.
 - Quick action buttons
 
 **Multiple layout options included** (4-column, 3-column, 2-column, mobile).
+
+---
+
+### slideshow-duration-input-select.yaml
+
+**A dropdown to control the slideshow duration**, as an alternative to one
+button per fixed duration.
+
+- `input_select.frame_art_slideshow_duration` with **Off / 3min / 15min /
+  30min / 1h / 12h / 1d / 7d**
+- An automation applies the selection via `samsungtv_smart.art_set_slideshow`
+  (shuffle on by default)
+- **"Off"** stops the slideshow but **keeps Art Mode on** (the service ensures
+  Art Mode is active before sending the command)
+- Works on both newer (slideshow) and older (auto-rotation) Frames — the v7
+  routing picks the right API automatically
+- Includes a guard so it doesn't re-fire on Home Assistant restart
+
+Change the `media_player.samsung_frame` target to your TV. For multiple Frames,
+duplicate the helper + automation with distinct names.
 
 ---
 
@@ -195,7 +232,7 @@ After adding scripts:
 1. Go to Developer Tools > Services
 2. Search for `script.frame_art_download_all`
 3. Call the service
-4. Check thumbnails in `/config/www/frame_art/`
+4. Check thumbnails in `/config/www/frame_art/{entry_id}/`
 
 ### Test Automations
 

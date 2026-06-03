@@ -59,6 +59,7 @@ from .const import (
     CONF_APP_LOAD_METHOD,
     CONF_AUTH_METHOD,
     CONF_CHANNEL_LIST,
+    CONF_CONTENT_LIST_INTERVAL,
     CONF_DEVICE_MODEL,
     CONF_DEVICE_NAME,
     CONF_DEVICE_OS,
@@ -80,9 +81,12 @@ from .const import (
     CONF_USE_ST_STATUS_INFO,
     CONF_WOL_REPEAT,
     CONF_WS_NAME,
+    DEFAULT_CONTENT_LIST_INTERVAL,
     DEFAULT_PORT,
     DOMAIN,
+    MAX_CONTENT_LIST_INTERVAL,
     MAX_WOL_REPEAT,
+    MIN_CONTENT_LIST_INTERVAL,
     RESULT_ST_DEVICE_NOT_FOUND,
     RESULT_ST_DEVICE_USED,
     RESULT_SUCCESS,
@@ -128,6 +132,7 @@ CONF_AUTH_METHOD_SELECT = "auth_method"
 
 ADVANCED_OPTIONS = [
     CONF_APP_LAUNCH_METHOD,
+    CONF_CONTENT_LIST_INTERVAL,
     CONF_DUMP_APPS,
     CONF_EXT_POWER_ENTITY,
     CONF_PING_PORT,
@@ -1208,6 +1213,18 @@ class OptionsFlowHandler(OptionsFlow):
                     CONF_TOGGLE_ART_MODE,
                     default=options.get(CONF_TOGGLE_ART_MODE, False),
                 ): bool,
+                vol.Required(
+                    CONF_CONTENT_LIST_INTERVAL,
+                    default=options.get(
+                        CONF_CONTENT_LIST_INTERVAL, DEFAULT_CONTENT_LIST_INTERVAL
+                    ),
+                ): vol.All(
+                    vol.Coerce(int),
+                    vol.Clamp(
+                        min=MIN_CONTENT_LIST_INTERVAL,
+                        max=MAX_CONTENT_LIST_INTERVAL,
+                    ),
+                ),
             }
         )
         return self.async_show_form(step_id="adv_opt", data_schema=data_schema)

@@ -5,18 +5,34 @@
 # custom Lovelace card for a cleaner,
 # more performant gallery experience.
 #
-# Installation:
-# 1. Copy folder-gallery-card.js to:
-#    /config/www/community/folder-gallery-card/
-# 2. Add resource in Lovelace (see below)
-# 3. Add template sensors (configuration.yaml)
-# 4. Use this dashboard
+# v7 NOTES:
+#  - The card is BUNDLED with the integration and auto-registered as a
+#    Lovelace resource at /api/samsungtv_smart/folder-gallery-card.js.
+#    No manual copy to /config/www/community/ and no resource entry needed.
+#    (If it doesn't appear, restart Home Assistant once.)
+#  - The integration AUTO-CREATES folder sensors per TV
+#    (sensor.<tv_name>_personal / _store / _other), each with a `file_list`
+#    attribute. You can point the card straight at them with `folder_sensor:`
+#    and skip the template sensors entirely. Example:
+#
+#      - type: custom:folder-gallery-card
+#        title: "📷 My Personal Photos"
+#        folder_sensor: sensor.samsung_frame_personal
+#        folder: /local/frame_art/YOUR_ENTRY_ID/personal
+#        columns: 4
+#
+#  - Thumbnail paths are now per-TV: /local/frame_art/{entry_id}/...
+#    Find {entry_id} on the sensor.<tv_name>_frame_art entity.
+#
+# The dashboard below keeps the template-sensor approach (using `sensor:`)
+# as one valid option; the `folder_sensor:` approach above is simpler in v7.
 # ============================================
 
 # ============================================
-# RESOURCE CONFIGURATION
+# RESOURCE CONFIGURATION (legacy / manual installs only)
 # ============================================
-# Add this to configuration.yaml:
+# Not required in v7 — the card auto-registers. Only needed if you install
+# the card manually outside the integration:
 #
 # lovelace:
 #   resources:
