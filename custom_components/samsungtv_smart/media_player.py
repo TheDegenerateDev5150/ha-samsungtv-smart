@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import timedelta
 from enum import Enum
 import logging
 import os
@@ -1469,7 +1469,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         if self.state == MediaPlayerState.ON:
             if self._delayed_set_source:
                 difference = (
-                    datetime.utcnow() - self._delayed_set_source_time
+                    dt_util.utcnow() - self._delayed_set_source_time
                 ).total_seconds()
                 if difference > DELAYED_SOURCE_TIMEOUT:
                     self._delayed_set_source = None
@@ -2318,7 +2318,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         if self.state != MediaPlayerState.ON:
             if await self._async_turn_on():
                 self._delayed_set_source = source
-                self._delayed_set_source_time = datetime.utcnow()
+                self._delayed_set_source_time = dt_util.utcnow()
             return
 
         if self._source_list and source in self._source_list:
