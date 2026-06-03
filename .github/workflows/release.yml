@@ -20,8 +20,8 @@ jobs:
           # Override via tag pattern as a safety net for ambiguous cases.
           TAG="${{ github.event.release.tag_name }}"
           IS_PRERELEASE="${{ github.event.release.prerelease }}"
-          if [[ "$IS_PRERELEASE" == "true" ]] || [[ "$TAG" =~ ^7\.0\.0[a-zA-Z] ]]; then
-            BRANCH="v7-multi-frame"
+          if [[ "$IS_PRERELEASE" == "true" ]] || [[ "$TAG" =~ ^8\.0\.0[a-zA-Z] ]]; then
+            BRANCH="v8-json-rpc"
           else
             BRANCH="master"
           fi
