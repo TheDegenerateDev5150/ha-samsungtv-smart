@@ -65,6 +65,7 @@ from .const import (
     CONF_DEVICE_OS,
     CONF_DUMP_APPS,
     CONF_EXT_POWER_ENTITY,
+    CONF_IP_CONTROL_TOKEN,
     CONF_LOGO_OPTION,
     CONF_OAUTH_TOKEN,
     CONF_PING_PORT,
@@ -1065,6 +1066,7 @@ class OptionsFlowHandler(OptionsFlow):
                 "app_list",
                 "channel_list",
                 "sync_ent",
+                "ip_control_pair",
                 "init",
                 "adv_opt",
                 "save_exit",
@@ -1074,6 +1076,46 @@ class OptionsFlowHandler(OptionsFlow):
     async def async_step_save_exit(self, _) -> ConfigFlowResult:
         """Handle save and exit flow."""
         return self._save_entry(data=self._std_options)
+
+    async def async_step_ip_control_pair(self, user_input=None) -> ConfigFlowResult:
+        """Pair the TV's IP Control (JSON-RPC) interface for reliable power off/on.
+
+        Requires the TV to be ON and in NORMAL viewing (not Art Mode) with
+        "IP Remote" enabled (Settings -> Connections -> Network -> Expert
+        Settings). The returned token is stored in entry.data so the Power
+        switch can use it; the switch reads it live, so no reload is needed.
+        """
+        from .api.ipcontrol import SamsungIPControl, SamsungIPControlError
+
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        errors: dict[str, str] = {}
+        already_paired = bool(entry.data.get(CONF_IP_CONTROL_TOKEN))
+
+        if user_input is not None:
+            host = entry.data.get(CONF_HOST)
+            if not host:
+                errors[CONF_BASE] = "ip_control_no_host"
+            else:
+                client = SamsungIPControl(self.hass, host)
+                try:
+                    token = await client.async_pair()
+                except SamsungIPControlError:
+                    errors[CONF_BASE] = "ip_control_pair_failed"
+                else:
+                    new_data = dict(entry.data)
+                    new_data[CONF_IP_CONTROL_TOKEN] = token
+                    self.hass.config_entries.async_update_entry(entry, data=new_data)
+                    _LOGGER.debug("IP Control paired for %s", host)
+                    return await self.async_step_menu()
+
+        return self.async_show_form(
+            step_id="ip_control_pair",
+            data_schema=vol.Schema({}),
+            errors=errors,
+            description_placeholders={
+                "status": "already paired" if already_paired else "not paired",
+            },
+        )
 
     async def async_step_source_list(self, user_input=None):
         """Handle sources list flow."""

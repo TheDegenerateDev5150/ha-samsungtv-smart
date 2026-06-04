@@ -95,6 +95,10 @@ CONF_DEVICE_ID = "device_id"
 CONF_AUTH_METHOD = "auth_method"
 CONF_OAUTH_TOKEN = "oauth_token"
 
+# IP Control (JSON-RPC, port 1516) — persisted access token, per TV (entry.data).
+# Presence of a token means the feature is paired/enabled for that TV.
+CONF_IP_CONTROL_TOKEN = "ip_control_token"
+
 # Authentication methods
 AUTH_METHOD_OAUTH = "oauth"
 AUTH_METHOD_PAT = "pat"
