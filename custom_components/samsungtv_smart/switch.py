@@ -23,7 +23,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 
 from . import async_get_samsungtv_api_key
 from .api.art import SamsungTVAsyncArt
@@ -621,13 +621,65 @@ class SamsungTVPowerSwitch(SwitchEntity):
         self._host = host
         self._attr_unique_id = f"{entry.entry_id}_power"
         self._media_player_entity_id: str | None = None
-        # Optimistic override — set temporarily by turn_on/turn_off for
-        # instant UI feedback, cleared on next media_player state change.
+        # Optimistic override — set by turn_on/turn_off so the UI flips
+        # immediately. Holds until the media_player reaches the matching state
+        # (or the safety timeout fires). Replaces the previous "clear on first
+        # state change" behaviour, which caused the switch to flicker during
+        # the multi-second wake-up window after a WOL fallback.
         self._optimistic_state: bool | None = None
+        self._optimistic_cancel: callable | None = None
         # IP Control client (lazy) and the token it was built with, so we can
         # rebuild it transparently if the token changes (e.g. after re-pairing).
         self._ip_control: SamsungIPControl | None = None
         self._ip_control_token: str | None = None
+
+    # -- optimistic state machine -------------------------------------------
+
+    OPTIMISTIC_TIMEOUT = 30.0  # seconds — safety fallback if media_player never
+    # catches up (network issue, TV unresponsive, …)
+
+    def _set_optimistic(self, target: bool) -> None:
+        """Set the optimistic state and schedule a safety timeout.
+
+        Cancels any previous pending timeout so back-to-back actions don't leak
+        callbacks. The state is cleared either when media_player reaches the
+        matching value (handled in _handle_media_player_state_change) or when
+        the safety timeout fires.
+        """
+        self._cancel_optimistic_timeout()
+        self._optimistic_state = target
+        self._optimistic_cancel = async_call_later(
+            self.hass, self.OPTIMISTIC_TIMEOUT, self._optimistic_safety_clear
+        )
+        self.async_write_ha_state()
+
+    def _cancel_optimistic_timeout(self) -> None:
+        if self._optimistic_cancel is not None:
+            self._optimistic_cancel()
+            self._optimistic_cancel = None
+
+    @callback
+    def _optimistic_safety_clear(self, _now=None) -> None:
+        """Drop the optimistic state if media_player never caught up."""
+        self._optimistic_cancel = None
+        if self._optimistic_state is not None:
+            _LOGGER.debug(
+                "Power switch: optimistic state timed out — falling back to "
+                "media_player state"
+            )
+            self._optimistic_state = None
+            self.async_write_ha_state()
+
+    @staticmethod
+    def _state_to_is_on(state) -> bool | None:
+        """Mirror the is_on logic on an arbitrary state object."""
+        if state is None:
+            return None
+        if state.state not in (STATE_OFF, "unavailable", "unknown"):
+            return True
+        if state.state == STATE_OFF:
+            return state.attributes.get("art_mode_status") == "on"
+        return None
 
     def _get_ip_control(self) -> SamsungIPControl | None:
         """Return an IP Control client if this TV is paired, else None.
@@ -748,8 +800,7 @@ class SamsungTVPowerSwitch(SwitchEntity):
         - Otherwise (or on failure) → media_player.turn_on, which uses WOL /
           WebSocket as today.
         """
-        self._optimistic_state = True
-        self.async_write_ha_state()
+        self._set_optimistic(True)
 
         ip_control = self._get_ip_control()
         if ip_control is not None:
@@ -812,8 +863,7 @@ class SamsungTVPowerSwitch(SwitchEntity):
                         Command.OFF,
                         COMPONENT_MAIN,
                     )
-                    self._attr_is_on = False
-                    self.async_write_ha_state()
+                    self._set_optimistic(False)
                     _LOGGER.debug("Power switch: TV turned off via SmartThings")
                     return
                 else:
@@ -831,8 +881,7 @@ class SamsungTVPowerSwitch(SwitchEntity):
         if ip_control is not None:
             try:
                 await ip_control.async_power_off()
-                self._optimistic_state = False
-                self.async_write_ha_state()
+                self._set_optimistic(False)
                 _LOGGER.debug("Power switch: TV turned off via IP Control")
                 return
             except SamsungIPControlAuthError as ex:
@@ -863,18 +912,31 @@ class SamsungTVPowerSwitch(SwitchEntity):
                 {"entity_id": entity_id},
                 blocking=True,
             )
-            self._attr_is_on = False
-            self.async_write_ha_state()
+            self._set_optimistic(False)
             _LOGGER.debug("Power switch: TV turned off via media_player (WebSocket)")
         except Exception as ex:
             _LOGGER.error("Power switch: WebSocket turn_off failed: %s", ex)
 
     @callback
     def _handle_media_player_state_change(self, event) -> None:
-        """React to media_player state changes and push update immediately."""
-        # Clear optimistic override — real state is now available.
-        self._optimistic_state = None
+        """React to media_player state changes and push update immediately.
+
+        The optimistic state is only cleared once media_player actually reaches
+        the value we asked for. This prevents the switch from flickering
+        through intermediate states (e.g. "off" -> "unavailable" -> "off" ->
+        "on") while a WOL wake-up is in progress.
+        """
+        if self._optimistic_state is not None:
+            new_state = event.data.get("new_state") if event.data else None
+            actual = self._state_to_is_on(new_state)
+            if actual is not None and actual == self._optimistic_state:
+                self._cancel_optimistic_timeout()
+                self._optimistic_state = None
         self.async_write_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Clean up the optimistic timeout when the entity goes away."""
+        self._cancel_optimistic_timeout()
 
     async def async_added_to_hass(self) -> None:
         """Subscribe to media_player state changes when added to HA."""
