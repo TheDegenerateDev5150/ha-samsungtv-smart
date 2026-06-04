@@ -97,6 +97,7 @@ from .const import (
     CONF_CHANNEL_LIST,
     CONF_DUMP_APPS,
     CONF_EXT_POWER_ENTITY,
+    CONF_IS_FRAME_TV,
     CONF_LOGO_OPTION,
     CONF_OAUTH_TOKEN,
     CONF_PING_PORT,
@@ -2443,16 +2444,33 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
     async def _ensure_frame_tv_check(self) -> bool:
         """Check if Frame TV is supported (cached on success only).
 
-        A failed check (exception or False) is NOT cached so that transient
-        startup failures (TV not yet reachable) are retried on the next call,
-        avoiding a permanent "Frame TV not supported" state until reload.
+        Consults the persisted CONF_IS_FRAME_TV flag in entry.data first
+        (same flag the sensor/switch/select/number platforms already use to
+        skip re-detection across restarts). If not yet confirmed, falls back
+        to the REST probe and persists the result on success so subsequent
+        sessions don't have to re-probe — and so a transient REST failure
+        right after startup, when the TV is still waking up, no longer
+        produces "Frame TV not supported" warnings on a known-good Frame.
+
+        A failed check (exception or False) is still NOT cached, so the very
+        first detection on a fresh entry is retried on the next call.
         """
         if self._frame_tv_supported:
+            return True
+        # Trust the persisted flag if a previous successful detection set it.
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry and entry.data.get(CONF_IS_FRAME_TV):
+            self._frame_tv_supported = True
             return True
         try:
             result = await self._art_api.supported()
             if result:
                 self._frame_tv_supported = True
+                # Persist for future sessions so we don't probe again.
+                if entry and not entry.data.get(CONF_IS_FRAME_TV):
+                    self.hass.config_entries.async_update_entry(
+                        entry, data={**entry.data, CONF_IS_FRAME_TV: True}
+                    )
             return bool(result)
         except Exception as ex:
             _LOGGER.debug("Frame TV support check failed: %s", ex)
