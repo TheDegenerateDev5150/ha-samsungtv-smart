@@ -1099,7 +1099,14 @@ class OptionsFlowHandler(OptionsFlow):
                 client = SamsungIPControl(self.hass, host)
                 try:
                     token = await client.async_pair()
-                except SamsungIPControlError:
+                except SamsungIPControlError as ex:
+                    _LOGGER.warning(
+                        "IP Control pairing failed for %s: %s (TV must be ON in "
+                        "normal viewing — not Art Mode, not standby — and IP "
+                        "Remote enabled in Settings)",
+                        host,
+                        ex,
+                    )
                     errors[CONF_BASE] = "ip_control_pair_failed"
                 else:
                     new_data = dict(entry.data)
