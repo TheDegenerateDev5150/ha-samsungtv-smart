@@ -16,8 +16,13 @@ Protocol notes (confirmed on Frame 2024 / 2025):
     does not respond and the request times out.
   * The TV must have "IP Remote" enabled
     (Settings -> Connections -> Network -> Expert Settings).
+  * Older Samsung TVs (Tizen <= 5.5, ~2020 Frames) negotiate a weak DH group
+    that OpenSSL's default security level rejects ("dh key too small"). The
+    client detects this and transparently retries with @SECLEVEL=1.
 
 The blocking HTTP work runs in the executor so the event loop is never blocked.
+The SSL context is also built lazily inside the executor — `create_default_context`
+loads CA certs from disk, which would block the event loop if done at __init__.
 """
 
 from __future__ import annotations
@@ -66,10 +71,14 @@ class SamsungIPControl:
         self._host = host
         self._port = port
         self._token = token
-        # Panel presents a self-signed certificate -> disable verification.
-        self._ctx = ssl.create_default_context()
-        self._ctx.check_hostname = False
-        self._ctx.verify_mode = ssl.CERT_NONE
+        # SSL context is built lazily inside the executor (see _build_ssl_context).
+        # `ssl.create_default_context()` loads CA certificates from disk, which
+        # blocks the event loop — HA raises a warning if that happens here.
+        self._ctx: ssl.SSLContext | None = None
+        # Older TVs (Tizen <= 5.5, ~2020 Frames) negotiate a weak DH group and
+        # are rejected by OpenSSL's default security level. When that happens
+        # we retry once with @SECLEVEL=1 and remember it for subsequent calls.
+        self._tls_legacy = False
 
     @property
     def token(self) -> str | None:
@@ -123,6 +132,29 @@ class SamsungIPControl:
             self._sync_request, method, params, include_token, timeout
         )
 
+    def _build_ssl_context(self, legacy: bool) -> ssl.SSLContext:
+        """Build the SSL context for talking to the TV.
+
+        Does file system I/O (CA cert loading) — must only be called from the
+        executor, never on the event loop.
+
+        :param legacy: when ``True``, lower OpenSSL's security level so the
+            handshake accepts the weak DH group used by older Samsung TVs
+            (Tizen <= 5.5, ~2020 Frames).
+        """
+        ctx = ssl.create_default_context()
+        # Panels present a self-signed certificate.
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        if legacy:
+            try:
+                ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+            except ssl.SSLError as ex:
+                _LOGGER.warning(
+                    "Could not lower TLS security level for %s: %s", self._host, ex
+                )
+        return ctx
+
     def _sync_request(
         self,
         method: str,
@@ -130,7 +162,11 @@ class SamsungIPControl:
         include_token: bool,
         timeout: int,
     ) -> dict[str, Any]:
-        """Blocking JSON-RPC request — runs in the executor."""
+        """Blocking JSON-RPC request — runs in the executor.
+
+        Retries once with @SECLEVEL=1 on a "dh key too small" SSL error so the
+        client transparently handles older Samsung TVs.
+        """
         body: dict[str, Any] = {
             "jsonrpc": JSONRPC_VERSION,
             "id": 1,
@@ -147,28 +183,7 @@ class SamsungIPControl:
             body["params"] = params
 
         payload = json.dumps(body).encode("utf-8")
-        conn = http.client.HTTPSConnection(
-            self._host, self._port, timeout=timeout, context=self._ctx
-        )
-        try:
-            # Keep headers minimal: Host (auto) + Content-Length + Accept +
-            # Content-Type. skip_accept_encoding suppresses the default
-            # "Accept-Encoding: identity" header.
-            conn.putrequest("POST", "/", skip_accept_encoding=True)
-            conn.putheader("Accept", "application/json")
-            conn.putheader("Content-Type", "application/json")
-            conn.putheader("Content-Length", str(len(payload)))
-            conn.endheaders()
-            conn.send(payload)
-
-            resp = conn.getresponse()
-            raw = resp.read().decode("utf-8")
-        except (TimeoutError, OSError) as ex:
-            raise SamsungIPControlError(
-                f"transport failure talking to {self._host}:{self._port}: {ex}"
-            ) from ex
-        finally:
-            conn.close()
+        raw = self._sync_post(payload, timeout)
 
         try:
             data = json.loads(raw)
@@ -191,3 +206,56 @@ class SamsungIPControl:
         if not isinstance(result, dict):
             return {}
         return result
+
+    def _sync_post(self, payload: bytes, timeout: int) -> str:
+        """Issue the HTTPS POST and return the raw response body.
+
+        Builds the SSL context lazily in the executor; retries once with a
+        lowered TLS security level on a "dh key too small" error so the client
+        works on older Samsung TVs (Tizen <= 5.5).
+        """
+        for attempt in (0, 1):
+            if self._ctx is None:
+                self._ctx = self._build_ssl_context(legacy=self._tls_legacy)
+            conn = http.client.HTTPSConnection(
+                self._host, self._port, timeout=timeout, context=self._ctx
+            )
+            try:
+                # Keep headers minimal: Host (auto) + Content-Length + Accept +
+                # Content-Type. skip_accept_encoding suppresses the default
+                # "Accept-Encoding: identity" header.
+                conn.putrequest("POST", "/", skip_accept_encoding=True)
+                conn.putheader("Accept", "application/json")
+                conn.putheader("Content-Type", "application/json")
+                conn.putheader("Content-Length", str(len(payload)))
+                conn.endheaders()
+                conn.send(payload)
+                resp = conn.getresponse()
+                return resp.read().decode("utf-8")
+            except ssl.SSLError as ex:
+                if (
+                    attempt == 0
+                    and not self._tls_legacy
+                    and "dh key too small" in str(ex).lower()
+                ):
+                    _LOGGER.debug(
+                        "TLS DH key too small from %s — retrying with legacy "
+                        "security level",
+                        self._host,
+                    )
+                    self._tls_legacy = True
+                    self._ctx = None
+                    continue
+                raise SamsungIPControlError(
+                    f"TLS error talking to {self._host}:{self._port}: {ex}"
+                ) from ex
+            except (TimeoutError, OSError) as ex:
+                raise SamsungIPControlError(
+                    f"transport failure talking to {self._host}:{self._port}: {ex}"
+                ) from ex
+            finally:
+                conn.close()
+        # Loop only retries on the DH error and re-enters; any other path either
+        # returns or raises, so reaching here means both attempts somehow fell
+        # through without raising — treat as a generic error rather than crash.
+        raise SamsungIPControlError("IP Control request failed after retry")
