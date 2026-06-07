@@ -939,7 +939,16 @@ class SamsungTVPowerSwitch(SwitchEntity):
         self._cancel_optimistic_timeout()
 
     async def async_added_to_hass(self) -> None:
-        """Subscribe to media_player state changes when added to HA."""
+        """Subscribe to media_player state changes when added to HA.
+
+        Also publishes the current state right away: async_track_state_change_event
+        only delivers *future* changes, so without an initial read the switch
+        would keep whatever state it computed before media_player finished
+        starting up — and only correct itself on the next media_player change
+        (which is why a manual power on/off was needed to resync after a
+        restart).
+        """
+        await super().async_added_to_hass()
         entity_id = self._get_media_player_entity_id()
         if entity_id:
             self.async_on_remove(
@@ -949,3 +958,5 @@ class SamsungTVPowerSwitch(SwitchEntity):
                     self._handle_media_player_state_change,
                 )
             )
+        # Publish the real state now instead of waiting for the first change.
+        self.async_write_ha_state()
