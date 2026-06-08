@@ -897,6 +897,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         """
         client = self._get_ip_control_client()
         if client is None:
+            _LOGGER.debug(
+                "IP Control art-mode refresh for %s: not paired "
+                "(no CONF_IP_CONTROL_TOKEN in entry.data) — skipping",
+                self._host,
+            )
             if self._ip_art_mode is not None:
                 self._ip_art_mode = None
                 self.async_write_ha_state()
@@ -922,8 +927,20 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             )
             return
         if value != self._ip_art_mode:
+            _LOGGER.debug(
+                "IP Control art-mode for %s changed: %s -> %s (writing state)",
+                self._host,
+                self._ip_art_mode,
+                value,
+            )
             self._ip_art_mode = value
             self.async_write_ha_state()
+        else:
+            _LOGGER.debug(
+                "IP Control art-mode for %s unchanged (%s)",
+                self._host,
+                value,
+            )
 
     async def async_added_to_hass(self):
         """Set config parameter when add to hass."""
@@ -968,6 +985,12 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         # Phase 2: start periodic Art Mode poll via IP Control. The
         # _refresh_ip_art_mode method gracefully no-ops when this TV isn't
         # paired (no token), so this is safe to install unconditionally.
+        _LOGGER.debug(
+            "Phase 2: installing IP Control art-mode refresh timer for %s "
+            "(interval=%s)",
+            self._host,
+            IP_ART_MODE_REFRESH_INTERVAL,
+        )
         self._ip_art_mode_refresh_unsub = async_track_time_interval(
             self.hass, self._refresh_ip_art_mode, IP_ART_MODE_REFRESH_INTERVAL
         )
