@@ -57,6 +57,7 @@ from homeassistant.helpers import entity_platform
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.service import CONF_SERVICE_ENTITY_ID, async_call_from_config
 from homeassistant.helpers.storage import STORAGE_DIR
 from homeassistant.util import Throttle
@@ -70,6 +71,11 @@ from . import (
     set_oauth_refresh_in_progress,
 )
 from .api.art import SamsungTVAsyncArt
+from .api.ipcontrol import (
+    SamsungIPControl,
+    SamsungIPControlAuthError,
+    SamsungIPControlError,
+)
 from .api.samsungcast import SamsungCastTube
 from .api.samsungws import ArtModeStatus, SamsungTVAsyncRest, SamsungTVWS
 from .api.smartthings import SmartThingsTV, STStatus
@@ -97,6 +103,7 @@ from .const import (
     CONF_CHANNEL_LIST,
     CONF_DUMP_APPS,
     CONF_EXT_POWER_ENTITY,
+    CONF_IP_CONTROL_TOKEN,
     CONF_LOGO_OPTION,
     CONF_OAUTH_TOKEN,
     CONF_PING_PORT,
@@ -205,6 +212,9 @@ MIN_TIME_BETWEEN_ST_UPDATE = timedelta(seconds=5)
 ST_API_KEY_UPDATE_INTERVAL = timedelta(minutes=30)
 OAUTH_TOKEN_REFRESH_BUFFER = 300  # Refresh OAuth token 5 minutes before expiration
 SCAN_INTERVAL = timedelta(seconds=15)
+# Phase 2: background poll period for the authoritative Art Mode state via
+# IP Control. Cheap LAN call (~50–100 ms over HTTPS:1516), low frequency.
+IP_ART_MODE_REFRESH_INTERVAL = timedelta(seconds=30)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -543,6 +553,16 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         self._frame_tv_supported: bool | None = None
         self._frame_art_last_result: dict | None = None
 
+        # Phase 2: cached authoritative Art Mode state read via IP Control
+        # (artModeControl). Updated by a periodic background task started in
+        # async_added_to_hass; consumed (synchronously) by extra_state_attributes
+        # to populate art_mode_status without falling back to the device_info
+        # PowerState='standby' override or the potentially-stale art_api cache.
+        self._ip_control_client: SamsungIPControl | None = None
+        self._ip_control_token_cached: str | None = None
+        self._ip_art_mode: bool | None = None
+        self._ip_art_mode_refresh_unsub: Callable[[], None] | None = None
+
         # upnp initialization
         self._upnp = SamsungUPnP(host=self._host, session=session)
 
@@ -835,6 +855,76 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             self._raise_oauth_issue()
             return False
 
+    def _get_ip_control_client(self) -> SamsungIPControl | None:
+        """Return a live IP Control client if this entry is paired, else None.
+
+        The token is read live from ``entry.data`` so that pairing or re-pairing
+        done via the options flow takes effect immediately, with no reload of
+        the integration required.
+        """
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        token = entry.data.get(CONF_IP_CONTROL_TOKEN) if entry else None
+        if not token:
+            # Token went away (un-paired) — drop any cached client/value.
+            if self._ip_control_client is not None:
+                self._ip_control_client = None
+                self._ip_control_token_cached = None
+            return None
+        if self._ip_control_client is None or self._ip_control_token_cached != token:
+            self._ip_control_client = SamsungIPControl(
+                self.hass, self._host, token=token
+            )
+            self._ip_control_token_cached = token
+        return self._ip_control_client
+
+    async def _refresh_ip_art_mode(self, _now=None) -> None:
+        """Refresh the cached Art Mode value via IP Control (artModeControl).
+
+        Called periodically by ``async_track_time_interval`` and once eagerly
+        from ``async_added_to_hass`` so the first value is available shortly
+        after startup. The cached result is consumed by
+        ``extra_state_attributes`` as the authoritative source for
+        ``art_mode_status`` when this TV is paired.
+
+        Failure handling:
+        - No paired client (no token) → cache cleared to ``None``; the
+          attribute falls through to the other (existing) sources.
+        - Auth error (``-32010``) → cache cleared to ``None`` and a warning is
+          logged so the user knows to re-pair.
+        - Any other transport / TLS error → keep the last known value, log at
+          debug. Transient unreachability (TV in deep standby briefly closing
+          port 1516) should not invalidate a recent reading.
+        """
+        client = self._get_ip_control_client()
+        if client is None:
+            if self._ip_art_mode is not None:
+                self._ip_art_mode = None
+                self.async_write_ha_state()
+            return
+        try:
+            value = await client.async_get_art_mode()
+        except SamsungIPControlAuthError as ex:
+            _LOGGER.warning(
+                "IP Control art-mode read for %s: token rejected (%s) — "
+                "re-pair via the integration options",
+                self._host,
+                ex,
+            )
+            if self._ip_art_mode is not None:
+                self._ip_art_mode = None
+                self.async_write_ha_state()
+            return
+        except SamsungIPControlError as ex:
+            _LOGGER.debug(
+                "IP Control art-mode read for %s failed (%s); keeping last value",
+                self._host,
+                ex,
+            )
+            return
+        if value != self._ip_art_mode:
+            self._ip_art_mode = value
+            self.async_write_ha_state()
+
     async def async_added_to_hass(self):
         """Set config parameter when add to hass."""
         await super().async_added_to_hass()
@@ -875,8 +965,21 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         if self._st:
             self._get_st_sources()
 
+        # Phase 2: start periodic Art Mode poll via IP Control. The
+        # _refresh_ip_art_mode method gracefully no-ops when this TV isn't
+        # paired (no token), so this is safe to install unconditionally.
+        self._ip_art_mode_refresh_unsub = async_track_time_interval(
+            self.hass, self._refresh_ip_art_mode, IP_ART_MODE_REFRESH_INTERVAL
+        )
+        # Kick off a non-blocking initial read so the value is available
+        # well before the first scheduled interval fires.
+        self.hass.async_create_task(self._refresh_ip_art_mode())
+
     async def async_will_remove_from_hass(self):
         """Run when entity will be removed from hass."""
+        if self._ip_art_mode_refresh_unsub is not None:
+            self._ip_art_mode_refresh_unsub()
+            self._ip_art_mode_refresh_unsub = None
         self._ws.unregister_status_callback()
         await self.hass.async_add_executor_job(self._ws.stop_poll)
 
@@ -1684,34 +1787,42 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         # Determine Art Mode status for state attributes.
         #
         # Priority order:
-        #  1. async Art API (art.py) — preferred when active.
-        #     Once disable_art_thread() is called, _ws.artmode_status is frozen
-        #     at its last value and is no longer updated when Art Mode changes.
-        #     art_api.art_mode is kept live by WebSocket events (artmode_status,
-        #     art_mode_changed) received on the async art channel, so it always
-        #     reflects the current state.
-        #  2. _ws.artmode_status — fallback for the period before art_api has
+        #  1. device_info PowerState='standby' (Phase 1) — definitive when the
+        #     device-info REST poll reports the TV as fully off. Wins over the
+        #     IP Control cache below because that cache could still be holding
+        #     a recent "Art Mode on" value during the brief window between a
+        #     power-off and the next IP Control refresh.
+        #  2. IP Control cache (Phase 2) — authoritative read from the TV via
+        #     artModeControl, refreshed every IP_ART_MODE_REFRESH_INTERVAL.
+        #     Used when the user has paired this TV via the options flow.
+        #     When the TV is on, this distinguishes Art Mode from normal
+        #     viewing locally — without depending on the art_api WebSocket
+        #     events that go silent on power-off.
+        #  3. async Art API (art.py) — preferred when active. Once
+        #     disable_art_thread() is called, _ws.artmode_status is frozen at
+        #     its last value and is no longer updated when Art Mode changes.
+        #     art_api.art_mode is kept live by WebSocket events
+        #     (artmode_status, art_mode_changed) received on the async art
+        #     channel.
+        #  4. _ws.artmode_status — fallback for the period before art_api has
         #     received its first event (e.g. right after HA startup).
         #
         # IMPORTANT: art_api.art_mode goes STALE when the TV powers off — the
         # art WebSocket disconnects and stops delivering events, so the cached
         # value keeps reporting whatever was true just before power-off (often
         # "on", because Art Mode is the last state of a Frame TV before
-        # standby). That stale "on" then leaks via art_mode_status into the
-        # Power switch and the Frame Art Mode switch (both treat
-        # media_player.state="off" + art_mode_status="on" as "TV physically on
-        # in Art Mode"), and both end up wrongly showing ON after a power-off.
-        # device_info's PowerState is polled every ~15s and reliably reports
-        # "standby" when the TV is truly off — use it as an authoritative
-        # override.
+        # standby). Levels 1 and 2 both guard against that.
         art_api = (
             self.hass.data.get(DOMAIN, {}).get(self._entry_id, {}).get(DATA_ART_API)
         )
         device_power_state = self._get_device_spec("PowerState")
         if device_power_state == "standby":
             # TV is powered off — art mode cannot be active regardless of
-            # what art_api may have cached.
+            # what art_api or the IP cache may report.
             data[ATTR_ART_MODE_STATUS] = STATE_OFF
+        elif self._ip_art_mode is not None:
+            # IP Control authoritative read for a TV that is on.
+            data[ATTR_ART_MODE_STATUS] = STATE_ON if self._ip_art_mode else STATE_OFF
         elif art_api is not None and art_api.art_mode is not None:
             data.update(
                 {ATTR_ART_MODE_STATUS: STATE_ON if art_api.art_mode else STATE_OFF}
