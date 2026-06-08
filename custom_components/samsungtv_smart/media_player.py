@@ -161,6 +161,12 @@ from .const import (
 )
 from .entity import SamsungTVEntity
 from .logo import LOGO_OPTION_DEFAULT, LocalImageUrl, Logo, LogoOption
+from .token_notify import (
+    METHOD_IP_CONTROL,
+    METHOD_LOCAL,
+    clear_token_problem,
+    notify_token_problem,
+)
 
 ATTR_ART_MODE_STATUS = "art_mode_status"
 ATTR_IP_ADDRESS = "ip_address"
@@ -524,6 +530,17 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         self._ws.register_new_token_callback(new_token_callback)
 
+        def auth_error_callback():
+            """Raise the local-token notification when reconnection is paused."""
+            run_callback_threadsafe(self.hass.loop, self._notify_local_token_problem)
+
+        def auth_recovered_callback():
+            """Clear the local-token notification once authorized again."""
+            run_callback_threadsafe(self.hass.loop, self._clear_local_token_problem)
+
+        self._ws.register_auth_error_callback(auth_error_callback)
+        self._ws.register_auth_recovered_callback(auth_recovered_callback)
+
         # rest api initialization
         self._rest_api = SamsungTVAsyncRest(
             host=self._host,
@@ -741,6 +758,35 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         """Clear the OAuth Repairs issue once a refresh succeeds."""
         ir.async_delete_issue(self.hass, DOMAIN, f"oauth_auth_failed_{self._entry_id}")
 
+    def _device_title(self) -> str:
+        """Human-readable name for this entry, for notifications."""
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        return entry.title if entry else (self.name or "this Samsung TV")
+
+    @callback
+    def _notify_local_token_problem(self) -> None:
+        """Raise the local-token persistent notification (WS PAT rejected)."""
+        notify_token_problem(
+            self.hass, self._entry_id, METHOD_LOCAL, self._device_title()
+        )
+
+    @callback
+    def _clear_local_token_problem(self) -> None:
+        """Clear the local-token persistent notification."""
+        clear_token_problem(self.hass, self._entry_id, METHOD_LOCAL)
+
+    @callback
+    def _notify_ip_control_token_problem(self) -> None:
+        """Raise the IP Control persistent notification (token rejected)."""
+        notify_token_problem(
+            self.hass, self._entry_id, METHOD_IP_CONTROL, self._device_title()
+        )
+
+    @callback
+    def _clear_ip_control_token_problem(self) -> None:
+        """Clear the IP Control persistent notification."""
+        clear_token_problem(self.hass, self._entry_id, METHOD_IP_CONTROL)
+
     async def _do_oauth_refresh(self) -> bool:
         """Perform the actual OAuth token refresh."""
         # Get current entry to check token expiration
@@ -915,6 +961,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 self._host,
                 ex,
             )
+            self._notify_ip_control_token_problem()
             if self._ip_art_mode is not None:
                 self._ip_art_mode = None
                 self.async_write_ha_state()
@@ -926,6 +973,8 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 ex,
             )
             return
+        # A successful read means the token is valid again.
+        self._clear_ip_control_token_problem()
         if value != self._ip_art_mode:
             _LOGGER.debug(
                 "IP Control art-mode for %s changed: %s -> %s (writing state)",
