@@ -50,6 +50,10 @@ MIN_APP_SCAN_INTERVAL = 9
 MAX_APP_VALIDITY_SEC = 60
 MAX_WS_PING_INTERVAL = 10
 PING_TIMEOUT = 3
+# After this many consecutive new-token issuances (i.e. the TV rejecting the
+# stored token in a row, with no clean reuse in between), stop relaunching the
+# remote thread to avoid an endless on-screen authorization-prompt loop.
+MAX_CONSECUTIVE_NEW_TOKENS = 5
 TYPE_DEEP_LINK = "DEEP_LINK"
 TYPE_NATIVE_LAUNCH = "NATIVE_LAUNCH"
 
@@ -306,6 +310,21 @@ class SamsungTVWS:
         self._ping = Ping(self.host)
         self._status_callback = None
         self._new_token_callback = None
+        # Auth-failure guard: a Samsung TV issues a brand-new token (and re-arms
+        # the on-screen authorization prompt) whenever it receives a connection
+        # without a valid token. If the stored token is bad, the reconnect loop
+        # would re-prompt forever. We count consecutive new-token issuances; a
+        # clean reconnect that REUSES the token resets the counter. Past the
+        # threshold we stop relaunching the remote thread and notify the caller.
+        self._auth_error_callback = None
+        self._auth_recovered_callback = None
+        self._consecutive_new_tokens = 0
+        self._auth_blocked = False
+
+    @property
+    def auth_blocked(self) -> bool:
+        """True when repeated token rejections have paused reconnection."""
+        return self._auth_blocked
 
     def __enter__(self):
         return self
@@ -359,6 +378,18 @@ class SamsungTVWS:
         """Register a callback function."""
         self._new_token_callback = func
 
+    def register_auth_error_callback(self, func):
+        """Register a callback fired when the TV keeps rejecting the token.
+
+        Called (on the WS thread) once reconnection is paused after
+        ``MAX_CONSECUTIVE_NEW_TOKENS`` consecutive rejections.
+        """
+        self._auth_error_callback = func
+
+    def register_auth_recovered_callback(self, func):
+        """Register a callback fired when a connection authorizes cleanly again."""
+        self._auth_recovered_callback = func
+
     def register_status_callback(self, func):
         """Register callback function used on status change."""
         self._status_callback = func
@@ -368,7 +399,14 @@ class SamsungTVWS:
         self._status_callback = None
 
     def _get_token(self):
-        """Get current token."""
+        """Get current token.
+
+        Only ever returns a non-empty ``str``. The stored token must be a plain
+        PAT string; if it was polluted with non-string data (e.g. an OAuth token
+        dict written under the same config key), we return ``None`` rather than
+        urlencode a dict into the WebSocket URL — which the TV rejects, causing
+        an endless new-token / authorization-prompt loop.
+        """
         if self.token_file is not None:
             try:
                 with open(self.token_file, "r", encoding="utf-8") as token_file:
@@ -376,7 +414,14 @@ class SamsungTVWS:
             except Exception as exc:  # pylint: disable=broad-except
                 _LOGGING.error("Failed to read TV token file: %s", str(exc))
                 return ""
-        return self.token
+        if isinstance(self.token, str) and self.token:
+            return self.token
+        if self.token is not None:
+            _LOGGING.warning(
+                "Ignoring non-string local token (%s) — connecting without it",
+                type(self.token).__name__,
+            )
+        return None
 
     def _set_token(self, token):
         """Save new token."""
@@ -563,12 +608,55 @@ class SamsungTVWS:
             _LOGGING.debug("Message remote: received connect")
             token = conn_data.get("token")
             if token:
+                # A top-level token on connect means the TV issued a NEW one,
+                # i.e. it did not accept what we presented. Count it; too many
+                # in a row indicates a stuck token and we pause reconnection.
+                self._consecutive_new_tokens += 1
                 self._set_token(token)
+                if (
+                    not self._auth_blocked
+                    and self._consecutive_new_tokens >= MAX_CONSECUTIVE_NEW_TOKENS
+                ):
+                    self._auth_blocked = True
+                    _LOGGING.warning(
+                        "TV %s issued %d new tokens in a row — pausing remote "
+                        "reconnection to stop re-prompting; re-pair required",
+                        self.host,
+                        self._consecutive_new_tokens,
+                    )
+                    if self._auth_error_callback is not None:
+                        self._auth_error_callback()
+            else:
+                # Connected with no new token => the stored token was accepted.
+                # Always signal recovery (dismiss is idempotent) so a notification
+                # left over from a previous, now-reloaded instance is cleared too.
+                self._consecutive_new_tokens = 0
+                self._auth_blocked = False
+                if self._auth_recovered_callback is not None:
+                    self._auth_recovered_callback()
             self._is_connected = True
             self._request_apps_list()
             self._start_client(start_all=True)
             if self._status_callback is not None:
                 self._status_callback()
+        elif event == "ms.error":
+            data = response.get("data") or {}
+            _LOGGING.debug("Message remote: error %s", data)
+            if "authoriz" in str(data.get("message", "")).lower():
+                # "No Authorized": the TV refused this connection's token.
+                self._consecutive_new_tokens += 1
+                if (
+                    not self._auth_blocked
+                    and self._consecutive_new_tokens >= MAX_CONSECUTIVE_NEW_TOKENS
+                ):
+                    self._auth_blocked = True
+                    _LOGGING.warning(
+                        "TV %s repeatedly returned 'No Authorized' — pausing "
+                        "remote reconnection; re-pair required",
+                        self.host,
+                    )
+                    if self._auth_error_callback is not None:
+                        self._auth_error_callback()
         elif event == "ed.installedApp.get":
             _LOGGING.debug("Message remote: received installedApp")
             self._handle_installed_app(response)
@@ -1035,6 +1123,12 @@ class SamsungTVWS:
 
     def _start_client(self, *, start_all=False):
         """Start all thread that connect to the TV websocket"""
+
+        if self._auth_blocked:
+            # Reconnection is paused after repeated token rejections; relaunching
+            # would only re-arm the on-screen authorization prompt. Stays paused
+            # until the user re-pairs and a clean reconnect resets the flag.
+            return
 
         if self._client_remote is None or not self._client_remote.is_alive():
             self._client_remote = Thread(target=self._client_remote_thread)
