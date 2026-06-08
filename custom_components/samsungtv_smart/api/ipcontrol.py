@@ -117,6 +117,41 @@ class SamsungIPControl:
         result = await self._async_request("powerControl", {"power": "powerOff"})
         return result.get("power", "unknown")
 
+    async def async_get_art_mode(self) -> bool | None:
+        """Return whether the TV is currently in Art Mode.
+
+        Returns ``True`` if in Art Mode, ``False`` if in normal viewing, and
+        ``None`` if the TV returned an unexpected value (e.g. firmware update
+        changed the protocol). Raises on transport/auth errors.
+
+        Calls ``artModeControl`` with no ``artMode`` parameter — the same
+        method then behaves as a getter, returning ``{"artMode": "artModeOn"}``
+        or ``{"artMode": "artModeOff"}``. This is the authoritative local read
+        for the Frame's Art Mode state, independent of the WebSocket art
+        channel (which goes silent when the TV powers off) and of any cached
+        ``art_api.art_mode`` value the integration may be holding.
+        """
+        result = await self._async_request("artModeControl")
+        art_mode = result.get("artMode")
+        if art_mode == "artModeOn":
+            return True
+        if art_mode == "artModeOff":
+            return False
+        return None
+
+    async def async_set_art_mode_on(self) -> None:
+        """Switch the TV to Art Mode."""
+        await self._async_request("artModeControl", {"artMode": "artModeOn"})
+
+    async def async_set_art_mode_off(self) -> None:
+        """Switch the TV out of Art Mode, back to normal viewing.
+
+        Combined with :meth:`async_power_on`, this gives a deterministic path
+        to normal viewing: ``power_on`` lands the TV in Art Mode, then
+        ``set_art_mode_off`` exits to live content.
+        """
+        await self._async_request("artModeControl", {"artMode": "artModeOff"})
+
     # -- transport -----------------------------------------------------------
 
     async def _async_request(
