@@ -45,6 +45,11 @@ PAIR_TIMEOUT = 30  # seconds: pairing waits for the on-screen acceptance
 
 # JSON-RPC error code returned when the access token is missing/expired.
 ERROR_UNAUTHORIZED = -32010
+# JSON-RPC "Parse error". Our requests are always well-formed JSON, and the 32"
+# and other calls succeed, so in practice this firmware returns -32700 when the
+# AccessToken is stale/unrecognized: a fresh pairing always clears it. Treated
+# as an auth error (re-pair required) when a token was actually sent.
+ERROR_PARSE_STALE_TOKEN = -32700
 
 
 class SamsungIPControlError(Exception):
@@ -254,8 +259,12 @@ class SamsungIPControl:
                 if isinstance(error, dict)
                 else str(error)
             )
-            if code == ERROR_UNAUTHORIZED:
-                raise SamsungIPControlAuthError(f"unauthorized: {message}")
+            if code == ERROR_UNAUTHORIZED or (
+                code == ERROR_PARSE_STALE_TOKEN and include_token
+            ):
+                raise SamsungIPControlAuthError(
+                    f"token rejected (code {code}): {message} — re-pair required"
+                )
             raise SamsungIPControlError(f"TV returned error {code}: {message}")
 
         result = data.get("result")
