@@ -117,6 +117,19 @@ class SamsungIPControl:
         result = await self._async_request("powerControl", {"power": "powerOff"})
         return result.get("power", "unknown")
 
+    async def async_reboot(self) -> str:
+        """Reboot the TV.
+
+        Uses the same ``powerControl`` method as power on/off, with the
+        ``reboot`` argument (confirmed empirically on Frame 2024/2025). The
+        access token survives the reboot, so no re-pairing is needed afterwards.
+        Issued over the JSON-RPC channel (port 1516), which is independent of
+        the WebSocket channels — so it still lands when the Art WebSocket has
+        gone unresponsive ("zombie"), making it a recovery path for that case.
+        """
+        result = await self._async_request("powerControl", {"power": "reboot"})
+        return result.get("power", "unknown")
+
     async def async_get_art_mode(self) -> bool | None:
         """Return whether the TV is currently in Art Mode.
 
@@ -225,7 +238,15 @@ class SamsungIPControl:
         except json.JSONDecodeError as ex:
             raise SamsungIPControlError(f"non-JSON response: {raw!r}") from ex
 
+        # The TV reports JSON-RPC errors in TWO shapes: the spec-compliant
+        # nested {"error": {"code", "message"}}, AND a flat top-level form
+        # {"code": -32700, "message": "Parse error"} with no "result" key
+        # (observed e.g. when the AccessToken is stale/invalid). The flat form
+        # must be detected explicitly, otherwise a real error slips through as
+        # a fake empty success.
         error = data.get("error")
+        if error is None and "code" in data and "result" not in data:
+            error = {"code": data.get("code"), "message": data.get("message")}
         if error is not None:
             code = error.get("code") if isinstance(error, dict) else None
             message = (
