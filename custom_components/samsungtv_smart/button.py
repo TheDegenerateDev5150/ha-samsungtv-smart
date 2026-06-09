@@ -29,11 +29,7 @@ from .api.ipcontrol import (
     SamsungIPControlError,
 )
 from .const import CONF_IP_CONTROL_TOKEN, DATA_CFG, DOMAIN
-from .token_notify import (
-    clear_token_problem,
-    METHOD_IP_CONTROL,
-    notify_token_problem,
-)
+from .token_notify import METHOD_IP_CONTROL, clear_token_problem, notify_token_problem
 
 _LOGGER = logging.getLogger(__name__)
 
