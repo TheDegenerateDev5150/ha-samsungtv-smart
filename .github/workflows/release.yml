@@ -1,10 +1,13 @@
 name: "Release"
+
 on:
   release:
     types:
       - "published"
+
 permissions:
   contents: write
+
 jobs:
   detect-branch:
     name: "Detect target branch from release type"
@@ -15,7 +18,7 @@ jobs:
       - name: "Determine target branch"
         id: detect
         run: |
-          # Pre-releases (betas, rc) target the dev branch v7-multi-frame.
+          # Pre-releases (betas, rc) target the dev branch v8-json-rpc.
           # Stable releases target master.
           # Override via tag pattern as a safety net for ambiguous cases.
           TAG="${{ github.event.release.tag_name }}"
@@ -62,6 +65,16 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: refs/heads/${{ needs.detect-branch.outputs.target_branch }}
+      - name: "Set manifest version from tag (authoritative)"
+        # Force the version inside the artifact to match the release tag,
+        # independent of the update-manifest push having propagated.
+        # This is what makes the zip's version reliably correct.
+        run: |
+          jq '.version = "${{ github.event.release.tag_name }}"' \
+            custom_components/samsungtv_smart/manifest.json > tmp.json
+          mv tmp.json custom_components/samsungtv_smart/manifest.json
+          echo "manifest version is now:"
+          jq -r '.version' custom_components/samsungtv_smart/manifest.json
       - name: "ZIP the integration directory"
         shell: bash
         run: |
