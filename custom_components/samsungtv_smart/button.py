@@ -118,7 +118,7 @@ class SamsungTVRebootButton(ButtonEntity):
                 )
                 await client.async_power_on()
                 # Wait for the TV to accept the reboot command after power-on.
-                await asyncio.sleep(10)
+                await asyncio.sleep(7)
             await client.async_reboot()
         except SamsungIPControlAuthError as ex:
             notify_token_problem(
