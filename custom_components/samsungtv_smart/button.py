@@ -30,8 +30,8 @@ from .api.ipcontrol import (
 )
 from .const import CONF_IP_CONTROL_TOKEN, DATA_CFG, DOMAIN
 from .token_notify import (
-    METHOD_IP_CONTROL,
     clear_token_problem,
+    METHOD_IP_CONTROL,
     notify_token_problem,
 )
 
