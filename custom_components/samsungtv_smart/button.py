@@ -12,6 +12,7 @@ is cleared.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from homeassistant.components.button import ButtonEntity
@@ -110,6 +111,14 @@ class SamsungTVRebootButton(ButtonEntity):
             )
         client = SamsungIPControl(self.hass, self._host, token=token)
         try:
+            power = await client.async_get_power_state()
+            if power == "powerOff":
+                _LOGGER.info(
+                    "TV %s is powered off — powering on before reboot", self._host
+                )
+                await client.async_power_on()
+                # Wait for the TV to accept the reboot command after power-on.
+                await asyncio.sleep(10)
             await client.async_reboot()
         except SamsungIPControlAuthError as ex:
             notify_token_problem(
