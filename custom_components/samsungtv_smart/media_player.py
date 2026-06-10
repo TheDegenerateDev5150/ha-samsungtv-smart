@@ -113,6 +113,8 @@ from .const import (
     CONF_SLIDESHOW_API,
     CONF_SOURCE_LIST,
     CONF_ST_ENTRY_UNIQUE_ID,
+    CONF_SUPPORTS_GET_BRIGHTNESS,
+    CONF_SUPPORTS_GET_COLOR_TEMPERATURE,
     CONF_SYNC_TURN_OFF,
     CONF_SYNC_TURN_ON,
     CONF_TOGGLE_ART_MODE,
@@ -567,7 +569,12 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 session=session,
                 timeout=DEFAULT_TIMEOUT,
                 name=f"{WS_PREFIX} {ws_name} Art",
+                supports_get_brightness=config.get(CONF_SUPPORTS_GET_BRIGHTNESS),
+                supports_get_color_temperature=config.get(
+                    CONF_SUPPORTS_GET_COLOR_TEMPERATURE
+                ),
             )
+            self._art_api.register_capability_callback(self._persist_art_capability)
         self._frame_tv_supported: bool | None = None
         self._frame_art_last_result: dict | None = None
 
@@ -787,6 +794,27 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
     def _clear_ip_control_token_problem(self) -> None:
         """Clear the IP Control persistent notification."""
         clear_token_problem(self.hass, self._entry_id, METHOD_IP_CONTROL)
+
+    @callback
+    def _persist_art_capability(self, flag_name: str, value: bool) -> None:
+        """Persist a learned Art API get-capability to entry.data.
+
+        Called (on the event loop) by the Art API the first time it determines
+        whether the TV supports the dedicated get_brightness /
+        get_color_temperature request, so the one-off detection probe is not
+        re-paid on every restart. Only writes when the value actually changes.
+        """
+        key = (
+            CONF_SUPPORTS_GET_BRIGHTNESS
+            if flag_name == "brightness"
+            else CONF_SUPPORTS_GET_COLOR_TEMPERATURE
+        )
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None or entry.data.get(key) == value:
+            return
+        self.hass.config_entries.async_update_entry(
+            entry, data={**entry.data, key: value}
+        )
 
     async def _do_oauth_refresh(self) -> bool:
         """Perform the actual OAuth token refresh."""
