@@ -38,11 +38,13 @@ from homeassistant.const import (
 )
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import config_entry_oauth2_flow
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import STORAGE_DIR
 from homeassistant.helpers.typing import ConfigType
 
+from .api.art import SamsungTVAsyncArt
 from .api.samsungws import ConnectionFailure, SamsungTVWS
 from .api.smartthings import SmartThingsTV
 from .const import (
@@ -62,12 +64,15 @@ from .const import (
     CONF_SHOW_CHANNEL_NR,
     CONF_SOURCE_LIST,
     CONF_ST_ENTRY_UNIQUE_ID,
+    CONF_SUPPORTS_GET_BRIGHTNESS,
+    CONF_SUPPORTS_GET_COLOR_TEMPERATURE,
     CONF_SYNC_TURN_OFF,
     CONF_SYNC_TURN_ON,
     CONF_UPDATE_CUSTOM_PING_URL,
     CONF_UPDATE_METHOD,
     CONF_USE_ST_INT_API_KEY,
     CONF_WS_NAME,
+    DATA_ART_API,
     DATA_CFG,
     DATA_CFG_YAML,
     DATA_OPTIONS,
@@ -1020,6 +1025,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN][entry.entry_id][DATA_CFG_YAML] = add_conf
     entry.async_on_unload(entry.add_update_listener(_update_listener))
 
+    # Create the single shared Frame Art API instance BEFORE forwarding
+    # platforms. Platform setups run concurrently and used to race on
+    # hass.data[...][DATA_ART_API], each creating its own instance on a miss
+    # (sensor.py even unconditionally). Multiple clients on the TV's
+    # com.samsung.art-app channel make it route d2d_service_message responses
+    # unpredictably and eventually stop handshaking new connections, so art
+    # mode detection silently dies. One instance here, everyone reuses it.
+    hass.data[DOMAIN][entry.entry_id][DATA_ART_API] = SamsungTVAsyncArt(
+        host=config[CONF_HOST],
+        port=config.get(CONF_PORT, DEFAULT_PORT),
+        token=config.get(CONF_TOKEN),
+        session=async_get_clientsession(hass),
+        timeout=DEFAULT_TIMEOUT,
+        name=f"{WS_PREFIX} {config.get(CONF_WS_NAME, 'HomeAssistant')} Art",
+        supports_get_brightness=entry.data.get(CONF_SUPPORTS_GET_BRIGHTNESS),
+        supports_get_color_temperature=entry.data.get(
+            CONF_SUPPORTS_GET_COLOR_TEMPERATURE
+        ),
+    )
+
     await hass.config_entries.async_forward_entry_setups(entry, SAMSMART_PLATFORM)
 
     return True
@@ -1030,6 +1055,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok := await hass.config_entries.async_unload_platforms(
         entry, SAMSMART_PLATFORM
     ):
+        if art_api := hass.data[DOMAIN][entry.entry_id].pop(DATA_ART_API, None):
+            await art_api.close()
         hass.data[DOMAIN][entry.entry_id].pop(DATA_CFG)
         hass.data[DOMAIN][entry.entry_id].pop(DATA_OPTIONS)
         if not hass.data[DOMAIN][entry.entry_id]:

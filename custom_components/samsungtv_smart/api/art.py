@@ -155,13 +155,18 @@ class SamsungTVAsyncArt:
 
     @property
     def _ws_url(self) -> str:
-        """Get the WebSocket URL for the art API."""
+        """Get the WebSocket URL for the art API.
+
+        The art-app channel must be opened WITHOUT the remote-control token:
+        2024 Frame TVs (e.g. QN55LS03DA, ws API 2.0.25) treat a token on this
+        channel as a pending device authorization and never send
+        ms.channel.connect — the connection idles until the TV drops it with
+        ms.channel.timeOut. Tokenless connections complete the handshake
+        immediately; the channel itself is unauthenticated.
+        """
         scheme = "wss" if self._port == 8002 else "ws"
         name = _serialize_string(self._name)
-        token_part = (
-            f"&token={self._token}" if self._token and self._port == 8002 else ""
-        )
-        return f"{scheme}://{self._host}:{self._port}/api/v2/channels/{ART_ENDPOINT}?name={name}{token_part}"
+        return f"{scheme}://{self._host}:{self._port}/api/v2/channels/{ART_ENDPOINT}?name={name}"
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create aiohttp session."""

@@ -79,15 +79,19 @@ async def async_setup_entry(
 
     entities = []
 
-    # Create the Art API instance
-    art_api = SamsungTVAsyncArt(
-        host=host,
-        port=port,
-        token=token,
-        session=session,
-        timeout=5,
-        name=f"{WS_PREFIX} {ws_name} Art",
-    )
+    # Reuse the shared Art API instance (created in __init__.py) so all
+    # platforms talk over a single art-app WebSocket; the TV misbehaves with
+    # multiple clients on that channel. Create one only as a fallback.
+    art_api = hass.data[DOMAIN][entry.entry_id].get(DATA_ART_API)
+    if not art_api:
+        art_api = SamsungTVAsyncArt(
+            host=host,
+            port=port,
+            token=token,
+            session=session,
+            timeout=5,
+            name=f"{WS_PREFIX} {ws_name} Art",
+        )
 
     # Check Frame TV support:
     # If already confirmed as a Frame TV (persisted flag), skip the live check.

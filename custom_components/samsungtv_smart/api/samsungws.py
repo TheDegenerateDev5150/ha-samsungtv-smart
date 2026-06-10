@@ -832,8 +832,11 @@ class SamsungTVWS:
             return
 
         is_ssl = self._is_ssl_connection()
+        # use_token=False: the art-app channel is unauthenticated; sending the
+        # remote-control token makes 2024 Frame TVs hold the handshake and
+        # close with ms.channel.timeOut instead of ms.channel.connect.
         url = self._format_websocket_url(
-            _WS_ENDPOINT_ART, is_ssl=is_ssl, use_token=True
+            _WS_ENDPOINT_ART, is_ssl=is_ssl, use_token=False
         )
         sslopt = {"cert_reqs": ssl.CERT_NONE} if is_ssl else {}
 
