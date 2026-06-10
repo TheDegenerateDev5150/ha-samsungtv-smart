@@ -98,6 +98,7 @@ CONF_OAUTH_TOKEN = "oauth_token"
 # IP Control (JSON-RPC, port 1516) — persisted access token, per TV (entry.data).
 # Presence of a token means the feature is paired/enabled for that TV.
 CONF_IP_CONTROL_TOKEN = "ip_control_token"
+CONF_ENABLE_IP_CONTROL = "enable_ip_control"
 
 # Authentication methods
 AUTH_METHOD_OAUTH = "oauth"
