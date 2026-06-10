@@ -1,13 +1,14 @@
 """Samsung TV reboot button (IP Control).
 
 Exposes a single "Reboot TV" button, added only when the entry is paired for
-IP Control (a CONF_IP_CONTROL_TOKEN is present). Pressing it issues a reboot
-over the JSON-RPC channel (port 1516), which is independent of the WebSocket
-channels — so it also recovers a TV whose Art WebSocket has gone unresponsive.
+IP Control (a CONF_IP_CONTROL_TOKEN is present) and the IP Control channel is
+enabled in the options. Pressing it issues a reboot over the JSON-RPC channel
+(port 1516), which is independent of the WebSocket channels — so it also
+recovers a TV whose Art WebSocket has gone unresponsive.
 
 The IP Control token survives the reboot, so no re-pairing is needed afterwards.
-On an auth error the IP Control persistent notification is raised; on success it
-is cleared.
+If the TV is off, it is powered on first and then rebooted. On an auth error the
+IP Control persistent notification is raised; on success it is cleared.
 """
 
 from __future__ import annotations
@@ -28,10 +29,22 @@ from .api.ipcontrol import (
     SamsungIPControlAuthError,
     SamsungIPControlError,
 )
-from .const import CONF_IP_CONTROL_TOKEN, DATA_CFG, DOMAIN
+from .const import (
+    CONF_ENABLE_IP_CONTROL,
+    CONF_IP_CONTROL_TOKEN,
+    DATA_CFG,
+    DOMAIN,
+)
 from .token_notify import METHOD_IP_CONTROL, clear_token_problem, notify_token_problem
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _ip_control_active(entry: ConfigEntry) -> bool:
+    """True when IP Control is paired AND enabled in the options."""
+    return bool(entry.data.get(CONF_IP_CONTROL_TOKEN)) and entry.options.get(
+        CONF_ENABLE_IP_CONTROL, True
+    )
 
 
 async def async_setup_entry(
@@ -39,10 +52,11 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the reboot button — only when IP Control is paired."""
-    if not entry.data.get(CONF_IP_CONTROL_TOKEN):
-        # Not paired for IP Control: no reboot path, so no button. A later
-        # pairing via the options flow reloads the entry and adds it then.
+    """Set up the reboot button — only when IP Control is active."""
+    if not _ip_control_active(entry):
+        # Not paired, or the channel is disabled: no reboot path, so no button.
+        # Pairing or re-enabling via the options flow reloads the entry and
+        # adds it then.
         return
 
     config = hass.data[DOMAIN][entry.entry_id][DATA_CFG]
@@ -59,7 +73,7 @@ class SamsungTVRebootButton(ButtonEntity):
     """Button that reboots the TV via IP Control."""
 
     _attr_has_entity_name = True
-    _attr_name = "Reboot TV"
+    _attr_translation_key = "reboot"
     _attr_icon = "mdi:restart"
 
     def __init__(
@@ -88,16 +102,16 @@ class SamsungTVRebootButton(ButtonEntity):
 
     @property
     def available(self) -> bool:
-        """Available only while IP Control is paired (read live)."""
+        """Available only while IP Control is paired and enabled (read live)."""
         entry = self.hass.config_entries.async_get_entry(self._entry_id)
-        return bool(entry and entry.data.get(CONF_IP_CONTROL_TOKEN))
+        return bool(entry and _ip_control_active(entry))
 
     def _device_title(self) -> str:
         entry = self.hass.config_entries.async_get_entry(self._entry_id)
         return entry.title if entry else (self._device_name or "this Samsung TV")
 
     async def async_press(self) -> None:
-        """Reboot the TV via IP Control."""
+        """Reboot the TV via IP Control (powering it on first if it is off)."""
         entry = self.hass.config_entries.async_get_entry(self._entry_id)
         token = entry.data.get(CONF_IP_CONTROL_TOKEN) if entry else None
         if not token:
