@@ -1159,7 +1159,7 @@ class OptionsFlowHandler(OptionsFlow):
                     new_data[CONF_IP_CONTROL_TOKEN] = token
                     self.hass.config_entries.async_update_entry(entry, data=new_data)
                     _LOGGER.debug("IP Control paired for %s", host)
-                    return await self.async_step_menu()
+                    return self.async_abort(reason="ip_control_pair_successful")
 
         return self.async_show_form(
             step_id="ip_control_pair",
