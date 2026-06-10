@@ -107,7 +107,8 @@
           "use_st_channel_info": "Utiliser SmartThings pour les chaînes",
           "show_channel_number": "Afficher le numéro de chaîne",
           "power_on_method": "Méthode d'allumage",
-          "show_adv_opt": "Afficher les options avancées"
+          "show_adv_opt": "Afficher les options avancées",
+          "enable_ip_control": "Activer IP Control"
         }
       },
       "menu": {
@@ -190,6 +191,13 @@
     "oauth_auth_failed": {
       "title": "Échec de l'authentification SmartThings pour {device_name}",
       "description": "Home Assistant n'a pas pu rafraîchir le jeton d'accès SmartThings pour **{device_name}**. Le jeton de rafraîchissement n'est plus valide — cela peut arriver lorsque le jeton est révoqué, expire ou est renouvelé par SmartThings.\n\nLes fonctions basées sur SmartThings (état d'alimentation, mode d'image, sélection de source) ne fonctionneront pas tant que vous ne vous serez pas reconnecté.\n\nPour corriger : allez dans **Paramètres → Appareils et services → Samsung TV Smart**, sélectionnez l'entrée concernée, choisissez **Reconfigurer**, et reconnectez-vous avec Samsung."
+    }
+  },
+  "entity": {
+    "button": {
+      "reboot": {
+        "name": "Redémarrer le téléviseur"
+      }
     }
   }
 }
