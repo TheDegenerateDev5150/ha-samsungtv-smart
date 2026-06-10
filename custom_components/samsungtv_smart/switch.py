@@ -35,6 +35,7 @@ from .api.ipcontrol import (
 from .const import (
     AUTH_METHOD_OAUTH,
     CONF_AUTH_METHOD,
+    CONF_ENABLE_IP_CONTROL,
     CONF_IP_CONTROL_TOKEN,
     CONF_IS_FRAME_TV,
     CONF_WS_NAME,
@@ -197,6 +198,56 @@ class FrameArtModeSwitch(SwitchEntity):
         self._available = True
         self._updating = False
         self._media_player_entity_id: str | None = None
+        self._ip_control: SamsungIPControl | None = None
+        self._ip_control_token: str | None = None
+
+    def _get_ip_control(self) -> SamsungIPControl | None:
+        """Return an IP Control client if paired AND enabled, else None.
+
+        Token is read live from entry.data (pairing takes effect with no
+        reload), and the channel must be enabled in the options.
+        """
+        if not self._host:
+            return None
+        token = self._entry.data.get(CONF_IP_CONTROL_TOKEN)
+        if not token or not self._entry.options.get(CONF_ENABLE_IP_CONTROL, True):
+            return None
+        if self._ip_control is None or self._ip_control_token != token:
+            self._ip_control = SamsungIPControl(self._hass, self._host, token=token)
+            self._ip_control_token = token
+        return self._ip_control
+
+    async def _set_artmode(self, turn_on: bool):
+        """Set Art Mode via IP Control (primary), WebSocket as fallback.
+
+        IP Control (JSON-RPC, port 1516) is preferred because it is independent
+        of the Art WebSocket — the channel whose ``set_artmode`` returns
+        None/False when it goes unresponsive ("zombie"). On any IP Control
+        failure we fall back to the WebSocket so behaviour is never worse than
+        before. Returns a truthy value on a successful set; the caller's
+        existing verification step confirms the actual state afterwards.
+        """
+        client = self._get_ip_control()
+        if client is not None:
+            try:
+                if turn_on:
+                    await client.async_set_art_mode_on()
+                else:
+                    await client.async_set_art_mode_off()
+                _LOGGER.debug(
+                    "Art Mode set to %s via IP Control for %s",
+                    turn_on,
+                    self._device_name,
+                )
+                return True
+            except SamsungIPControlError as ex:
+                _LOGGER.debug(
+                    "IP Control art-mode set failed (%s); falling back to "
+                    "WebSocket for %s",
+                    ex,
+                    self._device_name,
+                )
+        return await self._art_api.set_artmode(turn_on)
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -371,7 +422,7 @@ class FrameArtModeSwitch(SwitchEntity):
                         max_retries,
                         self._device_name,
                     )
-                    result = await self._art_api.set_artmode(True)
+                    result = await self._set_artmode(True)
                     if result:
                         # Set state immediately for responsive UI
                         self._attr_is_on = True
@@ -460,7 +511,7 @@ class FrameArtModeSwitch(SwitchEntity):
                         max_retries,
                         self._device_name,
                     )
-                    result = await self._art_api.set_artmode(False)
+                    result = await self._set_artmode(False)
                     if result:
                         # Set state immediately for responsive UI
                         self._attr_is_on = False
