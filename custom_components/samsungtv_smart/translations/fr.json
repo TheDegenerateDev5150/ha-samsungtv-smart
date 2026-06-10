@@ -96,6 +96,9 @@
     }
   },
   "options": {
+    "abort": {
+      "ip_control_pair_successful": "IP Control appairé avec succès. Le jeton d'accès a été rafraîchi et enregistré."
+    },
     "step": {
       "init": {
         "title": "Options SamsungTV Smart",

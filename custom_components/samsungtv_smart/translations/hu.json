@@ -96,6 +96,9 @@
     }
   },
   "options": {
+    "abort": {
+      "ip_control_pair_successful": "Az IP Control sikeresen párosítva. A hozzáférési token frissítve és elmentve."
+    },
     "step": {
       "init": {
         "title": "SamsungTV Smart beállítások",

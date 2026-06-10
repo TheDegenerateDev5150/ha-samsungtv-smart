@@ -96,6 +96,9 @@
     }
   },
   "options": {
+    "abort": {
+      "ip_control_pair_successful": "IP Control emparejado correctamente. El token de acceso se ha actualizado y guardado."
+    },
     "step": {
       "init": {
         "title": "Opciones de SamsungTV Smart",
