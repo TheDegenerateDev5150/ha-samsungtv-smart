@@ -63,6 +63,8 @@ class SamsungTVAsyncArt:
         session: aiohttp.ClientSession | None = None,
         timeout: int = 5,
         name: str = "HomeAssistant",
+        supports_get_brightness: bool | None = None,
+        supports_get_color_temperature: bool | None = None,
     ) -> None:
         """Initialize the Art API."""
         self._host = host
@@ -115,8 +117,16 @@ class SamsungTVAsyncArt:
         # and flip these flags off on the first miss. After that the entity
         # polls go straight to get_artmode_settings (cached above).
         # Flag = None means "unknown, probe once"; True/False is the learned state.
-        self._supports_get_brightness: bool | None = None
-        self._supports_get_color_temperature: bool | None = None
+        # Seeded from persisted values (entry.data) when known, so the one-off
+        # detection probe is not re-paid on every restart.
+        self._supports_get_brightness: bool | None = supports_get_brightness
+        self._supports_get_color_temperature: bool | None = (
+            supports_get_color_temperature
+        )
+        # Fired (flag_name, value) when a capability is first determined from a
+        # genuine signal, so the caller can persist it. Never fired on a
+        # transport/connection failure (the result stays unknown then).
+        self._capability_callback = None
         # Capability flag: True = TV supports get_thumbnail_list (pre-2024 TVs,
         # streams all thumbnails over a single socket connection — fast).
         # False = TV returns error -1 (2024-2025 Tizen), must use get_thumbnail
@@ -127,6 +137,21 @@ class SamsungTVAsyncArt:
         """Generate a new UUID for art requests."""
         self._art_uuid = str(uuid.uuid4())
         return self._art_uuid
+
+    def register_capability_callback(self, func) -> None:
+        """Register a callback fired when a get-capability is first learned.
+
+        Signature: func(flag_name: str, value: bool), where flag_name is
+        "brightness" or "color_temperature". Only called for a genuine signal
+        (the TV responded -> True, or replied silently while connected -> False),
+        never on a transport/connection failure.
+        """
+        self._capability_callback = func
+
+    def _learn_capability(self, flag_name: str, value: bool) -> None:
+        """Notify the caller that a capability has been determined."""
+        if self._capability_callback is not None:
+            self._capability_callback(flag_name, value)
 
     @property
     def _ws_url(self) -> str:
@@ -1232,13 +1257,18 @@ class SamsungTVAsyncArt:
                         "enabling fast path"
                     )
                     self._supports_get_brightness = True
+                    self._learn_capability("brightness", True)
                 return data
-            if self._supports_get_brightness is None:
+            if self._supports_get_brightness is None and self._connected:
+                # Connected but silent to this specific request => genuine
+                # "unsupported" signal. (A falsy result while NOT connected is a
+                # transport issue, not a capability answer — stay unknown.)
                 _LOGGER.info(
                     "Art API: TV did not respond to get_brightness within 1 s; "
                     "falling back to get_artmode_settings for future polls"
                 )
                 self._supports_get_brightness = False
+                self._learn_capability("brightness", False)
 
         return await self.get_artmode_settings("brightness")
 
@@ -1273,13 +1303,15 @@ class SamsungTVAsyncArt:
                         "enabling fast path"
                     )
                     self._supports_get_color_temperature = True
+                    self._learn_capability("color_temperature", True)
                 return data
-            if self._supports_get_color_temperature is None:
+            if self._supports_get_color_temperature is None and self._connected:
                 _LOGGER.info(
                     "Art API: TV did not respond to get_color_temperature within "
                     "1 s; falling back to get_artmode_settings for future polls"
                 )
                 self._supports_get_color_temperature = False
+                self._learn_capability("color_temperature", False)
 
         return await self.get_artmode_settings("color_temperature")
 
