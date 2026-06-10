@@ -993,6 +993,20 @@ class OptionsFlowHandler(OptionsFlow):
             return self._save_entry(data=user_input)
         return self._async_option_form()
 
+    def _power_on_methods(self) -> dict:
+        """Power-on methods, including IP Control only when it is active."""
+        methods = dict(POWER_ON_METHODS)
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if (
+            entry
+            and entry.data.get(CONF_IP_CONTROL_TOKEN)
+            and self._std_options.get(CONF_ENABLE_IP_CONTROL, True)
+        ):
+            methods[PowerOnMethod.IPControl.value] = (
+                "IP Control (reliable, no SmartThings)"
+            )
+        return methods
+
     @callback
     def _async_option_form(self):
         """Return configuration form for options."""
@@ -1055,7 +1069,7 @@ class OptionsFlowHandler(OptionsFlow):
                         default=options.get(
                             CONF_POWER_ON_METHOD, str(PowerOnMethod.WOL.value)
                         ),
-                    ): SelectSelector(_dict_to_select(POWER_ON_METHODS)),
+                    ): SelectSelector(_dict_to_select(self._power_on_methods())),
                 }
             )
         else:
