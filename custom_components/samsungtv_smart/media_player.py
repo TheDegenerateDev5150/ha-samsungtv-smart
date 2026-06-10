@@ -102,6 +102,7 @@ from .const import (
     CONF_AUTH_METHOD,
     CONF_CHANNEL_LIST,
     CONF_DUMP_APPS,
+    CONF_ENABLE_IP_CONTROL,
     CONF_EXT_POWER_ENTITY,
     CONF_IP_CONTROL_TOKEN,
     CONF_LOGO_OPTION,
@@ -910,8 +911,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         """
         entry = self.hass.config_entries.async_get_entry(self._entry_id)
         token = entry.data.get(CONF_IP_CONTROL_TOKEN) if entry else None
-        if not token:
-            # Token went away (un-paired) — drop any cached client/value.
+        if not token or not self._get_option(CONF_ENABLE_IP_CONTROL, True):
+            # Un-paired, or the IP Control channel was disabled in options —
+            # drop any cached client/value and behave as if not paired.
             if self._ip_control_client is not None:
                 self._ip_control_client = None
                 self._ip_control_token_cached = None
