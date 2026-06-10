@@ -1074,6 +1074,21 @@ class OptionsFlowHandler(OptionsFlow):
             )
         else:
             data_schema = vol.Schema(opt_schema)
+            # Even without SmartThings, expose the power-on method selector when
+            # IP Control is enabled, so its SmartThings-free power path can be
+            # chosen (the list is then WOL + IP Control).
+            if PowerOnMethod.IPControl.value in self._power_on_methods():
+                data_schema = data_schema.extend(
+                    {
+                        vol.Required(
+                            CONF_POWER_ON_METHOD,
+                            default=options.get(
+                                CONF_POWER_ON_METHOD,
+                                str(PowerOnMethod.WOL.value),
+                            ),
+                        ): SelectSelector(_dict_to_select(self._power_on_methods())),
+                    }
+                )
 
         if not self._adv_chk:
             data_schema = data_schema.extend(
