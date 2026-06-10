@@ -74,6 +74,8 @@ from .const import (
     CONF_SHOW_CHANNEL_NR,
     CONF_SOURCE_LIST,
     CONF_ST_ENTRY_UNIQUE_ID,
+    CONF_SUPPORTS_GET_BRIGHTNESS,
+    CONF_SUPPORTS_GET_COLOR_TEMPERATURE,
     CONF_SYNC_TURN_OFF,
     CONF_SYNC_TURN_ON,
     CONF_TOGGLE_ART_MODE,
@@ -769,6 +771,10 @@ class SamsungTVSmartOAuth2FlowHandler(
         updates = {
             CONF_HOST: self._host,
             CONF_PORT: self._tv_info.ws_port,
+            # Re-detect Art API get-capabilities after a reconfigure (the TV
+            # behind this entry may have changed); None forces a fresh probe.
+            CONF_SUPPORTS_GET_BRIGHTNESS: None,
+            CONF_SUPPORTS_GET_COLOR_TEMPERATURE: None,
         }
         if self._token:
             updates[CONF_TOKEN] = self._token
