@@ -64,6 +64,7 @@ from .const import (
     CONF_DEVICE_NAME,
     CONF_DEVICE_OS,
     CONF_DUMP_APPS,
+    CONF_ENABLE_IP_CONTROL,
     CONF_EXT_POWER_ENTITY,
     CONF_IP_CONTROL_TOKEN,
     CONF_LOGO_OPTION,
@@ -1007,6 +1008,16 @@ class OptionsFlowHandler(OptionsFlow):
                 default=options.get(CONF_USE_LOCAL_LOGO, True),
             ): bool,
         }
+
+        # Offer enabling/disabling the IP Control channel only once it is paired.
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry and entry.data.get(CONF_IP_CONTROL_TOKEN):
+            opt_schema[
+                vol.Required(
+                    CONF_ENABLE_IP_CONTROL,
+                    default=options.get(CONF_ENABLE_IP_CONTROL, True),
+                )
+            ] = bool
 
         if not self._app_list:
             opt_schema.update(
