@@ -24,6 +24,7 @@ class PowerOnMethod(Enum):
 
     WOL = 1
     SmartThings = 2
+    IPControl = 3
 
 
 DOMAIN = "samsungtv_smart"
