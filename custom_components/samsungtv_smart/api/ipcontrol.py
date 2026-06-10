@@ -148,7 +148,16 @@ class SamsungIPControl:
         for the Frame's Art Mode state, independent of the WebSocket art
         channel (which goes silent when the TV powers off) and of any cached
         ``art_api.art_mode`` value the integration may be holding.
+
+        PowerState is checked first and wins: in true standby the artModeControl
+        getter still returns the LAST value (typically ``artModeOn``), which
+        would wrongly report Art Mode as active after a restart. A powered-off
+        TV is never in Art Mode, so ``powerOff`` short-circuits to ``False``
+        without consulting artModeControl. (Art Mode itself reports
+        ``powerOn``, so it is unaffected.)
         """
+        if await self.async_get_power_state() == "powerOff":
+            return False
         result = await self._async_request("artModeControl")
         art_mode = result.get("artMode")
         if art_mode == "artModeOn":
