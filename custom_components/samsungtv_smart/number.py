@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from homeassistant.components.number import NumberEntity, NumberMode
+from homeassistant.components.number import NumberMode, RestoreNumber
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_ID, CONF_NAME, CONF_PORT, CONF_TOKEN
 from homeassistant.core import HomeAssistant
@@ -101,7 +101,7 @@ async def async_setup_entry(
 # ══════════════════════════════════════════════════════════════════════════
 
 
-class SamsungTVArtNumberBase(NumberEntity):
+class SamsungTVArtNumberBase(RestoreNumber):
     """Base class for Samsung Frame TV Art Mode number entities."""
 
     _attr_has_entity_name = True
@@ -122,6 +122,20 @@ class SamsungTVArtNumberBase(NumberEntity):
         self._device_unique_id = device_unique_id
         self._attr_native_value: float | None = None
         self._media_player_entity_id: str | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the last known value after a restart.
+
+        Art Mode brightness/color temperature can only be read while the TV is
+        actually in Art Mode; in standby the read is skipped and the value would
+        otherwise be "unknown" until the TV next enters Art Mode. Restoring the
+        last stored value keeps the slider showing the most recent value across
+        restarts; a live poll refreshes it once the TV is back in Art Mode.
+        """
+        await super().async_added_to_hass()
+        last_data = await self.async_get_last_number_data()
+        if last_data is not None and last_data.native_value is not None:
+            self._attr_native_value = last_data.native_value
 
     @property
     def device_info(self) -> DeviceInfo:
