@@ -2076,6 +2076,25 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
             if turn_on_method == PowerOnMethod.SmartThings and self._st:
                 await self._st.async_turn_on()
+            elif turn_on_method == PowerOnMethod.IPControl:
+                ip_client = self._get_ip_control_client()
+                if ip_client is not None:
+                    try:
+                        await ip_client.async_power_on()
+                    except SamsungIPControlError as ex:
+                        _LOGGER.warning(
+                            "IP Control power-on for %s failed (%s); falling "
+                            "back to WOL",
+                            self._host,
+                            ex,
+                        )
+                        result = await self.hass.async_add_executor_job(
+                            self._send_wol_packet
+                        )
+                else:
+                    result = await self.hass.async_add_executor_job(
+                        self._send_wol_packet
+                    )
             else:
                 result = await self.hass.async_add_executor_job(self._send_wol_packet)
 
