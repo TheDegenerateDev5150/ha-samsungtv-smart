@@ -224,6 +224,10 @@ SCAN_INTERVAL = timedelta(seconds=5)
 # Phase 2: background poll period for the authoritative Art Mode state via
 # IP Control. Cheap LAN call (~50–100 ms over HTTPS:1516), low frequency.
 IP_ART_MODE_REFRESH_INTERVAL = timedelta(seconds=30)
+# Consecutive IP Control transport failures tolerated before the cached
+# art-mode value is considered stale and cleared (TV likely in deep standby
+# with port 1516 closed). 3 × 30s ≈ 90s worst-case staleness.
+IP_ART_MODE_MAX_FAILURES = 3
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -586,6 +590,10 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         self._ip_control_client: SamsungIPControl | None = None
         self._ip_control_token_cached: str | None = None
         self._ip_art_mode: bool | None = None
+        # Consecutive transport-failure count; the cache is cleared once it
+        # reaches IP_ART_MODE_MAX_FAILURES so a TV that stops answering on
+        # port 1516 (deep standby) cannot pin a stale "art mode on" forever.
+        self._ip_art_mode_failures = 0
         self._ip_art_mode_refresh_unsub: Callable[[], None] | None = None
 
         # upnp initialization
@@ -991,7 +999,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
           logged so the user knows to re-pair.
         - Any other transport / TLS error → keep the last known value, log at
           debug. Transient unreachability (TV in deep standby briefly closing
-          port 1516) should not invalidate a recent reading.
+          port 1516) should not invalidate a recent reading — but after
+          IP_ART_MODE_MAX_FAILURES consecutive failures the cache is cleared
+          so a TV that stays unreachable cannot pin a stale value forever.
         """
         client = self._get_ip_control_client()
         if client is None:
@@ -1000,6 +1010,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 "(no CONF_IP_CONTROL_TOKEN in entry.data) — skipping",
                 self._host,
             )
+            self._ip_art_mode_failures = 0
             if self._ip_art_mode is not None:
                 self._ip_art_mode = None
                 self.async_write_ha_state()
@@ -1020,18 +1031,39 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 ex,
             )
             self._notify_ip_control_token_problem()
+            self._ip_art_mode_failures = 0
             if self._ip_art_mode is not None:
                 self._ip_art_mode = None
                 self.async_write_ha_state()
             return
         except SamsungIPControlError as ex:
-            _LOGGER.debug(
-                "IP Control art-mode read for %s failed (%s); keeping last value",
-                self._host,
-                ex,
-            )
+            self._ip_art_mode_failures += 1
+            if (
+                self._ip_art_mode_failures >= IP_ART_MODE_MAX_FAILURES
+                and self._ip_art_mode is not None
+            ):
+                _LOGGER.debug(
+                    "IP Control art-mode read for %s failed %d times in a row "
+                    "(%s); clearing stale cached value (%s)",
+                    self._host,
+                    self._ip_art_mode_failures,
+                    ex,
+                    self._ip_art_mode,
+                )
+                self._ip_art_mode = None
+                self.async_write_ha_state()
+            else:
+                _LOGGER.debug(
+                    "IP Control art-mode read for %s failed (%s); keeping last "
+                    "value (failure %d/%d)",
+                    self._host,
+                    ex,
+                    self._ip_art_mode_failures,
+                    IP_ART_MODE_MAX_FAILURES,
+                )
             return
         # A successful read means the token is valid again.
+        self._ip_art_mode_failures = 0
         self._clear_ip_control_token_problem()
         if value != self._ip_art_mode:
             _LOGGER.debug(
