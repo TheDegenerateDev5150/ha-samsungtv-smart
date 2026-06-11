@@ -595,6 +595,19 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         st_entry_uniqueid: str | None = config.get(CONF_ST_ENTRY_UNIQUE_ID)
         auth_method: str | None = config.get(CONF_AUTH_METHOD)
 
+        # Entries created through the OAuth flow can carry a different
+        # auth_method label (e.g. "pat", since the access token doubles as
+        # the API key) while still holding a refreshable oauth_token. Treat
+        # those as OAuth: their access token expires after 24 hours, and
+        # skipping the refresh path kills SmartThings a day later.
+        oauth_token = config.get(CONF_OAUTH_TOKEN)
+        if (
+            auth_method != AUTH_METHOD_OAUTH
+            and isinstance(oauth_token, dict)
+            and oauth_token.get("refresh_token")
+        ):
+            auth_method = AUTH_METHOD_OAUTH
+
         # Store auth method for later use
         self._auth_method = auth_method
 
@@ -1604,6 +1617,21 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             ClientResponseError,
         ) as exc:
             _LOGGER.debug("%s - SmartThings error: [%s]", self.entity_id, exc)
+            self._st_last_exc = exc
+            return False
+        except Exception as exc:  # pylint: disable=broad-except
+            # A SmartThings cloud failure (expired token, rate limit, API
+            # change) must not propagate out of async_update: HA would mark
+            # the whole entity unavailable, and dependent entities (art mode
+            # switch, frame art sensor) would wrongly report the TV as off.
+            # Local WebSocket control keeps working without SmartThings.
+            if type(exc) is not type(self._st_last_exc):
+                _LOGGER.warning(
+                    "%s - SmartThings update failed, continuing with local"
+                    " control only: %s",
+                    self.entity_id,
+                    exc,
+                )
             self._st_last_exc = exc
             return False
 

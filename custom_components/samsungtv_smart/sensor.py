@@ -36,9 +36,7 @@ from homeassistant.helpers.update_coordinator import (
 from . import async_get_samsungtv_api_key
 from .api.art import SamsungTVAsyncArt
 from .const import (
-    AUTH_METHOD_OAUTH,
     CONF_API_KEY,
-    CONF_AUTH_METHOD,
     CONF_DEVICE_ID,
     CONF_IS_FRAME_TV,
     CONF_OAUTH_TOKEN,
@@ -163,17 +161,15 @@ async def async_setup_entry(
     else:
         _LOGGER.info("Frame TV art mode not supported on %s", host)
 
-    # Add SmartThings sensors if SmartThings is configured
-    api_key = config.get(CONF_API_KEY)
+    # Add SmartThings sensors if SmartThings is configured.
+    # Resolve the API key through the shared helper instead of the cached
+    # config snapshot: at startup the stored OAuth access token may already
+    # be expired (e.g. HA was down for >24h), and this setup runs exactly
+    # once — a stale token here means get_device() fails with an auth error
+    # and the SmartThings sensors silently never get created. The helper
+    # refreshes the token (or waits for an in-flight refresh) first.
+    api_key = await async_get_samsungtv_api_key(hass, entry)
     device_id = config.get(CONF_DEVICE_ID)
-    auth_method = config.get(CONF_AUTH_METHOD)
-
-    # For OAuth, get token from oauth_token if api_key is not available
-    if auth_method == AUTH_METHOD_OAUTH and not api_key:
-        oauth_token = config.get(CONF_OAUTH_TOKEN)
-        if oauth_token and isinstance(oauth_token, dict):
-            api_key = oauth_token.get("access_token")
-            _LOGGER.debug("SmartThings sensors using OAuth token")
 
     if api_key and device_id:
         try:
@@ -637,8 +633,11 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                     state = self._hass.states.get(entity.entity_id)
                     if state:
                         # "unknown" = WebSocket not yet connected (booting up).
-                        # Only treat "off" and "unavailable" as truly powered off.
-                        return state.state in ("off", "unavailable")
+                        # "unavailable" = the media_player update failed (e.g.
+                        # SmartThings cloud error) — not a power statement;
+                        # the direct art API fallback will determine the
+                        # actual state. Only a real "off" is powered off.
+                        return state.state == "off"
                     break
         except Exception as ex:
             _LOGGER.debug("Could not check media_player power state: %s", ex)
