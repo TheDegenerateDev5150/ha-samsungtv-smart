@@ -169,21 +169,21 @@ class SamsungTVArtNumberBase(RestoreNumber):
         if state is None:
             return False
 
-        # Art Mode brightness/color temp are only meaningful (and readable) when
-        # the TV is actually in Art Mode.  The media_player state is "on" both
-        # for normal TV use and Art Mode; we use the "art_mode" attribute that
-        # the sensor/media_player exposes to distinguish them.
-        # Fall back to just checking "on" so we still poll when art_mode attr
-        # is absent (e.g. older firmware or attribute not yet populated).
+        # Art Mode brightness/color temp are only meaningful (and readable)
+        # when the TV is actually in Art Mode. In this integration a Frame TV
+        # displaying art reports media_player state "off" with the
+        # "art_mode_status" attribute set to "on" (HA convention) — so the
+        # attribute is the authoritative signal, checked BEFORE the state.
+        if state.attributes.get("art_mode_status") == "on":
+            return True
+
         if state.state in ("off", "unavailable", "unknown"):
             return False
 
-        art_mode_attr = state.attributes.get("art_mode")
-        if art_mode_attr is not None:
-            return bool(art_mode_attr)
-
-        # art_mode attribute not present — TV is on, allow polling
-        return True
+        # TV is on (normal viewing) — art values are not readable, but allow
+        # polling when the attribute is absent entirely (e.g. older firmware
+        # or attribute not yet populated) so we don't go permanently blind.
+        return "art_mode_status" not in state.attributes
 
 
 # ══════════════════════════════════════════════════════════════════════════

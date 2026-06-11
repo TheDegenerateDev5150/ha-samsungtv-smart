@@ -1099,12 +1099,17 @@ class SamsungTVWS:
 
     def stop_poll(self):
         """Stop polling the TV for status."""
-        if self._ping_thread is not None and not self._ping_thread.is_alive():
+        # NOTE: the guard must check that the thread IS alive (a previous
+        # inverted check made this a no-op in the normal case, leaking the
+        # ping thread and its WebSocket client threads on every reload —
+        # which kept stale clients connected to the TV's art-app channel in
+        # parallel with the new entry instance).
+        if self._ping_thread is not None and self._ping_thread.is_alive():
             self._ping_thread_run = False
             self._ping_thread.join()
             if self._is_connected:
                 self.stop_client()
-            self._ping_thread = None
+        self._ping_thread = None
 
     def disable_art_thread(self):
         """Disable the SamsungArt WebSocket thread.

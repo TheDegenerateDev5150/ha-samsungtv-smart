@@ -67,7 +67,6 @@ from homeassistant.util.async_ import run_callback_threadsafe
 from . import (
     get_oauth_refresh_lock,
     get_smartthings_api_key,
-    is_oauth_refresh_in_progress,
     set_oauth_refresh_in_progress,
 )
 from .api.art import SamsungTVAsyncArt
@@ -595,6 +594,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         # port 1516 (deep standby) cannot pin a stale "art mode on" forever.
         self._ip_art_mode_failures = 0
         self._ip_art_mode_refresh_unsub: Callable[[], None] | None = None
+        self._ip_art_mode_initial_task: asyncio.Task | None = None
 
         # upnp initialization
         self._upnp = SamsungUPnP(host=self._host, session=session)
@@ -717,27 +717,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         if self._auth_method != AUTH_METHOD_OAUTH:
             return True
 
-        # Check if another refresh is already in progress (global check)
-        if is_oauth_refresh_in_progress(self._entry_id):
-            _LOGGER.debug(
-                "OAuth refresh already in progress (global), waiting for result"
-            )
-            # Wait a bit and then check if token was refreshed
-            await asyncio.sleep(0.5)
-            # Re-read token from entry
-            entry = self.hass.config_entries.async_get_entry(self._entry_id)
-            if entry:
-                oauth_token = entry.data.get(CONF_OAUTH_TOKEN, {})
-                new_token = oauth_token.get("access_token")
-                if new_token and new_token != self._st_api_key:
-                    self._st_api_key = new_token
-                    if self._st:
-                        self._st._api_key = new_token
-                        self._st._st.authenticate(new_token)
-                    return True
-            return False
-
-        # Acquire global lock
+        # Acquire the global per-entry lock. If another task is already
+        # refreshing, this WAITS for it to finish instead of sleeping an
+        # arbitrary 0.5s (a real SmartThings refresh round-trip routinely
+        # takes longer, which left this update cycle on the stale token);
+        # the double-check below then adopts the freshly stored token.
         lock = get_oauth_refresh_lock(self._entry_id)
         async with lock:
             # Double-check after acquiring lock - another entity might have refreshed
@@ -1134,11 +1118,19 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             self.hass, self._refresh_ip_art_mode, IP_ART_MODE_REFRESH_INTERVAL
         )
         # Kick off a non-blocking initial read so the value is available
-        # well before the first scheduled interval fires.
-        self.hass.async_create_task(self._refresh_ip_art_mode())
+        # well before the first scheduled interval fires. Track the task so
+        # it is cancelled if the entity is removed while the (executor-backed,
+        # up to ~10s) IP request is still in flight — otherwise it could call
+        # async_write_ha_state() on a removed entity.
+        self._ip_art_mode_initial_task = self.hass.async_create_task(
+            self._refresh_ip_art_mode()
+        )
 
     async def async_will_remove_from_hass(self):
         """Run when entity will be removed from hass."""
+        if self._ip_art_mode_initial_task is not None:
+            self._ip_art_mode_initial_task.cancel()
+            self._ip_art_mode_initial_task = None
         if self._ip_art_mode_refresh_unsub is not None:
             self._ip_art_mode_refresh_unsub()
             self._ip_art_mode_refresh_unsub = None
@@ -3560,9 +3552,13 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             return {"error": "Frame TV not supported"}
         try:
             result = await self._art_api.get_brightness()
+            # API may return a dict {"value": N} or a raw int depending on path
+            tv_value = result.get("value") if isinstance(result, dict) else result
+            if tv_value is not None:
+                tv_value = int(tv_value)
             # Convert TV's 1-10 scale to 0-100 for UI
-            ui_brightness = result * 10 if result else None
-            return {"brightness_tv": result, "brightness_ui": ui_brightness}
+            ui_brightness = tv_value * 10 if tv_value is not None else None
+            return {"brightness_tv": tv_value, "brightness_ui": ui_brightness}
         except Exception as ex:
             _LOGGER.error("Error getting brightness: %s", ex)
             return {"error": str(ex)}
@@ -3603,7 +3599,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             return {"error": "Frame TV not supported"}
         try:
             result = await self._art_api.get_color_temperature()
-            return {"color_temperature": result}
+            # API may return a dict {"value": N} or a raw int depending on path
+            value = result.get("value") if isinstance(result, dict) else result
+            if value is not None:
+                value = int(value)
+            return {"color_temperature": value}
         except Exception as ex:
             _LOGGER.error("Error getting color temperature: %s", ex)
             return {"error": str(ex)}

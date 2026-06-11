@@ -31,6 +31,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
+    UpdateFailed,
 )
 
 from . import async_get_samsungtv_api_key
@@ -346,21 +347,19 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         # Check if we're in backoff period (after multiple connection failures)
         if self._backoff_until is not None:
             if time.time() < self._backoff_until:
-                # Still in backoff period, skip update
+                # Still in backoff period, skip update. Raise UpdateFailed so
+                # last_update_success goes False and the sensor reports HA's
+                # real "unavailable" semantics (the entity keeps its previous
+                # data), instead of publishing the literal string
+                # "unavailable" as a state while claiming to be available.
+                remaining = self._backoff_until - time.time()
                 _LOGGER.debug(
                     "Frame Art: Skipping update due to connection backoff (%.0fs remaining)",
-                    self._backoff_until - time.time(),
+                    remaining,
                 )
-                # Return minimal data during backoff
-                return {
-                    "art_mode": "unavailable",
-                    "current_artwork": None,
-                    "artwork_count": None,
-                    "slideshow_status": None,
-                    "api_version": None,
-                    "current_thumbnail_url": None,
-                    "tv_powered_off": False,
-                }
+                raise UpdateFailed(
+                    f"Art channel in connection backoff ({remaining:.0f}s remaining)"
+                )
             else:
                 # Backoff period expired, reset and try again
                 _LOGGER.info("Frame Art: Backoff period expired, resuming updates")
@@ -454,9 +453,18 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 self._thumbnail_backoff_until = None
                 self._thumbnail_failures = 0
 
-            if (
-                not thumbnail_in_backoff
-                and content_id
+            if not self._thumbnail_fetch_enabled:
+                # Automatic fetching disabled via the enable_thumbnail_fetch
+                # service — honor the flag (it is also surfaced in the
+                # sensor's thumbnail_auto_fetch attribute).
+                if content_id:
+                    _LOGGER.debug(
+                        "Frame Art: Thumbnail auto-fetch disabled, skipping %s",
+                        content_id,
+                    )
+            elif (
+                content_id
+                and not thumbnail_in_backoff
                 and (
                     content_id != self._last_content_id
                     or not self._has_current_thumbnail()
