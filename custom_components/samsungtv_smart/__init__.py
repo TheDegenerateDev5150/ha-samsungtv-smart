@@ -443,6 +443,21 @@ def get_smartthings_api_key(hass: HomeAssistant, st_unique_id: str) -> str | Non
     return None
 
 
+@callback
+def has_refreshable_oauth_token(entry: ConfigEntry) -> bool:
+    """Return True if the entry stores an OAuth token that can be refreshed.
+
+    Some entries created through the OAuth flow end up labeled with a
+    different auth_method (e.g. "pat", because the access token doubles as
+    the API key) while still holding a refreshable oauth_token. Token
+    management must follow the token data, not the label: SmartThings
+    access tokens expire after 24 hours, and skipping refresh for these
+    entries kills every SmartThings-backed entity a day later.
+    """
+    oauth_token = entry.data.get(CONF_OAUTH_TOKEN)
+    return isinstance(oauth_token, dict) and bool(oauth_token.get("refresh_token"))
+
+
 async def async_get_samsungtv_api_key(  # noqa: C901
     hass: HomeAssistant, entry: ConfigEntry
 ) -> str | None:
@@ -458,8 +473,10 @@ async def async_get_samsungtv_api_key(  # noqa: C901
     """
     auth_method = entry.data.get(CONF_AUTH_METHOD)
 
-    # Method 1: OAuth2 - own token with refresh
-    if auth_method == AUTH_METHOD_OAUTH:
+    # Method 1: OAuth2 - own token with refresh. Entries holding a
+    # refreshable oauth_token take this path regardless of their label,
+    # so their 24h access token keeps being renewed.
+    if auth_method == AUTH_METHOD_OAUTH or has_refreshable_oauth_token(entry):
         oauth_token = entry.data.get(CONF_OAUTH_TOKEN)
         if oauth_token and isinstance(oauth_token, dict):
             access_token = oauth_token.get("access_token")
@@ -477,21 +494,12 @@ async def async_get_samsungtv_api_key(  # noqa: C901
                         )
                         return access_token  # Try with expired token anyway
 
-                    # Check if another refresh is already in progress
-                    if is_oauth_refresh_in_progress(entry.entry_id):
-                        _LOGGER.debug(
-                            "OAuth refresh already in progress, using current token"
-                        )
-                        # Re-read from entry in case it was just refreshed
-                        updated_entry = hass.config_entries.async_get_entry(
-                            entry.entry_id
-                        )
-                        if updated_entry:
-                            updated_token = updated_entry.data.get(CONF_OAUTH_TOKEN, {})
-                            return updated_token.get("access_token", access_token)
-                        return access_token
-
-                    # Acquire lock to prevent concurrent refresh
+                    # Acquire lock to prevent concurrent refresh. If another
+                    # task is already refreshing, WAIT for it instead of
+                    # returning the current (expired) token: platform setups
+                    # (ST sensors, power switch) race the media_player refresh
+                    # at startup, and a stale token here makes their setup
+                    # fail with an auth error until the next reload.
                     lock = get_oauth_refresh_lock(entry.entry_id)
                     async with lock:
                         # Double-check after acquiring lock - token might have been refreshed

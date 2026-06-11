@@ -287,24 +287,27 @@ class FrameArtModeSwitch(SwitchEntity):
         "unknown" means the WebSocket connection is not yet established —
         typically the TV is booting up. Treat it as on so that Art Mode
         activation is not blocked during the startup transient.
+
+        "unavailable" (or no media_player at all) says nothing about the TV
+        itself — e.g. a SmartThings cloud failure crashes the media_player
+        update while the TV keeps working locally. Ask the TV directly over
+        the local REST API instead of assuming it is off.
         """
         entity_id = self._get_media_player_entity_id()
-        if not entity_id:
-            return False
+        state = self._hass.states.get(entity_id) if entity_id else None
 
-        state = self._hass.states.get(entity_id)
-        if state is None:
-            return False
+        if state is None or state.state == "unavailable":
+            try:
+                return await self._art_api.on()
+            except Exception:  # pylint: disable=broad-except
+                return False
 
         # TV is clearly on (watching TV, idle, paused...) or still starting up
-        if state.state not in (STATE_OFF, "unavailable"):
+        if state.state != STATE_OFF:
             return True
 
         # media_player says "off" — but Art Mode may be active
-        if state.state == STATE_OFF:
-            return state.attributes.get("art_mode_status") == "on"
-
-        return False
+        return state.attributes.get("art_mode_status") == "on"
 
     async def _turn_on_tv(self) -> bool:
         """Turn on the TV using media_player service."""
@@ -612,12 +615,14 @@ class FrameArtModeSwitch(SwitchEntity):
         art_status = new_state.attributes.get("art_mode_status")
         if art_status == "on":
             self._attr_is_on = True
-        elif new_state.state in (STATE_OFF, "unavailable"):
+        elif new_state.state == STATE_OFF:
             self._attr_is_on = False
-        elif new_state.state == "unknown":
-            # TV is booting up — WebSocket not yet established.
+        elif new_state.state in ("unknown", "unavailable"):
+            # "unknown": TV is booting up — WebSocket not yet established.
+            # "unavailable": the media_player update failed (e.g. SmartThings
+            # cloud error) — that says nothing about the TV itself.
             # Schedule a deferred re-check so the switch reflects the actual
-            # Art Mode state once the TV is fully ready, without blocking here.
+            # Art Mode state (asking the TV directly), without guessing here.
             self._hass.async_create_background_task(
                 self._deferred_state_refresh(delay=8),
                 f"art_mode_switch_deferred_refresh_{self._entry.entry_id}",

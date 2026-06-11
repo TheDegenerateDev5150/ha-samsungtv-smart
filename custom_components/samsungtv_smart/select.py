@@ -459,17 +459,21 @@ class SamsungTVPictureModeSelect(SelectEntity):
         return len(self._attr_options) > 0
 
     def _get_api_key(self) -> str:
-        """Get current API key, refreshing from entry data for OAuth."""
+        """Get current API key, refreshing from entry data for OAuth.
+
+        The oauth_token is preferred whenever present, regardless of the
+        entry's auth_method label: OAuth-created entries can be labeled
+        "pat" (the access token doubles as the API key), and after a token
+        refresh the oauth_token always holds the current access token.
+        """
         entry = self.hass.config_entries.async_get_entry(self._entry.entry_id)
         if entry:
-            auth_method = entry.data.get(CONF_AUTH_METHOD)
-            if auth_method == AUTH_METHOD_OAUTH:
-                oauth_token = entry.data.get(CONF_OAUTH_TOKEN)
-                if oauth_token and isinstance(oauth_token, dict):
-                    new_key = oauth_token.get("access_token")
-                    if new_key:
-                        self._api_key = new_key
-                        return new_key
+            oauth_token = entry.data.get(CONF_OAUTH_TOKEN)
+            if isinstance(oauth_token, dict):
+                new_key = oauth_token.get("access_token")
+                if new_key:
+                    self._api_key = new_key
+                    return new_key
             api_key = entry.data.get(CONF_API_KEY)
             if api_key:
                 self._api_key = api_key
