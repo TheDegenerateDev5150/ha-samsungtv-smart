@@ -17,7 +17,12 @@ import argparse
 import json
 import sys
 
-from samsung_rpc_common import SamsungJsonRpc, load_token, print_json, default_token_path
+from samsung_rpc_common import (
+    SamsungJsonRpc,
+    default_token_path,
+    load_token,
+    print_json,
+)
 
 
 def main() -> int:
