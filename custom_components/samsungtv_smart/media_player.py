@@ -217,10 +217,10 @@ SUPPORT_SAMSUNGTV_SMART = (
     | MediaPlayerEntityFeature.STOP
 )
 
-MIN_TIME_BETWEEN_ST_UPDATE = timedelta(seconds=5)
+MIN_TIME_BETWEEN_ST_UPDATE = timedelta(seconds=10)
 ST_API_KEY_UPDATE_INTERVAL = timedelta(minutes=30)
 OAUTH_TOKEN_REFRESH_BUFFER = 300  # Refresh OAuth token 5 minutes before expiration
-SCAN_INTERVAL = timedelta(seconds=15)
+SCAN_INTERVAL = timedelta(seconds=5)
 # Phase 2: background poll period for the authoritative Art Mode state via
 # IP Control. Cheap LAN call (~50–100 ms over HTTPS:1516), low frequency.
 IP_ART_MODE_REFRESH_INTERVAL = timedelta(seconds=30)
