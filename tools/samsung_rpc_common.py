@@ -13,8 +13,8 @@ from __future__ import annotations
 import http.client
 import json
 import os
-import ssl
 from pathlib import Path
+import ssl
 from typing import Any, Dict, Optional
 
 
@@ -48,7 +48,9 @@ def find_token(obj: Any) -> Optional[str]:
     """
     if isinstance(obj, dict):
         for k, v in obj.items():
-            if k.lower() in ("accesstoken", "access_token", "token") and isinstance(v, str):
+            if k.lower() in ("accesstoken", "access_token", "token") and isinstance(
+                v, str
+            ):
                 return v.strip()
             found = find_token(v)
             if found:
@@ -85,7 +87,9 @@ def load_token_from_file(path: Path) -> Optional[str]:
     return None
 
 
-def load_token(host: str, port: int, token: Optional[str] = None, token_file: Optional[str] = None) -> Optional[str]:
+def load_token(
+    host: str, port: int, token: Optional[str] = None, token_file: Optional[str] = None
+) -> Optional[str]:
     if token:
         return token.strip()
 
@@ -108,7 +112,9 @@ def save_token(host: str, port: int, token: str) -> Path:
         "port": port,
         "token": token,
     }
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
     try:
         os.chmod(path, 0o600)
     except Exception:
@@ -154,6 +160,7 @@ class SamsungJsonRpc:
         self.port = port
         self.token = token
         self.timeout = timeout
+        self._seclevel1 = openssl_seclevel1
         self.ssl_context = make_ssl_context(openssl_seclevel1)
         self._id = 0
 
@@ -187,39 +194,55 @@ class SamsungJsonRpc:
 
         raw_body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
-        conn = http.client.HTTPSConnection(
-            self.host,
-            self.port,
-            timeout=self.timeout,
-            context=self.ssl_context,
-        )
-
-        try:
-            conn.request(
-                "POST",
-                "/",
-                body=raw_body,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "Content-Length": str(len(raw_body)),
-                },
+        # Older Samsung TVs (e.g. 2020 / Tizen 5.5) expose weak DH params that
+        # modern OpenSSL rejects with "dh key too small" unless the security
+        # level is lowered (the Python equivalent of curl's
+        # `--ciphers DEFAULT:@SECLEVEL=1`). Try normally first; on that specific
+        # error, rebuild the context with SECLEVEL=1 and retry once — so the
+        # tools work with OR without the --openssl-seclevel1 flag.
+        for attempt in (0, 1):
+            conn = http.client.HTTPSConnection(
+                self.host,
+                self.port,
+                timeout=self.timeout,
+                context=self.ssl_context,
             )
-            resp = conn.getresponse()
-            raw_response = resp.read().decode("utf-8", errors="replace")
             try:
-                parsed_response = json.loads(raw_response)
-            except Exception:
-                parsed_response = raw_response
+                conn.request(
+                    "POST",
+                    "/",
+                    body=raw_body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "Content-Length": str(len(raw_body)),
+                    },
+                )
+                resp = conn.getresponse()
+                raw_response = resp.read().decode("utf-8", errors="replace")
+                try:
+                    parsed_response = json.loads(raw_response)
+                except Exception:
+                    parsed_response = raw_response
 
-            return {
-                "http_status": resp.status,
-                "http_reason": resp.reason,
-                "request": payload,
-                "response": parsed_response,
-            }
-        finally:
-            conn.close()
+                return {
+                    "http_status": resp.status,
+                    "http_reason": resp.reason,
+                    "request": payload,
+                    "response": parsed_response,
+                }
+            except ssl.SSLError as ex:
+                if (
+                    attempt == 0
+                    and not self._seclevel1
+                    and "dh key too small" in str(ex).lower()
+                ):
+                    self._seclevel1 = True
+                    self.ssl_context = make_ssl_context(True)
+                    continue
+                raise
+            finally:
+                conn.close()
 
 
 def print_json(obj: Any) -> None:
