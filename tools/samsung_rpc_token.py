@@ -9,7 +9,14 @@
 #   python3 samsung_rpc_token.py --host 192.168.4.123 --port 1516 --openssl-seclevel1
 
 import argparse
-from samsung_rpc_common import SamsungJsonRpc, find_token, save_token, print_json, default_token_path
+
+from samsung_rpc_common import (
+    SamsungJsonRpc,
+    default_token_path,
+    find_token,
+    print_json,
+    save_token,
+)
 
 
 def main() -> int:
