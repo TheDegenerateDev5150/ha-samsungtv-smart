@@ -108,11 +108,14 @@ async def async_setup_entry(
         "yes" if (api_key and device_id) else "no — WebSocket fallback",
     )
 
-    # Check if art_api already exists (created by sensor platform)
+    # Reuse the shared Art API instance if present (created in __init__.py),
+    # otherwise create a fallback one. Either way, decide whether to create the
+    # Art Mode switch from the actual Frame-TV support check below — NOT from
+    # whether the shared instance happens to exist: it is now created for every
+    # TV (Frame or not) before platforms load, so its presence no longer implies
+    # Frame support.
     art_api = hass.data[DOMAIN][entry.entry_id].get(DATA_ART_API)
-
     if art_api is None:
-        # Create the Art API instance if not already created
         art_api = SamsungTVAsyncArt(
             host=host,
             port=port,
@@ -122,41 +125,31 @@ async def async_setup_entry(
             name=f"{WS_PREFIX} {ws_name} Art",
         )
 
-        # Use persisted flag if available, otherwise probe live
-        is_frame_tv_cached = entry.data.get(CONF_IS_FRAME_TV, False)
-        if is_frame_tv_cached:
-            _LOGGER.debug(
-                "Frame TV flag found for %s, skipping live check in switch", host
-            )
-            is_supported = True
-        else:
-            try:
-                async with asyncio.timeout(5):
-                    is_supported = await art_api.supported()
-            except asyncio.TimeoutError:
-                _LOGGER.debug("Timeout checking Frame TV support for %s", host)
-                is_supported = False
-            except Exception as ex:
-                _LOGGER.debug("Frame TV support check failed: %s", ex)
-                is_supported = False
-
-        if not is_supported:
-            _LOGGER.info(
-                "Frame TV art mode not supported on %s - art mode switch not created",
-                host,
-            )
-        else:
-            # Store for later use
-            hass.data[DOMAIN][entry.entry_id][DATA_ART_API] = art_api
-            # Add Art Mode switch
-            entities.append(
-                FrameArtModeSwitch(
-                    hass, entry, art_api, device_name, host, device_unique_id
-                )
-            )
-            _LOGGER.info("Frame Art Mode switch created for %s", device_name)
+    # Use persisted flag if available, otherwise probe live
+    is_frame_tv_cached = entry.data.get(CONF_IS_FRAME_TV, False)
+    if is_frame_tv_cached:
+        _LOGGER.debug("Frame TV flag found for %s, skipping live check in switch", host)
+        is_supported = True
     else:
-        # Art API exists, so Frame TV is supported
+        try:
+            async with asyncio.timeout(5):
+                is_supported = await art_api.supported()
+        except asyncio.TimeoutError:
+            _LOGGER.debug("Timeout checking Frame TV support for %s", host)
+            is_supported = False
+        except Exception as ex:
+            _LOGGER.debug("Frame TV support check failed: %s", ex)
+            is_supported = False
+
+    if not is_supported:
+        _LOGGER.info(
+            "Frame TV art mode not supported on %s - art mode switch not created",
+            host,
+        )
+    else:
+        # Store for later use (no-op when already the shared instance)
+        hass.data[DOMAIN][entry.entry_id][DATA_ART_API] = art_api
+        # Add Art Mode switch
         entities.append(
             FrameArtModeSwitch(
                 hass, entry, art_api, device_name, host, device_unique_id
