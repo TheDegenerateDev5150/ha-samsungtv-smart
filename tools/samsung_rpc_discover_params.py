@@ -26,7 +26,6 @@ from samsung_rpc_common import (
     load_token,
 )
 
-
 DEFAULT_METHODS = [
     "artModeControl",
     "getTVStates",
