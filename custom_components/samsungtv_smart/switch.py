@@ -426,9 +426,13 @@ class FrameArtModeSwitch(SwitchEntity):
                         self.async_write_ha_state()
                         _LOGGER.info("Art Mode turned ON for %s", self._device_name)
 
-                        # Wait for TV to confirm, then refresh state
+                        # Wait for TV to confirm, then refresh state.
+                        # async_update() only mutates attributes — publish
+                        # the refreshed state so the UI is corrected if the
+                        # TV ended up differing from the optimistic write.
                         await asyncio.sleep(2)
                         await self.async_update()
+                        self.async_write_ha_state()
                         return  # Success, exit
                     else:
                         # set_artmode returned None/False — this can happen when
@@ -515,9 +519,13 @@ class FrameArtModeSwitch(SwitchEntity):
                         self.async_write_ha_state()
                         _LOGGER.info("Art Mode turned OFF for %s", self._device_name)
 
-                        # Wait for TV to confirm, then refresh state
+                        # Wait for TV to confirm, then refresh state.
+                        # async_update() only mutates attributes — publish
+                        # the refreshed state so the UI is corrected if the
+                        # TV ended up differing from the optimistic write.
                         await asyncio.sleep(2)
                         await self.async_update()
+                        self.async_write_ha_state()
                         return  # Success, exit
                     else:
                         _LOGGER.debug(
@@ -731,15 +739,17 @@ class SamsungTVPowerSwitch(SwitchEntity):
         return None
 
     def _get_ip_control(self) -> SamsungIPControl | None:
-        """Return an IP Control client if this TV is paired, else None.
+        """Return an IP Control client if paired AND enabled, else None.
 
         The token is read live from entry.data so that pairing (done via the
-        options flow) takes effect immediately, with no reload required.
+        options flow) takes effect immediately, with no reload required. The
+        channel must also be enabled in the options, consistent with every
+        other IP Control consumer (media_player, art mode switch, button).
         """
         if not self._host:
             return None
         token = self._entry.data.get(CONF_IP_CONTROL_TOKEN)
-        if not token:
+        if not token or not self._entry.options.get(CONF_ENABLE_IP_CONTROL, True):
             return None
         if self._ip_control is None or self._ip_control_token != token:
             self._ip_control = SamsungIPControl(self.hass, self._host, token=token)
