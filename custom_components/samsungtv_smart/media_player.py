@@ -574,7 +574,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                     CONF_SUPPORTS_GET_COLOR_TEMPERATURE
                 ),
             )
-            self._art_api.register_capability_callback(self._persist_art_capability)
+        self._art_api.register_capability_callback(self._persist_art_capability)
         self._frame_tv_supported: bool | None = None
         self._frame_art_last_result: dict | None = None
 
