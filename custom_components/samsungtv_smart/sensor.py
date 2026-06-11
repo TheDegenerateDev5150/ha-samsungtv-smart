@@ -637,7 +637,13 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                         # SmartThings cloud error) — not a power statement;
                         # the direct art API fallback will determine the
                         # actual state. Only a real "off" is powered off.
-                        return state.state == "off"
+                        if state.state != "off":
+                            return False
+                        # A Frame TV displaying art ALSO reports state "off"
+                        # (HA convention: off + art_mode_status attribute).
+                        # Only treat it as powered off when art mode is not
+                        # active, mirroring FrameArtModeSwitch._is_tv_on.
+                        return state.attributes.get("art_mode_status") != "on"
                     break
         except Exception as ex:
             _LOGGER.debug("Could not check media_player power state: %s", ex)

@@ -967,13 +967,22 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         return self._ip_control_client
 
     async def _refresh_ip_art_mode(self, _now=None) -> None:
-        """Refresh the cached Art Mode value via IP Control (artModeControl).
+        """Refresh the cached Art Mode value via IP Control.
 
         Called periodically by ``async_track_time_interval`` and once eagerly
         from ``async_added_to_hass`` so the first value is available shortly
         after startup. The cached result is consumed by
         ``extra_state_attributes`` as the authoritative source for
         ``art_mode_status`` when this TV is paired.
+
+        The power state is read FIRST (powerControl): artModeControl alone
+        cannot tell a powered-off TV from one displaying art — it keeps
+        answering with the last mode even when the panel is off. powerControl,
+        by contrast, reports 'powerOn' while Art Mode is displayed and
+        'powerOff' when the TV is really off, so combining both yields a
+        cache that is safe to trust unconditionally. This also makes the
+        cache independent of the REST device-info ``PowerState``, which 2024+
+        Frame models report as 'standby' WHILE actively displaying art.
 
         Failure handling:
         - No paired client (no token) → cache cleared to ``None``; the
@@ -996,7 +1005,13 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 self.async_write_ha_state()
             return
         try:
-            value = await client.async_get_art_mode()
+            power = await client.async_get_power_state()
+            if power == "powerOff":
+                # TV is really off — art cannot be displayed. Don't query
+                # artModeControl: it would answer with the last mode.
+                value = False
+            else:
+                value = await client.async_get_art_mode()
         except SamsungIPControlAuthError as ex:
             _LOGGER.warning(
                 "IP Control art-mode read for %s: token rejected (%s) — "
@@ -1917,17 +1932,20 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         # Determine Art Mode status for state attributes.
         #
         # Priority order:
-        #  1. device_info PowerState='standby' (Phase 1) — definitive when the
-        #     device-info REST poll reports the TV as fully off. Wins over the
-        #     IP Control cache below because that cache could still be holding
-        #     a recent "Art Mode on" value during the brief window between a
-        #     power-off and the next IP Control refresh.
-        #  2. IP Control cache (Phase 2) — authoritative read from the TV via
-        #     artModeControl, refreshed every IP_ART_MODE_REFRESH_INTERVAL.
-        #     Used when the user has paired this TV via the options flow.
-        #     When the TV is on, this distinguishes Art Mode from normal
-        #     viewing locally — without depending on the art_api WebSocket
-        #     events that go silent on power-off.
+        #  1. IP Control cache (Phase 2) — authoritative combined read
+        #     (powerControl + artModeControl) refreshed every
+        #     IP_ART_MODE_REFRESH_INTERVAL when the user has paired this TV
+        #     via the options flow. It MUST win over the device-info
+        #     PowerState check below: 2024+ Frame models (e.g. QE55LS03DA)
+        #     report PowerState='standby' over REST WHILE actively displaying
+        #     art, so trusting 'standby' first forces art_mode_status to
+        #     'off' whenever Art Mode is on. The cache is safe against the
+        #     opposite mistake because _refresh_ip_art_mode reads the IP
+        #     Control power state first and stores False when the TV reports
+        #     'powerOff'.
+        #  2. device_info PowerState='standby' (Phase 1) — for unpaired TVs,
+        #     definitive when the device-info REST poll reports the TV as
+        #     fully off.
         #  3. async Art API (art.py) — preferred when active. Once
         #     disable_art_thread() is called, _ws.artmode_status is frozen at
         #     its last value and is no longer updated when Art Mode changes.
@@ -1946,13 +1964,13 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             self.hass.data.get(DOMAIN, {}).get(self._entry_id, {}).get(DATA_ART_API)
         )
         device_power_state = self._get_device_spec("PowerState")
-        if device_power_state == "standby":
-            # TV is powered off — art mode cannot be active regardless of
-            # what art_api or the IP cache may report.
-            data[ATTR_ART_MODE_STATUS] = STATE_OFF
-        elif self._ip_art_mode is not None:
-            # IP Control authoritative read for a TV that is on.
+        if self._ip_art_mode is not None:
+            # IP Control authoritative read (power-state aware, see above).
             data[ATTR_ART_MODE_STATUS] = STATE_ON if self._ip_art_mode else STATE_OFF
+        elif device_power_state == "standby":
+            # TV is powered off — art mode cannot be active regardless of
+            # what art_api may report.
+            data[ATTR_ART_MODE_STATUS] = STATE_OFF
         elif art_api is not None and art_api.art_mode is not None:
             data.update(
                 {ATTR_ART_MODE_STATUS: STATE_ON if art_api.art_mode else STATE_OFF}
