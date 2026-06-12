@@ -579,7 +579,30 @@ class FrameArtModeSwitch(SwitchEntity):
             async with asyncio.timeout(8):
                 art_mode = await self._art_api.get_artmode()
                 if art_mode is not None:
-                    self._attr_is_on = art_mode == "on"
+                    is_on = art_mode == "on"
+                    # get_artmode() reports whether Art Mode is the TV's
+                    # engaged idle mode and stays "on" even while a real
+                    # external input is displayed (e.g. an automation selected
+                    # HDMI for the radio). The media_player's art_mode_status
+                    # attribute is the integration's canonical value and
+                    # already cross-checks the live SmartThings input source,
+                    # so let it veto a stale "on" here.
+                    if is_on:
+                        entity_id = self._get_media_player_entity_id()
+                        if entity_id:
+                            mp_state = self._hass.states.get(entity_id)
+                            if (
+                                mp_state
+                                and mp_state.attributes.get("art_mode_status") == "off"
+                            ):
+                                _LOGGER.debug(
+                                    "get_artmode reported on for %s but "
+                                    "media_player art_mode_status is off "
+                                    "(real input active) — overriding to off",
+                                    self._device_name,
+                                )
+                                is_on = False
+                    self._attr_is_on = is_on
                     self._available = True
                     _LOGGER.debug("Art Mode state updated: %s", self._attr_is_on)
                 else:
