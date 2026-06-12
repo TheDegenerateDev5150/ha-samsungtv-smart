@@ -127,6 +127,11 @@ class SamsungTVAsyncArt:
         # genuine signal, so the caller can persist it. Never fired on a
         # transport/connection failure (the result stays unknown then).
         self._capability_callback = None
+        # Fired (no args) when the async art channel reports a panel transition
+        # (art_mode_changed / go_to_standby), so the caller can refresh its
+        # authoritative state (e.g. the IP Control pictureMode read) at once
+        # instead of waiting for the next poll.
+        self._art_event_callback = None
         # Capability flag: True = TV supports get_thumbnail_list (pre-2024 TVs,
         # streams all thumbnails over a single socket connection — fast).
         # False = TV returns error -1 (2024-2025 Tizen), must use get_thumbnail
@@ -152,6 +157,23 @@ class SamsungTVAsyncArt:
         """Notify the caller that a capability has been determined."""
         if self._capability_callback is not None:
             self._capability_callback(flag_name, value)
+
+    def register_art_event_callback(self, func) -> None:
+        """Register a callback fired on a panel-transition broadcast.
+
+        Signature: func() with no arguments. Fired when the async art channel
+        reports art_mode_changed or go_to_standby, so the caller can confirm
+        the panel state (e.g. via IP Control) without waiting for its own poll.
+        """
+        self._art_event_callback = func
+
+    def _fire_art_event(self) -> None:
+        """Notify the caller of a panel transition; never break the art loop."""
+        if self._art_event_callback is not None:
+            try:
+                self._art_event_callback()
+            except Exception:  # noqa: BLE001 - callback must not break the loop
+                _LOGGER.debug("Art API: art-event callback raised", exc_info=True)
 
     @property
     def _ws_url(self) -> str:
@@ -468,8 +490,10 @@ class SamsungTVAsyncArt:
             self.art_mode = data.get("value") == "on"
         elif sub_event == "art_mode_changed":
             self.art_mode = data.get("status") == "on"
+            self._fire_art_event()
         elif sub_event == "go_to_standby":
             self.art_mode = False
+            self._fire_art_event()
 
         # Check for error
         if sub_event == "error":
