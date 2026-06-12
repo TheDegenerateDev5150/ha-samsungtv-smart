@@ -191,55 +191,17 @@ class FrameArtModeSwitch(SwitchEntity):
         self._available = True
         self._updating = False
         self._media_player_entity_id: str | None = None
-        self._ip_control: SamsungIPControl | None = None
-        self._ip_control_token: str | None = None
-
-    def _get_ip_control(self) -> SamsungIPControl | None:
-        """Return an IP Control client if paired AND enabled, else None.
-
-        Token is read live from entry.data (pairing takes effect with no
-        reload), and the channel must be enabled in the options.
-        """
-        if not self._host:
-            return None
-        token = self._entry.data.get(CONF_IP_CONTROL_TOKEN)
-        if not token or not self._entry.options.get(CONF_ENABLE_IP_CONTROL, True):
-            return None
-        if self._ip_control is None or self._ip_control_token != token:
-            self._ip_control = SamsungIPControl(self._hass, self._host, token=token)
-            self._ip_control_token = token
-        return self._ip_control
 
     async def _set_artmode(self, turn_on: bool):
-        """Set Art Mode via IP Control (primary), WebSocket as fallback.
+        """Set Art Mode via the WebSocket art channel.
 
-        IP Control (JSON-RPC, port 1516) is preferred because it is independent
-        of the Art WebSocket — the channel whose ``set_artmode`` returns
-        None/False when it goes unresponsive ("zombie"). On any IP Control
-        failure we fall back to the WebSocket so behaviour is never worse than
-        before. Returns a truthy value on a successful set; the caller's
-        existing verification step confirms the actual state afterwards.
+        The IP Control ``artModeControl`` setter is a no-op on 2024+ Frames: it
+        returns success without ever flipping the panel (confirmed on
+        QE55LS03D), and ``powerControl powerOff`` turns the TV fully off rather
+        than into Art Mode. The WebSocket art channel is the only path that
+        actually changes the display, so Art Mode is set there. The caller's
+        verification step confirms the resulting state afterwards.
         """
-        client = self._get_ip_control()
-        if client is not None:
-            try:
-                if turn_on:
-                    await client.async_set_art_mode_on()
-                else:
-                    await client.async_set_art_mode_off()
-                _LOGGER.debug(
-                    "Art Mode set to %s via IP Control for %s",
-                    turn_on,
-                    self._device_name,
-                )
-                return True
-            except SamsungIPControlError as ex:
-                _LOGGER.debug(
-                    "IP Control art-mode set failed (%s); falling back to "
-                    "WebSocket for %s",
-                    ex,
-                    self._device_name,
-                )
         return await self._art_api.set_artmode(turn_on)
 
     @property
@@ -575,38 +537,32 @@ class FrameArtModeSwitch(SwitchEntity):
                 self._available = True
                 return
 
-            # TV is on, get actual Art Mode status
-            async with asyncio.timeout(8):
-                art_mode = await self._art_api.get_artmode()
-                if art_mode is not None:
-                    is_on = art_mode == "on"
-                    # get_artmode() reports whether Art Mode is the TV's
-                    # engaged idle mode and stays "on" even while a real
-                    # external input is displayed (e.g. an automation selected
-                    # HDMI for the radio). The media_player's art_mode_status
-                    # attribute is the integration's canonical value and
-                    # already cross-checks the live SmartThings input source,
-                    # so let it veto a stale "on" here.
-                    if is_on:
-                        entity_id = self._get_media_player_entity_id()
-                        if entity_id:
-                            mp_state = self._hass.states.get(entity_id)
-                            if (
-                                mp_state
-                                and mp_state.attributes.get("art_mode_status") == "off"
-                            ):
-                                _LOGGER.debug(
-                                    "get_artmode reported on for %s but "
-                                    "media_player art_mode_status is off "
-                                    "(real input active) — overriding to off",
-                                    self._device_name,
-                                )
-                                is_on = False
-                    self._attr_is_on = is_on
-                    self._available = True
-                    _LOGGER.debug("Art Mode state updated: %s", self._attr_is_on)
-                else:
-                    _LOGGER.debug("Could not get Art Mode state")
+            # TV is on — mirror the canonical Art Mode status from the
+            # media_player. Its art_mode_status attribute is the integration's
+            # authoritative value (IP Control getTVStates.pictureMode, power-
+            # gated). The WebSocket get_artmode() poll cannot be trusted on
+            # 2024+ Frames: it returns "on" even while a real HDMI input is
+            # displayed (the TV's internal art flag is stuck), which is what
+            # pinned this switch on. Only fall back to the WS read if the
+            # media_player attribute is not yet available (e.g. at startup).
+            entity_id = self._get_media_player_entity_id()
+            mp_state = self.hass.states.get(entity_id) if entity_id else None
+            if mp_state is not None and "art_mode_status" in mp_state.attributes:
+                self._attr_is_on = mp_state.attributes.get("art_mode_status") == "on"
+                self._available = True
+                _LOGGER.debug("Art Mode state updated: %s", self._attr_is_on)
+            else:
+                async with asyncio.timeout(8):
+                    art_mode = await self._art_api.get_artmode()
+                    if art_mode is not None:
+                        self._attr_is_on = art_mode == "on"
+                        self._available = True
+                        _LOGGER.debug(
+                            "Art Mode state updated (WS fallback): %s",
+                            self._attr_is_on,
+                        )
+                    else:
+                        _LOGGER.debug("Could not get Art Mode state")
         except asyncio.TimeoutError:
             _LOGGER.debug("Timeout updating Art Mode state")
             # Don't mark as unavailable on timeout - TV might be off
