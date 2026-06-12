@@ -136,35 +136,36 @@ class SamsungIPControl:
         return result.get("power", "unknown")
 
     async def async_get_art_mode(self) -> bool | None:
-        """Return whether the TV is currently in Art Mode.
+        """Return whether the TV is currently displaying Art Mode.
 
-        Returns ``True`` if in Art Mode, ``False`` if in normal viewing, and
-        ``None`` if the TV returned an unexpected value (e.g. firmware update
-        changed the protocol). Raises on transport/auth errors.
+        Returns ``True`` if art is on the panel, ``False`` for normal viewing
+        or a powered-off TV, and ``None`` if the state can't be determined.
+        Raises on transport/auth errors.
 
-        Calls ``artModeControl`` with no ``artMode`` parameter — the same
-        method then behaves as a getter, returning ``{"artMode": "artModeOn"}``
-        or ``{"artMode": "artModeOff"}``. This is the authoritative local read
-        for the Frame's Art Mode state, independent of the WebSocket art
-        channel (which goes silent when the TV powers off) and of any cached
-        ``art_api.art_mode`` value the integration may be holding.
+        Reads ``getTVStates.pictureMode`` rather than ``artModeControl``. On
+        2024+ Frames ``artModeControl`` is desynced: its getter returns
+        ``artModeOn`` permanently — even while an external HDMI input is
+        actively displayed — so it cannot distinguish Art Mode from normal
+        viewing. ``getTVStates.pictureMode`` reflects the live panel instead:
+        ``"Ambient"`` while art is shown, and a real picture mode (``Dynamic``,
+        ``Standard``, ...) on an input. (Confirmed empirically on QE55LS03D:
+        HDMI3 -> Dynamic, art on panel -> Ambient, with artModeControl stuck
+        on artModeOn throughout.)
 
-        PowerState is checked first and wins: in true standby the artModeControl
-        getter still returns the LAST value (typically ``artModeOn``), which
-        would wrongly report Art Mode as active after a restart. A powered-off
-        TV is never in Art Mode, so ``powerOff`` short-circuits to ``False``
-        without consulting artModeControl. (Art Mode itself reports
-        ``powerOn``, so it is unaffected.)
+        PowerState is checked first and wins: in true standby ``getTVStates``
+        still returns the LAST ``pictureMode`` (a stale ``"Ambient"``), which
+        would wrongly read as art after the TV is switched off. A powered-off
+        TV is never displaying art, so ``powerOff`` short-circuits to
+        ``False``. Art Mode itself reports ``powerOn`` (the panel is lit), so
+        it is unaffected.
         """
         if await self.async_get_power_state() == "powerOff":
             return False
-        result = await self._async_request("artModeControl")
-        art_mode = result.get("artMode")
-        if art_mode == "artModeOn":
-            return True
-        if art_mode == "artModeOff":
-            return False
-        return None
+        result = await self._async_request("getTVStates")
+        picture_mode = result.get("pictureMode")
+        if picture_mode is None:
+            return None
+        return picture_mode == "Ambient"
 
     async def async_set_art_mode_on(self) -> None:
         """Switch the TV to Art Mode."""
