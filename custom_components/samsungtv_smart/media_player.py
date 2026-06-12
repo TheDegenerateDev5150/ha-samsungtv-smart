@@ -578,6 +578,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 ),
             )
         self._art_api.register_capability_callback(self._persist_art_capability)
+        self._art_api.register_art_event_callback(self._on_art_transition)
         self._frame_tv_supported: bool | None = None
         self._frame_art_last_result: dict | None = None
 
@@ -957,6 +958,22 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             )
             self._ip_control_token_cached = token
         return self._ip_control_client
+
+    def _on_art_transition(self) -> None:
+        """Confirm Art Mode via IP immediately on an art-channel transition.
+
+        The IP Control ``getTVStates.pictureMode`` read is the authoritative
+        panel state, but it is otherwise only polled every
+        ``IP_ART_MODE_REFRESH_INTERVAL`` (30 s). When the async art channel
+        broadcasts a transition (art_mode_changed / go_to_standby), refresh the
+        IP cache straight away so ``art_mode_status`` — and the switch that
+        mirrors it — reflects reality within ~1 s rather than up to 30 s. This
+        is what keeps the switch from flapping back after a state change. The
+        callback fires from the art receive loop (the event loop), so
+        scheduling a task is safe; ``_refresh_ip_art_mode`` no-ops for TVs that
+        are not IP-paired.
+        """
+        self.hass.async_create_task(self._refresh_ip_art_mode())
 
     async def _refresh_ip_art_mode(self, _now=None) -> None:
         """Refresh the cached Art Mode value via IP Control.
