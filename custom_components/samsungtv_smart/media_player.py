@@ -1988,20 +1988,51 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             self.hass.data.get(DOMAIN, {}).get(self._entry_id, {}).get(DATA_ART_API)
         )
         device_power_state = self._get_device_spec("PowerState")
+        art_on: bool | None = None
         if self._ip_art_mode is not None:
             # IP Control authoritative read (power-state aware, see above).
-            data[ATTR_ART_MODE_STATUS] = STATE_ON if self._ip_art_mode else STATE_OFF
+            art_on = self._ip_art_mode
         elif device_power_state == "standby":
             # TV is powered off — art mode cannot be active regardless of
             # what art_api may report.
-            data[ATTR_ART_MODE_STATUS] = STATE_OFF
+            art_on = False
         elif art_api is not None and art_api.art_mode is not None:
-            data.update(
-                {ATTR_ART_MODE_STATUS: STATE_ON if art_api.art_mode else STATE_OFF}
-            )
+            art_on = art_api.art_mode
         elif self._ws.artmode_status != ArtModeStatus.Unsupported:
-            status_on = self._ws.artmode_status == ArtModeStatus.On
-            data.update({ATTR_ART_MODE_STATUS: STATE_ON if status_on else STATE_OFF})
+            art_on = self._ws.artmode_status == ArtModeStatus.On
+
+        # Active-input veto.
+        #
+        # The art-mode getters above (IP Control artModeControl and the WS
+        # get_artmode_status poll) report whether Art Mode is the TV's
+        # *engaged idle mode*, not whether art is on the panel right now. On
+        # 2024+ Frames they keep answering "on" even after the user (or an
+        # automation) selects a real external input: switching to HDMI for a
+        # radio/soundbar leaves art_mode_status pinned "on" because Art Mode
+        # is still the configured idle behaviour. The TV does broadcast
+        # art_mode_changed='off' on the async art channel at that moment, but
+        # the periodic getters re-assert "on" on the next poll and (for paired
+        # TVs) the IP cache outranks the live event.
+        #
+        # SmartThings exposes the live truth: mediaInputSource.inputSource is
+        # "art" only while art is actually displayed, and a concrete input id
+        # ("HDMI3", "dtv", ...) once a real source is selected. So when ST
+        # reports the TV powered on with a concrete, non-art input, art is not
+        # on the panel — override a stale "on".
+        if art_on and self._st is not None and self._st.state == STStatus.STATE_ON:
+            st_source = (self._st.source or "").lower()
+            if st_source and st_source != "art":
+                _LOGGER.debug(
+                    "Art Mode reported on for %s but SmartThings active input "
+                    "is '%s' (real input, not art) — overriding art_mode_status "
+                    "to off",
+                    self._host,
+                    self._st.source,
+                )
+                art_on = False
+
+        if art_on is not None:
+            data[ATTR_ART_MODE_STATUS] = STATE_ON if art_on else STATE_OFF
         if self._st:
             picture_mode = self._st.picture_mode
             picture_mode_list = self._st.picture_mode_list
