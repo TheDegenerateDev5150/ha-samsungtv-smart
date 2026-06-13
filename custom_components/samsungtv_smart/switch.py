@@ -191,17 +191,57 @@ class FrameArtModeSwitch(SwitchEntity):
         self._available = True
         self._updating = False
         self._media_player_entity_id: str | None = None
+        self._ip_control: SamsungIPControl | None = None
+        self._ip_control_token: str | None = None
+
+    def _get_ip_control(self) -> SamsungIPControl | None:
+        """Return an IP Control client if paired AND enabled, else None.
+
+        Token is read live from entry.data (pairing takes effect with no
+        reload), and the channel must be enabled in the options.
+        """
+        if not self._host:
+            return None
+        token = self._entry.data.get(CONF_IP_CONTROL_TOKEN)
+        if not token or not self._entry.options.get(CONF_ENABLE_IP_CONTROL, True):
+            return None
+        if self._ip_control is None or self._ip_control_token != token:
+            self._ip_control = SamsungIPControl(self._hass, self._host, token=token)
+            self._ip_control_token = token
+        return self._ip_control
 
     async def _set_artmode(self, turn_on: bool):
-        """Set Art Mode via the WebSocket art channel.
+        """Set Art Mode via IP Control (primary), WebSocket as fallback.
 
-        The IP Control ``artModeControl`` setter is a no-op on 2024+ Frames: it
-        returns success without ever flipping the panel (confirmed on
-        QE55LS03D), and ``powerControl powerOff`` turns the TV fully off rather
-        than into Art Mode. The WebSocket art channel is the only path that
-        actually changes the display, so Art Mode is set there. The caller's
-        verification step confirms the resulting state afterwards.
+        On a healthy Frame, IP Control ``artModeControl`` reliably flips the
+        panel in both directions (confirmed on QE55LS03D: artModeOn -> Ambient,
+        artModeOff -> a real picture mode). It is preferred over the WebSocket
+        art channel, whose ``set_artmode`` returns None/False or "times out but
+        a broadcast confirms" — a false success that doesn't move the panel. On
+        any IP Control failure (not paired, transport, auth) we fall back to the
+        WebSocket so behaviour is never worse than before. The caller verifies
+        the resulting state afterwards.
         """
+        client = self._get_ip_control()
+        if client is not None:
+            try:
+                if turn_on:
+                    await client.async_set_art_mode_on()
+                else:
+                    await client.async_set_art_mode_off()
+                _LOGGER.debug(
+                    "Art Mode set to %s via IP Control for %s",
+                    turn_on,
+                    self._device_name,
+                )
+                return True
+            except SamsungIPControlError as ex:
+                _LOGGER.debug(
+                    "IP Control art-mode set failed (%s); falling back to "
+                    "WebSocket for %s",
+                    ex,
+                    self._device_name,
+                )
         return await self._art_api.set_artmode(turn_on)
 
     @property
@@ -546,7 +586,7 @@ class FrameArtModeSwitch(SwitchEntity):
             # pinned this switch on. Only fall back to the WS read if the
             # media_player attribute is not yet available (e.g. at startup).
             entity_id = self._get_media_player_entity_id()
-            mp_state = self.hass.states.get(entity_id) if entity_id else None
+            mp_state = self._hass.states.get(entity_id) if entity_id else None
             if mp_state is not None and "art_mode_status" in mp_state.attributes:
                 self._attr_is_on = mp_state.attributes.get("art_mode_status") == "on"
                 self._available = True
