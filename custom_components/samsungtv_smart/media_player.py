@@ -172,6 +172,11 @@ from .token_notify import (
 )
 
 ATTR_ART_MODE_STATUS = "art_mode_status"
+
+# Media title shown when the Frame is displaying Art Mode. SmartThings reports
+# the "running app" as "art" in that case; we surface a friendly title and use
+# the currently displayed artwork (current.jpg) as the media image.
+ART_MODE_MEDIA_TITLE = "Art Mode"
 ATTR_IP_ADDRESS = "ip_address"
 ATTR_PICTURE_MODE = "picture_mode"
 ATTR_PICTURE_MODE_LIST = "picture_mode_list"
@@ -1899,13 +1904,32 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         )
 
         remote_access = False
-        if (media_image_url := await self._local_media_image(new_media_title)) is None:
+        if new_media_title == ART_MODE_MEDIA_TITLE:
+            # Use the currently displayed artwork as the media image, maintained
+            # by the Frame Art coordinator at www/frame_art/<entry>/current.jpg.
+            media_image_url = self._art_mode_media_image()
+        elif (
+            media_image_url := await self._local_media_image(new_media_title)
+        ) is None:
             media_image_url = await self._logo.async_find_match(new_media_title)
             remote_access = media_image_url is not None
 
         self._attr_media_title = new_media_title
         self._attr_media_image_url = media_image_url
         self._attr_media_image_remotely_accessible = remote_access
+
+    def _art_mode_media_image(self) -> str | None:
+        """Return the local URL of the current artwork, if available.
+
+        The Frame Art coordinator downloads the currently displayed artwork to
+        ``www/frame_art/<entry_id>/current.jpg`` and exposes it at the matching
+        ``/local/...`` URL. We reuse it as the media image while in Art Mode so
+        the media_player card shows the artwork instead of a generic logo.
+        """
+        rel_path = os.path.join("frame_art", self._entry_id, "current.jpg")
+        if os.path.isfile(self.hass.config.path("www", rel_path)):
+            return f"/local/{rel_path.replace(os.sep, '/')}"
+        return None
 
     def _get_new_media_title(self):
         """Get the current media title."""
@@ -1928,6 +1952,12 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                     return None
 
                 if (run_app := self._st.channel_name) and run_app != "":
+                    # On a Frame TV, SmartThings reports the "running app" as
+                    # "art" while Art Mode is displayed. That is not a real app
+                    # — surface it as Art Mode (the artwork image is set as the
+                    # media image in _update_media).
+                    if run_app.lower() == "art":
+                        return ART_MODE_MEDIA_TITLE
                     # the channel name holds the running app ID
                     # regardless of the self._cloud_source value
                     # if the app ID is in the configured apps but is not running_app,
@@ -2879,6 +2909,39 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         Returns:
             bool: True if TV is ready in Art Mode, False if failed
         """
+        # Fast path: if the TV is already in Art Mode, there is nothing to do.
+        # A Frame in Art Mode reports media_player state OFF, so we must NOT
+        # treat state==OFF as "powered off" without checking art mode first —
+        # otherwise async_turn_on() would send KEY_POWER and toggle the panel
+        # OUT of Art Mode. The art_mode_status attribute (IP Control cache or
+        # WebSocket art channel) is the authoritative signal here.
+        if self.extra_state_attributes.get(ATTR_ART_MODE_STATUS) == STATE_ON:
+            _LOGGER.debug("Frame Art: already in Art Mode, ready")
+            return True
+
+        # Prefer the reliable IP Control path to enter Art Mode when paired:
+        # the explicit artModeOn command moves the panel even on TVs whose
+        # WebSocket art channel is unresponsive ("zombie") or whose
+        # set_artmode times out. Power on first (returns into the last state)
+        # then force Art Mode on.
+        ip_client = self._get_ip_control_client()
+        if ip_client is not None:
+            try:
+                if self.state == MediaPlayerState.OFF:
+                    if await ip_client.async_get_power_state() == "powerOff":
+                        await ip_client.async_power_on()
+                        await asyncio.sleep(3)
+                await ip_client.async_set_art_mode_on()
+                await asyncio.sleep(2)
+                _LOGGER.debug("Frame Art: Art Mode activated via IP Control")
+                return True
+            except SamsungIPControlError as ex:
+                _LOGGER.debug(
+                    "Frame Art: IP Control art-mode activation failed (%s); "
+                    "falling back to WebSocket",
+                    ex,
+                )
+
         # Check if TV is off, turn it on if needed
         if self.state == MediaPlayerState.OFF:
             _LOGGER.info("Frame Art: TV is off, turning it on first...")

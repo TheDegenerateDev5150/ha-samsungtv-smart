@@ -36,7 +36,6 @@ from .const import (
     AUTH_METHOD_OAUTH,
     CONF_AUTH_METHOD,
     CONF_ENABLE_IP_CONTROL,
-    CONF_IP_CONTROL_ART_MODE,
     CONF_IP_CONTROL_TOKEN,
     CONF_IS_FRAME_TV,
     CONF_WS_NAME,
@@ -222,11 +221,16 @@ class FrameArtModeSwitch(SwitchEntity):
         any IP Control failure (not paired, transport, auth) we fall back to the
         WebSocket so behaviour is never worse than before. The caller verifies
         the resulting state afterwards.
+
+        Note: this writing path is gated only by ``CONF_ENABLE_IP_CONTROL``
+        (inside ``_get_ip_control``), NOT by ``CONF_IP_CONTROL_ART_MODE``. The
+        latter only disables the *read* path (the ``artModeControl`` getter,
+        which can wedge "on" on some firmwares). Issuing the explicit
+        ``artModeOn``/``artModeOff`` command is reliable even on those TVs, so
+        we keep using it for switching.
         """
         client = self._get_ip_control()
-        if client is not None and self._entry.options.get(
-            CONF_IP_CONTROL_ART_MODE, False
-        ):
+        if client is not None:
             try:
                 if turn_on:
                     await client.async_set_art_mode_on()
