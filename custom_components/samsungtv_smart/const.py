@@ -233,4 +233,9 @@ STD_APP_LIST = {
         "logo": "",
         "name": "Plex",
     },
+    "com.samsung.tv.csfs": {
+    "st_app_id": "",
+    "logo": "",
+    "name": "Smart Hub",
+    },
 }
