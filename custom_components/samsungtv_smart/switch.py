@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 import logging
 from typing import Any
 
@@ -47,6 +48,15 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Poll the switch entities every 5s so the Art Mode / power switches track the
+# TV as responsively as the SmartThings cloud poll. async_update only reads the
+# media_player's already-published art_mode_status attribute (no extra TV
+# network call in the normal case), so the short interval is cheap. Without
+# this override Home Assistant falls back to its 30s default scan interval,
+# which is what made the Art Mode switch feel sluggish on TVs where IP Control
+# is disabled (no faster push path).
+SCAN_INTERVAL = timedelta(seconds=5)
 
 COMPONENT_MAIN = "main"  # SmartThings component
 
