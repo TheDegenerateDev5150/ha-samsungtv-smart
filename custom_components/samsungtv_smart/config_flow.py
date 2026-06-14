@@ -66,6 +66,7 @@ from .const import (
     CONF_DUMP_APPS,
     CONF_ENABLE_IP_CONTROL,
     CONF_EXT_POWER_ENTITY,
+    CONF_IP_CONTROL_ART_MODE,
     CONF_IP_CONTROL_TOKEN,
     CONF_LOGO_OPTION,
     CONF_OAUTH_TOKEN,
@@ -1036,6 +1037,12 @@ class OptionsFlowHandler(OptionsFlow):
                 vol.Required(
                     CONF_ENABLE_IP_CONTROL,
                     default=options.get(CONF_ENABLE_IP_CONTROL, True),
+                )
+            ] = bool
+            opt_schema[
+                vol.Required(
+                    CONF_IP_CONTROL_ART_MODE,
+                    default=options.get(CONF_IP_CONTROL_ART_MODE, False),
                 )
             ] = bool
 

@@ -36,6 +36,7 @@ from .const import (
     AUTH_METHOD_OAUTH,
     CONF_AUTH_METHOD,
     CONF_ENABLE_IP_CONTROL,
+    CONF_IP_CONTROL_ART_MODE,
     CONF_IP_CONTROL_TOKEN,
     CONF_IS_FRAME_TV,
     CONF_WS_NAME,
@@ -223,7 +224,9 @@ class FrameArtModeSwitch(SwitchEntity):
         the resulting state afterwards.
         """
         client = self._get_ip_control()
-        if client is not None:
+        if client is not None and self._entry.options.get(
+            CONF_IP_CONTROL_ART_MODE, False
+        ):
             try:
                 if turn_on:
                     await client.async_set_art_mode_on()

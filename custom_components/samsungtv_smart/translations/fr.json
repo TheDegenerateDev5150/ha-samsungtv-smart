@@ -111,7 +111,8 @@
           "show_channel_number": "Afficher le numéro de chaîne",
           "power_on_method": "Méthode d'allumage",
           "show_adv_opt": "Afficher les options avancées",
-          "enable_ip_control": "Activer IP Control"
+          "enable_ip_control": "Activer IP Control",
+          "ip_control_art_mode": "Activer le Mode Art par IP Control"
         }
       },
       "menu": {

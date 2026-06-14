@@ -103,6 +103,7 @@ from .const import (
     CONF_DUMP_APPS,
     CONF_ENABLE_IP_CONTROL,
     CONF_EXT_POWER_ENTITY,
+    CONF_IP_CONTROL_ART_MODE,
     CONF_IP_CONTROL_TOKEN,
     CONF_LOGO_OPTION,
     CONF_OAUTH_TOKEN,
@@ -1005,12 +1006,13 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
           so a TV that stays unreachable cannot pin a stale value forever.
         """
         client = self._get_ip_control_client()
-        if client is None:
-            _LOGGER.debug(
-                "IP Control art-mode refresh for %s: not paired "
-                "(no CONF_IP_CONTROL_TOKEN in entry.data) — skipping",
-                self._host,
-            )
+        if client is None or not self._get_option(CONF_IP_CONTROL_ART_MODE, False):
+            if client is None:
+                _LOGGER.debug(
+                    "IP Control art-mode refresh for %s: not paired "
+                    "(no CONF_IP_CONTROL_TOKEN in entry.data) — skipping",
+                    self._host,
+                )
             self._ip_art_mode_failures = 0
             if self._ip_art_mode is not None:
                 self._ip_art_mode = None
