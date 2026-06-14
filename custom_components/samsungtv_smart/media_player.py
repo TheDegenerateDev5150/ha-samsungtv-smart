@@ -227,11 +227,13 @@ ST_API_KEY_UPDATE_INTERVAL = timedelta(minutes=30)
 OAUTH_TOKEN_REFRESH_BUFFER = 300  # Refresh OAuth token 5 minutes before expiration
 SCAN_INTERVAL = timedelta(seconds=5)
 # Phase 2: background poll period for the authoritative Art Mode state via
-# IP Control. Cheap LAN call (~50–100 ms over HTTPS:1516), low frequency.
-IP_ART_MODE_REFRESH_INTERVAL = timedelta(seconds=30)
+# IP Control. Cheap LAN call (~50–100 ms over HTTPS:1516); matches the
+# SmartThings polling cadence so the art mode switch feels just as
+# responsive.
+IP_ART_MODE_REFRESH_INTERVAL = timedelta(seconds=5)
 # Consecutive IP Control transport failures tolerated before the cached
 # art-mode value is considered stale and cleared (TV likely in deep standby
-# with port 1516 closed). 3 × 30s ≈ 90s worst-case staleness.
+# with port 1516 closed). 3 × 5s = 15s worst-case staleness.
 IP_ART_MODE_MAX_FAILURES = 3
 
 _LOGGER = logging.getLogger(__name__)
@@ -970,10 +972,10 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         The IP Control ``getTVStates.pictureMode`` read is the authoritative
         panel state, but it is otherwise only polled every
-        ``IP_ART_MODE_REFRESH_INTERVAL`` (30 s). When the async art channel
+        ``IP_ART_MODE_REFRESH_INTERVAL`` (5 s). When the async art channel
         broadcasts a transition (art_mode_changed / go_to_standby), refresh the
         IP cache straight away so ``art_mode_status`` — and the switch that
-        mirrors it — reflects reality within ~1 s rather than up to 30 s. This
+        mirrors it — reflects reality within ~1 s rather than up to 5 s. This
         is what keeps the switch from flapping back after a state change. The
         callback fires from the art receive loop (the event loop), so
         scheduling a task is safe; ``_refresh_ip_art_mode`` no-ops for TVs that
