@@ -980,7 +980,15 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         callback fires from the art receive loop (the event loop), so
         scheduling a task is safe; ``_refresh_ip_art_mode`` no-ops for TVs that
         are not IP-paired.
+
+        On TVs without IP Control, ``art_api.art_mode`` (read directly by
+        ``extra_state_attributes``) was just updated by the same event, but
+        nothing publishes that change until the next polled update — up to
+        ``SCAN_INTERVAL`` (5 s) later, and the Art Mode switch may poll in
+        between and read the stale value. Write state immediately so the new
+        ``art_mode_status`` is visible right away.
         """
+        self.async_write_ha_state()
         self.hass.async_create_task(self._refresh_ip_art_mode())
 
     async def _refresh_ip_art_mode(self, _now=None) -> None:
