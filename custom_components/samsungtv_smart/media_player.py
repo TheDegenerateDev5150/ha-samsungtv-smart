@@ -1016,9 +1016,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 # Disambiguate the two reasons the client is unavailable so the
                 # cause is obvious in the logs (unpaired vs. disabled in options).
                 entry = self.hass.config_entries.async_get_entry(self._entry_id)
-                has_token = bool(
-                    entry and entry.data.get(CONF_IP_CONTROL_TOKEN)
-                )
+                has_token = bool(entry and entry.data.get(CONF_IP_CONTROL_TOKEN))
                 if not has_token:
                     reason = "not paired (no CONF_IP_CONTROL_TOKEN in entry.data)"
                 else:
