@@ -51,6 +51,13 @@ ERROR_UNAUTHORIZED = -32010
 # as an auth error (re-pair required) when a token was actually sent.
 ERROR_PARSE_STALE_TOKEN = -32700
 
+# Art-mode desync guard: number of consecutive reads where the artModeControl
+# flag claims "on" while getTVStates.pictureMode shows a real (non-art) picture
+# mode before we stop trusting the flag and treat the panel as authoritative.
+# 1 disagreement is just a transition lag (pictureMode flips ~one sample before
+# the flag on exit); a persistent one means the flag has wedged "on".
+ART_DESYNC_THRESHOLD = 2
+
 
 class SamsungIPControlError(Exception):
     """Base error for IP Control communication failures."""
@@ -84,6 +91,9 @@ class SamsungIPControl:
         # are rejected by OpenSSL's default security level. When that happens
         # we retry once with @SECLEVEL=1 and remember it for subsequent calls.
         self._tls_legacy = False
+        # Consecutive (artModeControl says on / pictureMode says not-art)
+        # disagreements, for the desync guard in async_get_art_mode.
+        self._art_desync_count = 0
 
     @property
     def token(self) -> str | None:
@@ -136,35 +146,66 @@ class SamsungIPControl:
         return result.get("power", "unknown")
 
     async def async_get_art_mode(self) -> bool | None:
-        """Return whether the TV is currently in Art Mode.
+        """Return whether the TV is currently displaying Art Mode.
 
-        Returns ``True`` if in Art Mode, ``False`` if in normal viewing, and
-        ``None`` if the TV returned an unexpected value (e.g. firmware update
-        changed the protocol). Raises on transport/auth errors.
+        Returns ``True`` if art is on the panel, ``False`` for normal viewing
+        or a powered-off TV, and ``None`` if the state can't be determined.
+        Raises on transport/auth errors.
 
-        Calls ``artModeControl`` with no ``artMode`` parameter — the same
-        method then behaves as a getter, returning ``{"artMode": "artModeOn"}``
-        or ``{"artMode": "artModeOff"}``. This is the authoritative local read
-        for the Frame's Art Mode state, independent of the WebSocket art
-        channel (which goes silent when the TV powers off) and of any cached
-        ``art_api.art_mode`` value the integration may be holding.
+        ``artModeControl`` (no parameter) is the semantic getter and the
+        primary source. It is cross-checked against ``getTVStates.pictureMode``
+        — which is ``"Ambient"`` only while art is on the panel — to catch the
+        firmware fault we hit once: the artModeControl flag can wedge ``on``
+        while a real input is displayed. A single disagreement is just a
+        transition lag (pictureMode flips ~one sample before the flag when
+        leaving art), so only a disagreement persisting for
+        ``ART_DESYNC_THRESHOLD`` consecutive reads makes us treat the panel
+        (pictureMode) as authoritative and return ``False``.
 
-        PowerState is checked first and wins: in true standby the artModeControl
-        getter still returns the LAST value (typically ``artModeOn``), which
-        would wrongly report Art Mode as active after a restart. A powered-off
-        TV is never in Art Mode, so ``powerOff`` short-circuits to ``False``
-        without consulting artModeControl. (Art Mode itself reports
-        ``powerOn``, so it is unaffected.)
+        PowerState is checked first and wins: a powered-off TV is never showing
+        art (and pictureMode would be a stale ``"Ambient"``), so ``powerOff``
+        short-circuits to ``False``. Art Mode itself reports ``powerOn``.
         """
         if await self.async_get_power_state() == "powerOff":
+            self._art_desync_count = 0
             return False
-        result = await self._async_request("artModeControl")
-        art_mode = result.get("artMode")
-        if art_mode == "artModeOn":
+
+        art_result = await self._async_request("artModeControl")
+        art_flag = art_result.get("artMode")
+
+        # Independent panel read for the cross-check.
+        try:
+            states = await self._async_request("getTVStates")
+            picture_mode = states.get("pictureMode")
+        except SamsungIPControlError:
+            picture_mode = None
+        panel_art = picture_mode == "Ambient" if picture_mode is not None else None
+
+        if art_flag not in ("artModeOn", "artModeOff"):
+            # Unexpected flag value — fall back to the panel signal if we have
+            # one, otherwise unknown.
+            self._art_desync_count = 0
+            return panel_art
+
+        flag_on = art_flag == "artModeOn"
+
+        if flag_on and panel_art is False:
+            # Flag says art, panel says a real input. Tolerate a brief lag;
+            # escalate to the panel only once it persists.
+            self._art_desync_count += 1
+            if self._art_desync_count >= ART_DESYNC_THRESHOLD:
+                _LOGGER.debug(
+                    "IP Control art-mode: artModeControl wedged 'on' but "
+                    "pictureMode='%s' (not art) for %d reads — trusting panel, "
+                    "art mode off",
+                    picture_mode,
+                    self._art_desync_count,
+                )
+                return False
             return True
-        if art_mode == "artModeOff":
-            return False
-        return None
+
+        self._art_desync_count = 0
+        return flag_on
 
     async def async_set_art_mode_on(self) -> None:
         """Switch the TV to Art Mode."""
