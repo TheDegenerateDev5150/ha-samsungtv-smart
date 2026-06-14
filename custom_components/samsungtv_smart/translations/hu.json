@@ -111,7 +111,8 @@
           "show_channel_number": "Használja a SmartThings TV csatornaszám információt",
           "power_on_method": "A TV bekapcsolásához használt módszer",
           "show_adv_opt": "Opciók menü mutatása",
-          "enable_ip_control": "IP Control engedélyezése"
+          "enable_ip_control": "IP Control engedélyezése",
+          "ip_control_art_mode": "Art Mode engedélyezése IP Control-on keresztül"
         }
       },
       "menu": {
