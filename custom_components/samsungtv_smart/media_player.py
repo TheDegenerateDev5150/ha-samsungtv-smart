@@ -1013,10 +1013,18 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         client = self._get_ip_control_client()
         if client is None or not self._get_option(CONF_IP_CONTROL_ART_MODE, False):
             if client is None:
+                # Disambiguate the two reasons the client is unavailable so the
+                # cause is obvious in the logs (unpaired vs. disabled in options).
+                entry = self.hass.config_entries.async_get_entry(self._entry_id)
+                has_token = bool(entry and entry.data.get(CONF_IP_CONTROL_TOKEN))
+                if not has_token:
+                    reason = "not paired (no CONF_IP_CONTROL_TOKEN in entry.data)"
+                else:
+                    reason = "IP Control disabled in options (CONF_ENABLE_IP_CONTROL)"
                 _LOGGER.debug(
-                    "IP Control art-mode refresh for %s: not paired "
-                    "(no CONF_IP_CONTROL_TOKEN in entry.data) — skipping",
+                    "IP Control art-mode refresh for %s: %s — skipping",
                     self._host,
+                    reason,
                 )
             self._ip_art_mode_failures = 0
             if self._ip_art_mode is not None:
@@ -1893,7 +1901,14 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             logo_option_changed = self._logo.check_requested()
 
         if not logo_option_changed:
-            if self._attr_media_title and new_media_title == self._attr_media_title:
+            # In Art Mode the title stays "Art Mode" while the underlying
+            # artwork (current.jpg) changes, so don't skip the refresh just
+            # because the title is unchanged.
+            if (
+                new_media_title != ART_MODE_MEDIA_TITLE
+                and self._attr_media_title
+                and new_media_title == self._attr_media_title
+            ):
                 return
 
         _LOGGER.debug(
@@ -1925,11 +1940,18 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         ``www/frame_art/<entry_id>/current.jpg`` and exposes it at the matching
         ``/local/...`` URL. We reuse it as the media image while in Art Mode so
         the media_player card shows the artwork instead of a generic logo.
+
+        The file is overwritten in place when the artwork changes, so the URL
+        never changes — the browser would keep showing a stale cached image.
+        Append the file's mtime as a cache-busting query parameter.
         """
         rel_path = os.path.join("frame_art", self._entry_id, "current.jpg")
-        if os.path.isfile(self.hass.config.path("www", rel_path)):
-            return f"/local/{rel_path.replace(os.sep, '/')}"
-        return None
+        abs_path = self.hass.config.path("www", rel_path)
+        try:
+            mtime = int(os.path.getmtime(abs_path))
+        except OSError:
+            return None
+        return f"/local/{rel_path.replace(os.sep, '/')}?v={mtime}"
 
     def _get_new_media_title(self):
         """Get the current media title."""
