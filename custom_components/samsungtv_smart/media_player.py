@@ -1013,10 +1013,20 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         client = self._get_ip_control_client()
         if client is None or not self._get_option(CONF_IP_CONTROL_ART_MODE, False):
             if client is None:
+                # Disambiguate the two reasons the client is unavailable so the
+                # cause is obvious in the logs (unpaired vs. disabled in options).
+                entry = self.hass.config_entries.async_get_entry(self._entry_id)
+                has_token = bool(
+                    entry and entry.data.get(CONF_IP_CONTROL_TOKEN)
+                )
+                if not has_token:
+                    reason = "not paired (no CONF_IP_CONTROL_TOKEN in entry.data)"
+                else:
+                    reason = "IP Control disabled in options (CONF_ENABLE_IP_CONTROL)"
                 _LOGGER.debug(
-                    "IP Control art-mode refresh for %s: not paired "
-                    "(no CONF_IP_CONTROL_TOKEN in entry.data) — skipping",
+                    "IP Control art-mode refresh for %s: %s — skipping",
                     self._host,
+                    reason,
                 )
             self._ip_art_mode_failures = 0
             if self._ip_art_mode is not None:
