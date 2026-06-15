@@ -8,6 +8,17 @@
 (cloud), the local WebSocket, and the new **IP Control** channel (JSON-RPC) —
 with each channel independently selectable and resilient to a bad credential.
 
+> [!WARNING]
+> **Do not enable *Enable IP Control Art Mode*** unless you know your firmware
+> handles it correctly. On affected firmwares it can leave **Art Mode completely
+> broken** — detection stuck/flickering, switching unreliable — and the damage
+> can persist at the TV level, requiring a **factory reset** to recover. This was
+> observed on a **QE55LS03D with firmware 2123**. The option is **off by
+> default**; leave it off and let Art Mode run over the WebSocket / Frame Art
+> channel (unaffected). Power on/off over IP Control is a separate setting and is
+> **not** impacted. See *Troubleshooting → "IP Control reports Art Mode 'on' when
+> it isn't"* in the README.
+
 ---
 
 ## Highlights
@@ -75,8 +86,17 @@ with each channel independently selectable and resilient to a bad credential.
 
 ## Frame / Art Mode
 
-- Art Mode switch with retry and live state, now backed by the power-gated
-  IP Control read and the IP-Control-first set path.
+- Art Mode switch with retry and live state. By default it tracks Art Mode over
+  the WebSocket / Frame Art channel; IP Control read/switch is opt-in (see the
+  warning above).
+- **Responsive switch sync**: the Art Mode and power switches poll every 5 s
+  (matching the SmartThings cadence) instead of Home Assistant's 30 s default,
+  and `art_mode_status` is now published **immediately** on an art-channel
+  transition (`art_mode_changed` / `go_to_standby`) instead of waiting for the
+  next poll — the switch reflects a toggle within ~1 s.
+- The displayed artwork is surfaced as the media-player image (with cache
+  busting so the frontend reloads it when the picture changes), and the running
+  app `art` is shown as an **"Art Mode"** title.
 - Slideshow control routed automatically to the API the TV actually supports
   (`slideshow` vs `auto_rotation`), accepting custom durations.
 - Bundled `folder-gallery-card` for the art gallery frontend.
@@ -92,8 +112,13 @@ with each channel independently selectable and resilient to a bad credential.
 
 ## Known limitations / not yet validated
 
-- IP Control is confirmed on **Frame 2024/2025**. Older generations
-  (Tizen 5.5 / 6.0) are **not yet validated** — protocol differences possible.
+- IP Control **power/reboot** is confirmed on **Frame 2024/2025**. Older
+  generations (Tizen 5.5 / 6.0) are **not yet validated** — protocol differences
+  possible.
+- IP Control **Art Mode** (the *Enable IP Control Art Mode* option) is **not
+  safe on all firmwares**: it can wedge or break Art Mode entirely and may need
+  a factory reset to recover (seen on QE55LS03D fw 2123). It stays **off by
+  default** — see the warning above.
 - The reboot/IP-Control recovery of an unresponsive ("zombie") Art WebSocket is
   implemented but **not yet confirmed empirically** in that exact state.
 - Brightness / colour-temperature capability flags are re-detected on every
