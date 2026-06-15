@@ -174,6 +174,17 @@ async def _load_matte_options(
                 type_options,
                 color_options,
             )
+
+            # Now that the option lists are known, re-read the TV's current
+            # matte so the selects reflect the real state. The initial refresh
+            # in async_added_to_hass can run before these options are loaded,
+            # in which case _parse_matte_id cannot match the actual matte and
+            # the selects stay on their default ("none"/first colour). Leaving
+            # them wrong is not just cosmetic: an automation that re-applies the
+            # selects' value would push that bogus "none" back to the TV and
+            # wipe the real matte on every restart.
+            await type_select.async_refresh_current()
+            await color_select.async_refresh_current()
             return
 
         except asyncio.TimeoutError:
@@ -275,7 +286,7 @@ class SamsungTVMatteSelectBase(SelectEntity):
         if self.platform is not None:
             self.async_write_ha_state()
 
-    async def _async_refresh_current(self) -> None:
+    async def async_refresh_current(self) -> None:
         """Read current artwork matte from TV and update state."""
         try:
             async with asyncio.timeout(5):
@@ -311,6 +322,9 @@ class SamsungTVMatteTypeSelect(SamsungTVMatteSelectBase):
             matte_type = matte_id.rsplit("_", 1)[0]
         else:
             matte_type = matte_id or "none"
+        # The TV reports some matte_ids upper-cased (e.g. SHADOWBOX_POLAR) while
+        # the option list is lower-cased; match case-insensitively.
+        matte_type = matte_type.lower()
         if matte_type in self._attr_options:
             self._attr_current_option = matte_type
 
@@ -346,7 +360,7 @@ class SamsungTVMatteTypeSelect(SamsungTVMatteSelectBase):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        await self._async_refresh_current()
+        await self.async_refresh_current()
 
 
 class SamsungTVMatteColorSelect(SamsungTVMatteSelectBase):
@@ -365,7 +379,9 @@ class SamsungTVMatteColorSelect(SamsungTVMatteSelectBase):
     def _parse_matte_id(self, matte_id: str) -> None:
         """Extract color part from matte_id (format: type_color)."""
         if "_" in matte_id:
-            color = matte_id.rsplit("_", 1)[1]
+            # Match case-insensitively: the TV may report e.g. SHADOWBOX_POLAR
+            # while the option list is lower-cased.
+            color = matte_id.rsplit("_", 1)[1].lower()
             if color in self._attr_options:
                 self._attr_current_option = color
 
@@ -401,7 +417,7 @@ class SamsungTVMatteColorSelect(SamsungTVMatteSelectBase):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        await self._async_refresh_current()
+        await self.async_refresh_current()
 
 
 # ══════════════════════════════════════════════════════════════════════════
