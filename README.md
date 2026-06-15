@@ -240,7 +240,7 @@ After initial setup, click **Configure** on the integration card to access these
 | **External power entity** | Use an external sensor to determine power state |
 | **Toggle Art Mode** | Toggle Art Mode when turning on a Frame TV that is already in Art Mode |
 | **Enable IP Control** | Use the local JSON-RPC channel (port 1516) for reliable power on/off without SmartThings (shown only once the TV is paired for IP Control) |
-| **Enable IP Control Art Mode** | Use IP Control to read and switch Art Mode. **Off by default** — see [IP Control reports Art Mode "on" when it isn't](#ip-control-reports-art-mode-on-when-it-isnt) before enabling |
+| **Enable IP Control Art Mode** | Use IP Control to read and switch Art Mode. **Off by default — leave it off unless you know your firmware handles it.** ⚠️ Can break Art Mode entirely and may need a factory reset to recover (seen on QE55LS03D fw 2123). See [IP Control reports Art Mode "on" when it isn't](#ip-control-reports-art-mode-on-when-it-isnt) |
 | **Ping port** | Port used to detect TV presence |
 | **WS name** | Name shown on the TV when pairing (default: `[Home Assistant]`) |
 
@@ -602,6 +602,9 @@ SmartThings caches the picture mode value. This fork automatically sends a `refr
 When the TV wakes from standby (e.g. via an automation), the WebSocket connection needs a short time to re-establish before the Art API becomes available. This is normal — the integration will self-recover within a minute. If you experience consistent failures in morning automations, add a 60–90 second delay after the TV turns on before triggering Art Mode commands.
 
 ### IP Control reports Art Mode "on" when it isn't
+
+> [!WARNING]
+> **Do not enable *Enable IP Control Art Mode* unless you know your firmware handles it correctly.** On affected firmwares it can leave **Art Mode completely broken** (detection stuck/flickering, switching unreliable) — and the damage can persist at the TV level, requiring a **factory reset** to recover. This was observed on a **QE55LS03D with firmware 2123**. The option is **off by default**; leave it off and use the WebSocket / Frame Art path, which is unaffected. Power on/off over IP Control is a separate setting and is **not** impacted.
 
 On some Frame TVs the local IP Control (JSON-RPC, port 1516) `artModeControl` flag can **wedge "on"**: it keeps returning `artModeOn` even when the TV is on a real input (e.g. HDMI), so `art_mode_status` is reported as `on` permanently or flickers between `on` and `off`. The flag is wrong at the source — the same value is returned even when querying the TV directly, outside Home Assistant. The actual panel state in that situation is given by `getTVStates.pictureMode` (`Ambient` only while art is really on the panel).
 
