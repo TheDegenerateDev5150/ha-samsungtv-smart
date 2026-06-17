@@ -1968,6 +1968,15 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         if self._state != MediaPlayerState.ON:
             return None
 
+        # A Frame entering Art Mode keeps reporting its previous source over
+        # SmartThings (cloud) for ~30-45s before it switches the running app
+        # to "art", so relying on the ST signal alone leaves the card showing
+        # the stale source (e.g. an HDMI input) the whole time. The local
+        # art-mode signal (IP Control / async Art API / WS) flips within ~1s,
+        # so trust it for the title too.
+        if self._art_mode_is_on():
+            return ART_MODE_MEDIA_TITLE
+
         if self._running_app == DEFAULT_APP:
             if self._st and self._st.state != STStatus.STATE_OFF:
                 if self._st.source in ["digitalTv", "TV"]:
@@ -2029,6 +2038,30 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             features |= MediaPlayerEntityFeature.SELECT_SOUND_MODE
         return features
 
+    def _art_mode_is_on(self) -> bool | None:
+        """Return the authoritative local Art Mode state, or None if unknown.
+
+        Single source of truth for both the ``art_mode_status`` attribute and
+        the media title. Priority order (see extra_state_attributes for the
+        full rationale):
+          1. IP Control cache (power-state aware) — wins when this TV is paired
+          2. device_info PowerState='standby' — TV fully off, art cannot be on
+          3. async Art API cache — kept live by art-channel WebSocket events
+          4. legacy WS artmode_status — fallback before the async API has a value
+        """
+        if self._ip_art_mode is not None:
+            return self._ip_art_mode
+        if self._get_device_spec("PowerState") == "standby":
+            return False
+        art_api = (
+            self.hass.data.get(DOMAIN, {}).get(self._entry_id, {}).get(DATA_ART_API)
+        )
+        if art_api is not None and art_api.art_mode is not None:
+            return art_api.art_mode
+        if self._ws.artmode_status != ArtModeStatus.Unsupported:
+            return self._ws.artmode_status == ArtModeStatus.On
+        return None
+
     @property
     def extra_state_attributes(self):
         """Return the optional state attributes."""
@@ -2065,24 +2098,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         # value keeps reporting whatever was true just before power-off (often
         # "on", because Art Mode is the last state of a Frame TV before
         # standby). Levels 1 and 2 both guard against that.
-        art_api = (
-            self.hass.data.get(DOMAIN, {}).get(self._entry_id, {}).get(DATA_ART_API)
-        )
-        device_power_state = self._get_device_spec("PowerState")
-        if self._ip_art_mode is not None:
-            # IP Control authoritative read (power-state aware, see above).
-            data[ATTR_ART_MODE_STATUS] = STATE_ON if self._ip_art_mode else STATE_OFF
-        elif device_power_state == "standby":
-            # TV is powered off — art mode cannot be active regardless of
-            # what art_api may report.
-            data[ATTR_ART_MODE_STATUS] = STATE_OFF
-        elif art_api is not None and art_api.art_mode is not None:
-            data.update(
-                {ATTR_ART_MODE_STATUS: STATE_ON if art_api.art_mode else STATE_OFF}
-            )
-        elif self._ws.artmode_status != ArtModeStatus.Unsupported:
-            status_on = self._ws.artmode_status == ArtModeStatus.On
-            data.update({ATTR_ART_MODE_STATUS: STATE_ON if status_on else STATE_OFF})
+        art_mode_on = self._art_mode_is_on()
+        if art_mode_on is not None:
+            data[ATTR_ART_MODE_STATUS] = STATE_ON if art_mode_on else STATE_OFF
         if self._st:
             picture_mode = self._st.picture_mode
             picture_mode_list = self._st.picture_mode_list
