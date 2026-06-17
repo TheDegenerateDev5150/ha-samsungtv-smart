@@ -492,7 +492,17 @@ class SamsungTVAsyncArt:
             self.art_mode = data.get("status") == "on"
             self._fire_art_event()
         elif sub_event == "go_to_standby":
-            self.art_mode = False
+            # Ambiguous, not a definitive "art mode off": the panel also
+            # fires this when it dims for its own power-save sleep timer
+            # (e.g. no motion / low ambient light) while still considered
+            # "in Art Mode" by the TV and other status checks. The legacy
+            # sync WS handler (samsungws.py) already treats this event as
+            # ArtModeStatus.Unavailable rather than Off for the same reason.
+            # Forcing art_mode False here made it the priority-3 source for
+            # extra_state_attributes on TVs without IP Control paired,
+            # flipping art_mode_status to "off" while artwork was still on
+            # screen. Leave self.art_mode untouched and let the event
+            # callback trigger an authoritative re-check instead.
             self._fire_art_event()
 
         # Check for error
