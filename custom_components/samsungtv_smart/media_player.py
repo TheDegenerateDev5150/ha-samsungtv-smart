@@ -2038,6 +2038,12 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             features |= MediaPlayerEntityFeature.SELECT_SOUND_MODE
         return features
 
+    def _smartthings_reports_art(self) -> bool:
+        """Return True if the SmartThings cloud reports the running app as art."""
+        if not self._st or self._st.state == STStatus.STATE_OFF:
+            return False
+        return (self._st.channel_name or "").lower() == "art"
+
     def _art_mode_is_on(self) -> bool | None:
         """Return the authoritative local Art Mode state, or None if unknown.
 
@@ -2046,8 +2052,19 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         full rationale):
           1. IP Control cache (power-state aware) — wins when this TV is paired
           2. device_info PowerState='standby' — TV fully off, art cannot be on
-          3. async Art API cache — kept live by art-channel WebSocket events
+          3. async Art API cache — kept live by art-channel WebSocket events,
+             corroborated by SmartThings: on TVs without IP Control, the art
+             WebSocket channel can latch onto a False reading (e.g. a
+             go_to_standby-like transition) and never receive a follow-up
+             event confirming the panel actually came back on. If SmartThings
+             (which independently polls the TV) already reports the running
+             app as "art", trust that over a local False.
+             Trade-off: SmartThings itself lags ~30-45s on every transition,
+             so on a genuine exit from Art Mode this can keep reporting "on"
+             for up to that long, until SmartThings catches up.
           4. legacy WS artmode_status — fallback before the async API has a value
+          5. SmartThings alone — covers the case where the async API has no
+             value at all yet (e.g. right after HA startup)
         """
         if self._ip_art_mode is not None:
             return self._ip_art_mode
@@ -2057,9 +2074,13 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             self.hass.data.get(DOMAIN, {}).get(self._entry_id, {}).get(DATA_ART_API)
         )
         if art_api is not None and art_api.art_mode is not None:
+            if not art_api.art_mode and self._smartthings_reports_art():
+                return True
             return art_api.art_mode
         if self._ws.artmode_status != ArtModeStatus.Unsupported:
             return self._ws.artmode_status == ArtModeStatus.On
+        if self._smartthings_reports_art():
+            return True
         return None
 
     @property
