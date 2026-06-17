@@ -607,12 +607,18 @@ class SamsungTVWS:
                 return
             _LOGGING.debug("Message remote: received connect")
             token = conn_data.get("token")
+            # Some firmwares echo back the SAME token on every successful
+            # connect as a confirmation, not just when issuing a genuinely new
+            # one. Only count it as a "new" (i.e. rejected-old-token) issuance
+            # when it actually differs from what we have stored — otherwise
+            # normal periodic reconnects with an accepted token would
+            # themselves trip the 5-in-a-row threshold below and pause
+            # reconnection of the control channel (apps) for good.
+            token_changed = bool(token) and token != self.token
             if token:
-                # A top-level token on connect means the TV issued a NEW one,
-                # i.e. it did not accept what we presented. Count it; too many
-                # in a row indicates a stuck token and we pause reconnection.
-                self._consecutive_new_tokens += 1
                 self._set_token(token)
+            if token_changed:
+                self._consecutive_new_tokens += 1
                 if (
                     not self._auth_blocked
                     and self._consecutive_new_tokens >= MAX_CONSECUTIVE_NEW_TOKENS
@@ -627,9 +633,10 @@ class SamsungTVWS:
                     if self._auth_error_callback is not None:
                         self._auth_error_callback()
             else:
-                # Connected with no new token => the stored token was accepted.
-                # Always signal recovery (dismiss is idempotent) so a notification
-                # left over from a previous, now-reloaded instance is cleared too.
+                # Connected with no token, or the same token we already had =>
+                # the stored token was accepted. Always signal recovery
+                # (dismiss is idempotent) so a notification left over from a
+                # previous, now-reloaded instance is cleared too.
                 self._consecutive_new_tokens = 0
                 self._auth_blocked = False
                 if self._auth_recovered_callback is not None:
