@@ -2066,6 +2066,16 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
           5. SmartThings alone — covers the case where the async API has no
              value at all yet (e.g. right after HA startup)
         """
+        # A real app visibly in the foreground means the panel is showing that
+        # app, not artwork — whatever the art WebSocket channel claims. On 2024
+        # Frames that channel is unreliable: it emits spurious
+        # art_mode_changed='on' events while an app is actually on screen,
+        # which made the switch and media title flap back to "Art Mode" during
+        # normal app use. self._running_app is driven by the app's visibility
+        # flag, so it is DEFAULT_APP whenever no app is foreground (live TV or
+        # Art Mode) and the app id only while that app is genuinely visible.
+        if self._running_app not in (None, DEFAULT_APP):
+            return False
         if self._ip_art_mode is not None:
             return self._ip_art_mode
         if self._get_device_spec("PowerState") == "standby":
@@ -2786,6 +2796,15 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         self._running_app = running_app
         self._source = source
+
+        # Reflect the new source on the card right away instead of waiting for
+        # the next scheduled poll (~SCAN_INTERVAL). Recompute the media title /
+        # image from the optimistic running_app and push the state; the Art
+        # Mode switch (a separate entity tracking our state changes) updates
+        # with it, so it no longer lingers on "Art Mode"/on for several seconds
+        # after launching an app.
+        await self._update_media()
+        self.async_write_ha_state()
 
     async def _async_select_source_delayed(self, source):
         """Select input source with delayed ST option."""
