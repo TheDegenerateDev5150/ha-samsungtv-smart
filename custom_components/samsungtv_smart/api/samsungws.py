@@ -74,8 +74,14 @@ def _set_ws_logger_level(level: int = logging.CRITICAL) -> None:
 
 
 def _format_rest_url(host: str, append: str = "", port: int = 8001) -> str:
-    """Return URL used for rest commands."""
-    return f"http://{host}:{port}/api/v2/{append}"
+    """Return URL used for rest commands.
+
+    Newer (2024+) Frame TVs only expose the REST API on the SSL port (8002)
+    and reset the connection on a plain HTTP request, so the scheme has to
+    follow the port instead of being hardcoded to http.
+    """
+    scheme = "https" if port == 8002 else "http"
+    return f"{scheme}://{host}:{port}/api/v2/{append}"
 
 
 def gen_uuid() -> str:
@@ -507,15 +513,16 @@ class SamsungTVWS:
     def _rest_request(self, target, method="GET"):
         """Send a rest command using http protocol."""
         url = _format_rest_url(self.host, target, self.port)
+        verify = not self._is_ssl_connection()
         try:
             if method == "POST":
-                response = requests.post(url, timeout=self.timeout)
+                response = requests.post(url, timeout=self.timeout, verify=verify)
             elif method == "PUT":
-                response = requests.put(url, timeout=self.timeout)
+                response = requests.put(url, timeout=self.timeout, verify=verify)
             elif method == "DELETE":
-                response = requests.delete(url, timeout=self.timeout)
+                response = requests.delete(url, timeout=self.timeout, verify=verify)
             else:
-                response = requests.get(url, timeout=self.timeout)
+                response = requests.get(url, timeout=self.timeout, verify=verify)
         except requests.ConnectionError as exc:
             raise HttpApiError(
                 "TV unreachable or feature not supported on this model."
