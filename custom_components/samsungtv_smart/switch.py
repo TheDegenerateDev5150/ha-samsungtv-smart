@@ -659,6 +659,12 @@ class FrameArtModeSwitch(SwitchEntity):
         art_status = new_state.attributes.get("art_mode_status")
         if art_status == "on":
             self._attr_is_on = True
+        elif art_status == "off":
+            # Mirror the media_player's authoritative art_mode_status directly,
+            # including when the TV is ON but no longer in Art Mode (e.g. an app
+            # was just launched). Without this the switch kept its previous
+            # "on" value and lingered until its own poll.
+            self._attr_is_on = False
         elif new_state.state == STATE_OFF:
             self._attr_is_on = False
         elif new_state.state in ("unknown", "unavailable"):

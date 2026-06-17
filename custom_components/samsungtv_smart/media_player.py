@@ -2797,6 +2797,15 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         self._running_app = running_app
         self._source = source
 
+        # Reflect the new source on the card right away instead of waiting for
+        # the next scheduled poll (~SCAN_INTERVAL). Recompute the media title /
+        # image from the optimistic running_app and push the state; the Art
+        # Mode switch (a separate entity tracking our state changes) updates
+        # with it, so it no longer lingers on "Art Mode"/on for several seconds
+        # after launching an app.
+        await self._update_media()
+        self.async_write_ha_state()
+
     async def _async_select_source_delayed(self, source):
         """Select input source with delayed ST option."""
         if self._st:
