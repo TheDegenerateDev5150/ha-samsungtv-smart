@@ -180,7 +180,46 @@ profile and the Frame diverge, or where the profile adds something testable.
 
 ---
 
-## 7. Takeaways for the integration
+## 7. 2024 / 2025 behavioral deltas (cross-ecosystem)
+
+The Savant MU6070 profile is a 2017 artifact. No public, raw, method-level profile
+for a 2024/2025 Frame exists — the JSON-RPC `1516` surface lives inside proprietary
+pro-control drivers (Savant, RTI, Control4, Crestron). A Savant `samsung_2024`
+profile (the true XML equivalent of this document) exists but is **dealer-gated**
+in the Blueprint library. The most detailed *public, 2024-aware* source is the
+**RTI "Samsung IP Television" driver v1.09 (May 2024)**, which exposes behaviors
+and config rather than the command table. The deltas below are drawn from it and
+cross-checked against the empirical Frame 2024 reference.
+
+> **Source provenance:** RTI Driver Store — "Samsung IP Television" v1.09, written
+> against an MU7000, with an explicit pre-/post-2024 model-year switch. Behavioral
+> notes only; RTI does not publish the raw JSON-RPC method strings.
+
+| Area | Pre-2024 behavior | 2024 / 2025 behavior | Impact on the integration |
+|---|---|---|---|
+| **Port** | `1515` (pre-2020), `1516` (2020+) | `1516` | Confirms the transport already in use. |
+| **Power-on path** | Wake-on-LAN packet to wake from deep sleep | **WoL removed** — power-on is **IP-direct** via `powerControl` + persistent token | On 2024/2025 Frames, WOL will not wake from deep sleep. `PowerOnMethod.WOL` is effectively dead on these models; rely on the stored IP token (matches the empirical "powerOn works on a fully-off TV with a stored token") or SmartThings. |
+| **Pairing safety** | n/a | **Two "Deny" responses blacklist the controller** | Surface a clear warning in the pairing flow: the user must press **Allow**; denying twice can lock the controller out until reset. |
+| **Art Mode + control** | — | **All IP control fails while Art Mode is on** (volume/color/contrast/etc.) until Art Mode is turned off | Confirms the #1 gotcha: pairing and setters time out in Art Mode. Gate IP setters on `artModeControl` reporting `artModeOff` first. |
+| **Picture scales** | Standard variable set | **New variable set**: Brightness range **0–50** (not 0–100); **Tint = `R15`–`G15`** (non-numeric, button-stepped, no slider) | When reading `getVideoStates` on a Frame 2024/2025, interpret brightness on a 0–50 scale and treat tint as an R/G token, not an integer. |
+| **Ambient mode** | `ambientModeControl` present in pre-2024 drivers | RTI still advertises ambient support | The empirical reference marks `ambientModeControl` as `-32601` on the QE55LS03D. The discrepancy is worth a **re-probe** — it may be model/firmware-dependent rather than universally absent. |
+
+**Enable path (2024/2025, per RTI):** `Settings → General → Network → Expert →
+IP Remote → Enable` (matches the empirical reference; menu wording varies by
+firmware).
+
+**Where the raw 2024 method table would come from, if needed:**
+
+1. **Savant `samsung_2024` Blueprint profile** — the direct XML equivalent of this
+   document; requires Savant dealer access to export.
+2. **On-TV enumeration** (already done for the QE55LS03D) — remains the authoritative
+   source for *what is actually implemented* on a given Frame.
+3. The RTI driver package is downloadable but is a proprietary RTI bundle, not an
+   open XML profile; readable-text extraction is uncertain.
+
+---
+
+## 8. Takeaways for the integration
 
 1. **`directAccessControl` app names are now concrete** (`netflix`, `amazon`,
    `youtube`, `vudu`, lowercase) — probe these on the Frame; this is the one place
@@ -196,6 +235,9 @@ profile and the Frame diverge, or where the profile adds something testable.
    to compare against the current 5 s scan / 10 s ST poll tuning.
 5. **No Art Mode here.** For anything Art-Mode-related, the empirical Frame
    reference stays the single source of truth.
+6. **2024/2025 power-on (§7):** WoL is gone on these models — power-on must use the
+   persistent IP token (`powerControl`) or SmartThings, not a WOL packet. And warn
+   users not to deny the pairing prompt (two denies blacklist the controller).
 
 > Recommended next step (safe, per the established probing discipline): on a Frame,
 > with a valid token and the TV in normal viewing (not Art Mode), send
