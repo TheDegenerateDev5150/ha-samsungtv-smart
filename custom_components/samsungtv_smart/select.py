@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 
@@ -283,6 +284,37 @@ async def _load_picture_mode_options(
     )
 
 
+def _parse_artmode_setting_options(item: dict) -> list[str]:
+    """Build the option list for a get_artmode_settings item.
+
+    `valid_values` is reported by the TV as a JSON-encoded string (e.g.
+    '["off","60","120","180","240"]'), not an actual list — feeding it
+    straight into list() explodes it into one option per character.
+    Settings without valid_values (e.g. motion_sensitivity) instead report
+    a numeric min/max range, so fall back to that.
+    """
+    valid_values = item.get("valid_values")
+    if isinstance(valid_values, str):
+        try:
+            parsed = json.loads(valid_values)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list):
+            return [str(v) for v in parsed]
+    elif isinstance(valid_values, list):
+        return [str(v) for v in valid_values]
+
+    item_min, item_max = item.get("min"), item.get("max")
+    if item_min is not None and item_max is not None:
+        try:
+            return [str(v) for v in range(int(item_min), int(item_max) + 1)]
+        except (TypeError, ValueError):
+            pass
+
+    current = item.get("value")
+    return [str(current)] if current is not None else []
+
+
 async def _load_motion_options(
     hass: HomeAssistant,
     art_api: SamsungTVAsyncArt,
@@ -308,7 +340,7 @@ async def _load_motion_options(
             entities = []
 
             if isinstance(sensitivity_item, dict) and sensitivity_item.get("value"):
-                options = sensitivity_item.get("valid_values") or []
+                options = _parse_artmode_setting_options(sensitivity_item)
                 entities.append(
                     SamsungTVArtMotionSensitivitySelect(
                         hass,
@@ -316,13 +348,13 @@ async def _load_motion_options(
                         art_api,
                         device_name,
                         device_unique_id,
-                        list(options),
+                        options,
                         sensitivity_item.get("value"),
                     )
                 )
 
             if isinstance(timer_item, dict) and timer_item.get("value"):
-                options = timer_item.get("valid_values") or []
+                options = _parse_artmode_setting_options(timer_item)
                 entities.append(
                     SamsungTVArtMotionTimerSelect(
                         hass,
@@ -330,7 +362,7 @@ async def _load_motion_options(
                         art_api,
                         device_name,
                         device_unique_id,
-                        list(options),
+                        options,
                         timer_item.get("value"),
                     )
                 )
