@@ -4116,6 +4116,6 @@ async def _async_call_service(
             validate_config=True,
         )
     except HomeAssistantError as ex:
-        self._log.error("SamsungTV Smart - error %s", ex)
+        _LOGGER.error("SamsungTV Smart - error %s", ex)
 
     return
