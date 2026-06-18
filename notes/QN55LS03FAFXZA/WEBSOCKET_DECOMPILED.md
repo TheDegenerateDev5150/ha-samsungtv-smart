@@ -22,6 +22,11 @@ Linux: `5.4.261 armv7l`
 - `/opt/usr/apps/com.samsung.tv.coba.art/tizen-manifest.xml`
 - `/opt/usr/apps/com.samsung.tv.home.art/tizen-manifest.xml`
 - `/usr/apps/com.samsung.tv.wizard.art/tizen-manifest.xml`
+- `/opt/usr/apps/mobilebff/tizen-manifest.xml`
+- `/opt/usr/apps/mobilebff/bin/MobileBFF.dll`
+- `/opt/usr/apps/mobilebff/bin/MobileBFF.Gateway.dll`
+- `/opt/usr/apps/mobilebff/bin/MobileBFF.Domain.dll`
+- `/opt/usr/apps/mobilebff/bin/MobileBFF.External.dll`
 
 ## Port Owners
 
@@ -90,6 +95,8 @@ Hard-coded public channel strings in `msf-server`:
 | `com.samsung.virtualmicservice` |
 
 `com.samsung.art-app` is registered by the Art app through the SmartView/MSF local service API, not hard-coded in `msf-server`.
+
+`com.samsung.tv.mobilebff` is both listed by `msf-server` and registered by the MobileBFF app through the SmartView/MSF local service API.
 
 ### Generic Events
 
@@ -291,6 +298,96 @@ All are published as `d2d_service_message` on `com.samsung.art-app`.
 | `image_list_added` | `content_list` |
 | `image_of_list_added` | `file_name`, `content_id` |
 | `notify.sync_server` | `status`: `start`/`finish` |
+
+## MobileBFF Channel
+
+MobileBFF package: `/opt/usr/apps/mobilebff`.
+
+The app registers MSF channel `com.samsung.tv.mobilebff` from `MobileBFF.Gateway.dll`.
+
+Outer request:
+
+```json
+{
+  "method": "ms.channel.emit",
+  "params": {
+    "event": "/sec/tv/appdata/mobilebff",
+    "to": "host",
+    "data": "{\"version\":\"0.2\",\"id\":\"get.apptiles\",\"seqId\":\"1\",\"params\":{}}"
+  }
+}
+```
+
+Inner request fields are `version`, `id`, `seqId`, and `params`. Responses are published on `/sec/tv/appdata/mobilebff`; direct request responses go back to the client, while status/update/vconf notifications are broadcast.
+
+### MobileBFF Requests
+
+| `id` | Params | Functionality |
+|---|---|---|
+| `ask.service.status` | none | Broadcasts `notify.service.status` with `status`: `ready` or `abnormal`. |
+| `get.RotatorSupport` | none | Rotation accessory support probe. |
+| `get.aitech.enable` | none | Reads `db/aitech/enable`. |
+| `get.aitech.support` | none | Reads `com.samsung/featureconf/ai_tech.support`. |
+| `get.apptile.functions` | `requestId` | Gets function tiles for an app/source tile. |
+| `get.apptile.previews` | `requestId` | Gets preview tiles for an app/source tile. |
+| `get.apptiles` | none | Gets app tiles from Eden/launcher IPC. |
+| `get.dataForAmbient` | `targetPkgId` | Gets ambient/NFT preview data for one target package. |
+| `get.dataForAmbient.Apps` | `entry_count`, `key_names` | Gets ambient/NFT preview data for multiple target apps. |
+| `get.extsources` | none | Gets external source tiles. |
+| `get.gamepad.support` | none | Reports gamepad launch/support data. |
+| `get.icon` | `requestId` | Gets an icon/resource for a tile. |
+| `get.multiview.saved.tiles` | none | Gets saved Multi View tiles/modes. |
+| `get.recent.apptiles` | none | Gets recent app tiles. |
+| `get.recommended.apptiles` | none | Gets recommended app tiles. |
+| `get.settings.data` | none | Gets quick-setting data from Eden/launcher IPC. |
+| `get.system.info.bool` | `key` | Reads `system_info.GetCustomBoolean(key)`. |
+| `get.system.info.int` | `key` | Reads `system_info.GetCustomInt(key)`. |
+| `get.system.info.string` | `key` | Reads `system_info.GetCustomString(key)`. |
+| `get.system.info.values` | `entry_count`, `key_names` | Bulk custom system-info read. `key_names` entries include key/type data. |
+| `get.systemInfo.getValue.bool` | `key` | Reads `system_info.GetBoolean((SystemInfoKeye)int.Parse(key))`. |
+| `get.systemInfo.getValue.int` | `key` | Reads `system_info.GetInt((SystemInfoKeye)int.Parse(key))`. |
+| `get.systemInfo.getValue.string` | `key` | Reads `system_info.GetString((SystemInfoKeye)int.Parse(key))`. |
+| `launch.app` | `requestId` | Launches/selects an app tile. |
+| `launch.appForAmbient` | `targetAppId`, `action_play_url` | Launches ambient/NFT app preview flow. |
+| `launch.extsource` | `requestId` | Launches/selects an external source tile. |
+| `launch.function` | `requestId` | Launches a function tile. |
+| `launch.multiview.tile` | `requestId` | Launches a saved Multi View mode. |
+| `launch.preview` | `requestId` | Launches a preview tile. |
+| `req_launch.gamepad.support` | `action`, `aeskey` | Starts gamepad-support flow. |
+| `request.files` | `content_info`, `fileList` | Starts MobileBFF file/content transfer path. |
+| `request.isAppInstalled` | `requestId` | Checks whether an app is installed. |
+| `request.vconf.info.bool` | `key` | Reads a vconf bool key and registers for change broadcasts. |
+| `request.vconf.info.int` | `key` | Reads a vconf int key and registers for change broadcasts. |
+| `request.vconf.info.string` | `key` | Reads a vconf string key and registers for change broadcasts. |
+| `set.aitech.enable` | `value` | Writes `db/aitech/enable`. |
+| `set.lux.value` | `value` | Writes `memory/sensor/mobile/illumination`, then launches projector-setting handling. |
+| `set.settings.data` | `id`, `title`, `subTitle` | Selects/sets quick-setting item data through Eden/launcher IPC. |
+
+### MobileBFF Broadcasts
+
+| Broadcast `id` | Data | Trigger |
+|---|---|---|
+| `notify.service.status` | `status`: `ready` / `abnormal` | Client connect, `ask.service.status`, or service readiness change. |
+| `notify.update` | `reqMessage`: `get.apptiles`, `get.extsources`, `get.settings.data` | App/source/quick-setting updates. |
+| `event.setting.update` | `updateElement` | Follow-up quick-setting layer data. |
+| `request.vconf.info.bool` / `int` / `string` | `response`: `key`, `value` | Initial vconf read and later vconf change notifications. |
+
+## Other App Responders Checked
+
+Confirmed app-level MSF responders on this firmware:
+
+- `/opt/usr/apps/org.tizen.art-app` registers `com.samsung.art-app`.
+- `/opt/usr/apps/mobilebff` registers `com.samsung.tv.mobilebff`.
+
+Checked candidates without an app-level `CreateChannel`/message-listener pattern in the pulled code:
+
+- `/usr/apps/com.samsung.tv.ambient-support`
+- `/usr/apps/com.samsung.tv.multiscreen`
+- `/usr/apps/com.samsung.tv.coba.mobilebff`
+- `/usr/apps/com.samsung.tv.coba.multiscreen`
+- `/usr/apps/relumino-service`
+
+The remaining hard-coded `msf-server` channel names (`com.samsung.wallservice`, `com.samsung.tv.ambient`, `com.samsung.tv.ambient.contentapp`, `com.samsung.edgeblending-service`, `com.samsung.virtualmicservice`, `samsung.default.media.player`) look reserved or feature-gated from the pulled artifacts, not separately confirmed app responders.
 
 ## Important Absences On This Firmware
 
