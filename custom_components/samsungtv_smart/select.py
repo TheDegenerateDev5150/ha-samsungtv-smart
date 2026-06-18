@@ -166,6 +166,14 @@ async def async_setup_entry(
             f"samsungtv_picture_mode_options_{entry.entry_id}",
         )
 
+    if is_frame_supported:
+        hass.async_create_background_task(
+            _load_motion_options(
+                hass, art_api, device_name, device_unique_id, async_add_entities, entry
+            ),
+            f"samsungtv_motion_options_{entry.entry_id}",
+        )
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # Background loaders
@@ -272,6 +280,96 @@ async def _load_picture_mode_options(
 
     _LOGGER.warning(
         "Could not populate picture mode options after %d attempts", _MAX_RETRIES
+    )
+
+
+async def _load_motion_options(
+    hass: HomeAssistant,
+    art_api: SamsungTVAsyncArt,
+    device_name: str,
+    device_unique_id: str,
+    async_add_entities: AddEntitiesCallback,
+    entry: ConfigEntry,
+) -> None:
+    """Probe Art Mode motion sensor settings and create selects only if present.
+
+    Not every Frame model has a motion sensor, and there is no dedicated
+    "supported" flag for it — the only way to know is to ask
+    get_artmode_settings and see whether the TV reports the item.
+    """
+    for attempt in range(_MAX_RETRIES):
+        try:
+            async with asyncio.timeout(10):
+                sensitivity_item = await art_api.get_artmode_settings(
+                    "motion_sensitivity"
+                )
+                timer_item = await art_api.get_artmode_settings("motion_timer")
+
+            entities = []
+
+            if isinstance(sensitivity_item, dict) and sensitivity_item.get("value"):
+                options = sensitivity_item.get("valid_values") or []
+                entities.append(
+                    SamsungTVArtMotionSensitivitySelect(
+                        hass,
+                        entry,
+                        art_api,
+                        device_name,
+                        device_unique_id,
+                        list(options),
+                        sensitivity_item.get("value"),
+                    )
+                )
+
+            if isinstance(timer_item, dict) and timer_item.get("value"):
+                options = timer_item.get("valid_values") or []
+                entities.append(
+                    SamsungTVArtMotionTimerSelect(
+                        hass,
+                        entry,
+                        art_api,
+                        device_name,
+                        device_unique_id,
+                        list(options),
+                        timer_item.get("value"),
+                    )
+                )
+
+            if entities:
+                async_add_entities(entities)
+                _LOGGER.info(
+                    "Art Mode motion selects created for %s: %s",
+                    device_name,
+                    [e._setting_name for e in entities],
+                )
+            else:
+                _LOGGER.debug(
+                    "TV %s does not report Art Mode motion settings, skipping",
+                    device_name,
+                )
+            return
+
+        except asyncio.TimeoutError:
+            _LOGGER.debug(
+                "Timeout fetching motion settings (attempt %d/%d), retrying in %ds",
+                attempt + 1,
+                _MAX_RETRIES,
+                _RETRY_INTERVAL,
+            )
+        except Exception as ex:
+            _LOGGER.debug(
+                "Error fetching motion settings (attempt %d/%d): %s",
+                attempt + 1,
+                _MAX_RETRIES,
+                ex,
+            )
+
+        await asyncio.sleep(_RETRY_INTERVAL)
+
+    _LOGGER.debug(
+        "Could not probe Art Mode motion settings after %d attempts "
+        "(TV likely does not support a motion sensor)",
+        _MAX_RETRIES,
     )
 
 
@@ -587,6 +685,105 @@ class SamsungTVMatteColorSelect(SamsungTVMatteSelectBase):
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         await self.async_refresh_current()
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Art Mode motion sensor selects (Frame models with a motion sensor)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class SamsungTVArtMotionSelectBase(SelectEntity):
+    """Base class for Art Mode motion-sensor select entities.
+
+    Only created when get_artmode_settings reports the corresponding item
+    for this TV (motion_sensitivity / motion_timer), since the underlying
+    motion sensor is not present on every Frame model. The option list is
+    read from the item's valid_values rather than hard-coded, so it follows
+    whatever this firmware actually supports.
+    """
+
+    _attr_has_entity_name = True
+    _attr_should_poll = True
+    _setting_name = ""  # overridden by subclass
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        art_api: SamsungTVAsyncArt,
+        device_name: str,
+        device_unique_id: str,
+        options: list[str],
+        current: str | None,
+    ) -> None:
+        self.hass = hass
+        self._entry = entry
+        self._art_api = art_api
+        self._device_name = device_name
+        self._device_unique_id = device_unique_id
+        self._attr_options = options
+        self._attr_current_option = current
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._device_unique_id)},
+            name=self._device_name,
+        )
+
+    async def _async_set(self, option: str) -> None:
+        """To be implemented by subclass: call the matching art_api setter."""
+        raise NotImplementedError
+
+    async def async_select_option(self, option: str) -> None:
+        try:
+            await self._async_set(option)
+            self._attr_current_option = option
+            self.async_write_ha_state()
+        except Exception as ex:
+            raise HomeAssistantError(
+                f"Failed to set {self._setting_name}: {ex}"
+            ) from ex
+
+    async def async_update(self) -> None:
+        try:
+            item = await self._art_api.get_artmode_settings(self._setting_name)
+            if item and isinstance(item, dict):
+                value = item.get("value")
+                if isinstance(value, str) and value in self._attr_options:
+                    self._attr_current_option = value
+        except Exception as ex:
+            _LOGGER.debug("Could not refresh %s: %s", self._setting_name, ex)
+
+
+class SamsungTVArtMotionSensitivitySelect(SamsungTVArtMotionSelectBase):
+    """Select entity for Art Mode motion sensitivity."""
+
+    _attr_icon = "mdi:motion-sensor"
+    _setting_name = "motion_sensitivity"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._attr_unique_id = f"{self._device_unique_id}_art_motion_sensitivity"
+        self._attr_name = "Motion Sensitivity"
+
+    async def _async_set(self, option: str) -> None:
+        await self._art_api.set_motion_sensitivity(option)
+
+
+class SamsungTVArtMotionTimerSelect(SamsungTVArtMotionSelectBase):
+    """Select entity for Art Mode motion timer."""
+
+    _attr_icon = "mdi:timer-outline"
+    _setting_name = "motion_timer"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._attr_unique_id = f"{self._device_unique_id}_art_motion_timer"
+        self._attr_name = "Motion Timer"
+
+    async def _async_set(self, option: str) -> None:
+        await self._art_api.set_motion_timer(option)
 
 
 # ══════════════════════════════════════════════════════════════════════════
