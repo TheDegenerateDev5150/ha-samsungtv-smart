@@ -140,6 +140,12 @@ async def async_setup_entry(
 
         # Create the coordinator
         coordinator = FrameArtCoordinator(hass, art_api, entry)
+        # Refresh immediately on artwork/matte/slideshow/favorite/rotation
+        # broadcasts instead of waiting up to SCAN_INTERVAL for the change
+        # to be picked up by the next poll.
+        art_api.register_art_content_callback(
+            lambda: hass.async_create_task(coordinator.async_request_refresh())
+        )
 
         # Add Frame Art sensor
         entities.append(
