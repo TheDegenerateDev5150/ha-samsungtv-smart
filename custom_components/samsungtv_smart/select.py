@@ -1,4 +1,4 @@
-"""Samsung TV Smart - Select entities (matte type/color + picture mode)."""
+"""Samsung TV Smart - Select entities."""
 
 from __future__ import annotations
 
@@ -10,16 +10,25 @@ from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_ID, CONF_NAME, CONF_PORT, CONF_TOKEN
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api.art import SamsungTVAsyncArt
+from .api.ipcontrol import (
+    COLOR_TONE_OPTIONS,
+    SamsungIPControl,
+    SamsungIPControlAuthError,
+    SamsungIPControlError,
+)
 from .const import (
     AUTH_METHOD_OAUTH,
     CONF_API_KEY,
     CONF_AUTH_METHOD,
     CONF_DEVICE_ID,
+    CONF_ENABLE_IP_CONTROL,
+    CONF_IP_CONTROL_TOKEN,
     CONF_IS_FRAME_TV,
     CONF_OAUTH_TOKEN,
     CONF_WS_NAME,
@@ -29,6 +38,7 @@ from .const import (
     DOMAIN,
     WS_PREFIX,
 )
+from .token_notify import METHOD_IP_CONTROL, clear_token_problem, notify_token_problem
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,6 +48,13 @@ _MAX_RETRIES = 10  # give up after 5 minutes
 
 # SmartThings REST API
 _API_DEVICES = "https://api.smartthings.com/v1/devices"
+
+
+def _ip_control_active(entry: ConfigEntry) -> bool:
+    """True when IP Control is paired AND enabled in the options."""
+    return bool(entry.data.get(CONF_IP_CONTROL_TOKEN)) and entry.options.get(
+        CONF_ENABLE_IP_CONTROL, True
+    )
 
 
 async def async_setup_entry(
@@ -53,6 +70,17 @@ async def async_setup_entry(
     ws_name = config.get(CONF_WS_NAME, "HomeAssistant")
     device_unique_id = config.get(CONF_ID, entry.entry_id)
     device_name = config.get(CONF_NAME) or entry.title or host
+
+    if _ip_control_active(entry):
+        async_add_entities(
+            [
+                SamsungTVIPControlColorToneSelect(
+                    hass, entry, host, device_name, device_unique_id
+                )
+            ],
+            True,
+        )
+        _LOGGER.debug("IP Control color tone select created for %s", device_name)
 
     session = async_get_clientsession(hass)
 
@@ -244,6 +272,139 @@ async def _load_picture_mode_options(
     _LOGGER.warning(
         "Could not populate picture mode options after %d attempts", _MAX_RETRIES
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# IP Control Color Tone
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class SamsungTVIPControlColorToneSelect(SelectEntity):
+    """Select entity for the IP Control picture color tone."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:palette-swatch"
+    _attr_should_poll = True
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        host: str,
+        device_name: str,
+        device_unique_id: str,
+    ) -> None:
+        """Initialize the IP Control color tone select."""
+        self.hass = hass
+        self._entry_id = entry.entry_id
+        self._host = host
+        self._device_name = device_name
+        self._device_unique_id = device_unique_id
+        self._ip_control: SamsungIPControl | None = None
+        self._ip_control_token: str | None = None
+        self._attr_unique_id = f"{device_unique_id}_ip_control_color_tone"
+        self._attr_name = "Color Tone"
+        self._attr_options = list(COLOR_TONE_OPTIONS)
+        self._attr_current_option: str | None = None
+        self._attr_available = False
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Link this entity to the TV device."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._device_unique_id)},
+            name=self._device_name,
+        )
+
+    @property
+    def available(self) -> bool:
+        """Available only while IP Control is paired, enabled, and reachable."""
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        return bool(entry and _ip_control_active(entry) and self._attr_available)
+
+    def _device_title(self) -> str:
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        return entry.title if entry else (self._device_name or "this Samsung TV")
+
+    def _get_ip_control(self) -> SamsungIPControl | None:
+        """Return a live IP Control client if paired AND enabled."""
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None or not _ip_control_active(entry):
+            self._ip_control = None
+            self._ip_control_token = None
+            return None
+        token = entry.data.get(CONF_IP_CONTROL_TOKEN)
+        if self._ip_control is None or self._ip_control_token != token:
+            self._ip_control = SamsungIPControl(self.hass, self._host, token=token)
+            self._ip_control_token = token
+        return self._ip_control
+
+    async def async_select_option(self, option: str) -> None:
+        """Set picture color tone through IP Control."""
+        if option not in COLOR_TONE_OPTIONS:
+            raise HomeAssistantError(
+                f"Color tone must be one of {', '.join(COLOR_TONE_OPTIONS)}."
+            )
+
+        client = self._get_ip_control()
+        if client is None:
+            raise HomeAssistantError(
+                "IP Control is not paired or is disabled for this TV."
+            )
+
+        try:
+            self._attr_current_option = await client.async_set_color_tone(option)
+            self._attr_available = True
+        except SamsungIPControlAuthError as ex:
+            self._mark_unavailable()
+            notify_token_problem(
+                self.hass, self._entry_id, METHOD_IP_CONTROL, self._device_title()
+            )
+            raise HomeAssistantError(
+                f"IP Control token rejected while setting color tone: {ex}"
+            ) from ex
+        except SamsungIPControlError as ex:
+            self._mark_unavailable()
+            raise HomeAssistantError(
+                f"Failed to set color tone via IP Control: {ex}"
+            ) from ex
+
+        clear_token_problem(self.hass, self._entry_id, METHOD_IP_CONTROL)
+        self.async_write_ha_state()
+
+    async def async_update(self) -> None:
+        """Read current picture color tone from IP Control."""
+        client = self._get_ip_control()
+        if client is None:
+            self._mark_unavailable()
+            return
+
+        try:
+            self._attr_current_option = await client.async_get_color_tone()
+            self._attr_available = True
+        except SamsungIPControlAuthError as ex:
+            _LOGGER.warning(
+                "IP Control color tone read for %s: token rejected (%s) — "
+                "re-pair via the integration options",
+                self._host,
+                ex,
+            )
+            self._mark_unavailable()
+            notify_token_problem(
+                self.hass, self._entry_id, METHOD_IP_CONTROL, self._device_title()
+            )
+        except SamsungIPControlError as ex:
+            _LOGGER.debug(
+                "Could not refresh IP Control color tone for %s: %s", self._host, ex
+            )
+            self._mark_unavailable()
+        else:
+            clear_token_problem(self.hass, self._entry_id, METHOD_IP_CONTROL)
+
+    def _mark_unavailable(self) -> None:
+        """Expose no selected color tone until a live IP Control read succeeds."""
+        self._attr_available = False
+        self._attr_current_option = None
 
 
 # ══════════════════════════════════════════════════════════════════════════

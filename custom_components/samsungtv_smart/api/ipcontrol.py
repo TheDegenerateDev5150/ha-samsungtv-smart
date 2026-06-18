@@ -39,6 +39,7 @@ _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_IP_CONTROL_PORT = 1516
 JSONRPC_VERSION = "2.0"
+COLOR_TONE_OPTIONS = ("Cool", "Standard", "Warm1", "Warm2")
 
 CMD_TIMEOUT = 5  # seconds for normal commands
 PAIR_TIMEOUT = 30  # seconds: pairing waits for the on-screen acceptance
@@ -246,6 +247,30 @@ class SamsungIPControl:
             raise SamsungIPControlError(
                 f"invalid backlight response: {result!r}"
             ) from ex
+
+    async def async_get_color_tone(self) -> str:
+        """Return the current picture color tone."""
+        result = await self._async_request("colorToneControl")
+        value = result.get("colorTone")
+        if not isinstance(value, str):
+            raise SamsungIPControlError(f"no colorTone in response: {result!r}")
+        if value not in COLOR_TONE_OPTIONS:
+            raise SamsungIPControlError(f"unexpected colorTone response: {result!r}")
+        return value
+
+    async def async_set_color_tone(self, value: str) -> str:
+        """Set and return the picture color tone."""
+        if value not in COLOR_TONE_OPTIONS:
+            raise SamsungIPControlError(
+                f"colorTone must be one of {', '.join(COLOR_TONE_OPTIONS)}"
+            )
+        result = await self._async_request("colorToneControl", {"colorTone": value})
+        response_value = result.get("colorTone", value)
+        if not isinstance(response_value, str):
+            raise SamsungIPControlError(f"invalid colorTone response: {result!r}")
+        if response_value not in COLOR_TONE_OPTIONS:
+            raise SamsungIPControlError(f"unexpected colorTone response: {result!r}")
+        return response_value
 
     # -- transport -----------------------------------------------------------
 
