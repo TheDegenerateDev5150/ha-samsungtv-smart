@@ -1419,6 +1419,34 @@ class SamsungTVAsyncArt:
             self._invalidate_artmode_settings_cache()
         return data is not None
 
+    async def set_motion_sensitivity(self, value: str) -> bool:
+        """Set Art Mode motion sensitivity.
+
+        Only supported on Frame models with a motion sensor (reported by
+        `get_artmode_settings("motion_sensitivity")`). No dedicated get
+        request exists; read the current value back via get_artmode_settings.
+        """
+        data = await self._send_art_request(
+            {"request": "set_motion_sensitivity", "value": value}
+        )
+        if data is not None:
+            self._invalidate_artmode_settings_cache()
+        return data is not None
+
+    async def set_motion_timer(self, value: str) -> bool:
+        """Set Art Mode motion timer.
+
+        Only supported on Frame models that report
+        `get_artmode_settings("motion_timer")`. No dedicated get request
+        exists; read the current value back via get_artmode_settings.
+        """
+        data = await self._send_art_request(
+            {"request": "set_motion_timer", "value": value}
+        )
+        if data is not None:
+            self._invalidate_artmode_settings_cache()
+        return data is not None
+
     async def get_auto_rotation_status(self) -> dict | None:
         """Get auto rotation settings."""
         return await self._send_art_request({"request": "get_auto_rotation_status"})
