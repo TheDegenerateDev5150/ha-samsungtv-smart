@@ -31,6 +31,14 @@ import aiohttp
 
 _LOGGER = logging.getLogger(__name__)
 
+
+class _DeviceLoggerAdapter(logging.LoggerAdapter):
+    """Prefix every log line with the TV's host so multi-TV logs can be told apart."""
+
+    def process(self, msg, kwargs):
+        return f"[{self.extra['host']}] {msg}", kwargs
+
+
 ART_ENDPOINT = "com.samsung.art-app"
 D2D_SERVICE_MESSAGE_EVENT = "d2d_service_message"
 MS_CHANNEL_CONNECT_EVENT = "ms.channel.connect"
@@ -68,6 +76,7 @@ class SamsungTVAsyncArt:
     ) -> None:
         """Initialize the Art API."""
         self._host = host
+        self._log = _DeviceLoggerAdapter(_LOGGER, {"host": host})
         self._port = port
         self._token = token
         self._external_session = session
@@ -173,7 +182,7 @@ class SamsungTVAsyncArt:
             try:
                 self._art_event_callback()
             except Exception:  # noqa: BLE001 - callback must not break the loop
-                _LOGGER.debug("Art API: art-event callback raised", exc_info=True)
+                self._log.debug("Art API: art-event callback raised", exc_info=True)
 
     @property
     def _ws_url(self) -> str:
@@ -213,7 +222,9 @@ class SamsungTVAsyncArt:
             if self._ws and not self._ws.closed and self._connected:
                 return True
             if self._ws and not self._connected:
-                _LOGGER.debug("Art API: Stale WebSocket reference detected, resetting")
+                self._log.debug(
+                    "Art API: Stale WebSocket reference detected, resetting"
+                )
                 try:
                     if not self._ws.closed:
                         await self._ws.close()
@@ -228,13 +239,13 @@ class SamsungTVAsyncArt:
             if self._backoff_until is not None:
                 if time.time() < self._backoff_until:
                     remaining = int(self._backoff_until - time.time())
-                    _LOGGER.debug(
+                    self._log.debug(
                         "Art API: In backoff period, skipping connection attempt (%ds remaining)",
                         remaining,
                     )
                     return False
                 else:
-                    _LOGGER.info(
+                    self._log.info(
                         "Art API: Backoff period expired, resuming connection attempts"
                     )
                     self._backoff_until = None
@@ -243,7 +254,7 @@ class SamsungTVAsyncArt:
             # Rate limit connection attempts (min 5 seconds between attempts)
             time_since_last = time.time() - self._last_connection_attempt
             if time_since_last < 5:
-                _LOGGER.debug(
+                self._log.debug(
                     "Art API: Too soon since last attempt (%.1fs ago), waiting",
                     time_since_last,
                 )
@@ -255,7 +266,7 @@ class SamsungTVAsyncArt:
                 session = await self._get_session()
                 ssl_context = _get_ssl_context() if self._port == 8002 else None
 
-                _LOGGER.debug("Art API: Connecting to %s", self._ws_url)
+                self._log.debug("Art API: Connecting to %s", self._ws_url)
 
                 self._ws = await session.ws_connect(
                     self._ws_url,
@@ -274,7 +285,7 @@ class SamsungTVAsyncArt:
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             response = json.loads(msg.data)
                             event = response.get("event", "")
-                            _LOGGER.debug("Art API: Connection event: %s", event)
+                            self._log.debug("Art API: Connection event: %s", event)
 
                             if event == MS_CHANNEL_READY_EVENT:
                                 # Perfect! Got ready event
@@ -282,7 +293,7 @@ class SamsungTVAsyncArt:
                                 break
                             elif event == MS_CHANNEL_CONNECT_EVENT:
                                 # Frame TV 2024 often only sends connect, accept it!
-                                _LOGGER.debug(
+                                self._log.debug(
                                     "Art API: Accepting connect event (Frame TV 2024 compatible)"
                                 )
                                 connected = True
@@ -296,14 +307,14 @@ class SamsungTVAsyncArt:
                         break
 
                 if not connected:
-                    _LOGGER.warning(
+                    self._log.warning(
                         "Art API: Did not receive connect/ready event, connection may not be stable"
                     )
                     await self.close()
 
                     # Track connection failure
                     self._connection_failures += 1
-                    _LOGGER.warning(
+                    self._log.warning(
                         "Art API: Connection failure %d/%d",
                         self._connection_failures,
                         self._max_connection_failures,
@@ -322,7 +333,7 @@ class SamsungTVAsyncArt:
                             30,
                         )
                         self._backoff_until = time.time() + (backoff_minutes * 60)
-                        _LOGGER.warning(
+                        self._log.warning(
                             "Art API: Too many connection failures (%d), entering %d minute backoff period",
                             self._connection_failures,
                             backoff_minutes,
@@ -332,7 +343,7 @@ class SamsungTVAsyncArt:
 
                 # Connection successful! Reset failure counter
                 if self._connection_failures > 0:
-                    _LOGGER.info(
+                    self._log.info(
                         "Art API: Connection successful, resetting failure counter"
                     )
                     self._connection_failures = 0
@@ -342,16 +353,16 @@ class SamsungTVAsyncArt:
                 # Start the receive loop
                 self._recv_task = asyncio.create_task(self._receive_loop())
 
-                _LOGGER.debug("Art API: Connected and listening")
+                self._log.debug("Art API: Connected and listening")
                 return True
 
             except Exception as ex:
-                _LOGGER.warning("Art API: Connection failed: %s", ex)
+                self._log.warning("Art API: Connection failed: %s", ex)
                 await self.close()
 
                 # Track connection failure
                 self._connection_failures += 1
-                _LOGGER.warning(
+                self._log.warning(
                     "Art API: Connection failure %d/%d",
                     self._connection_failures,
                     self._max_connection_failures,
@@ -369,7 +380,7 @@ class SamsungTVAsyncArt:
                         30,
                     )
                     self._backoff_until = time.time() + (backoff_minutes * 60)
-                    _LOGGER.warning(
+                    self._log.warning(
                         "Art API: Too many connection failures (%d), entering %d minute backoff period",
                         self._connection_failures,
                         backoff_minutes,
@@ -436,12 +447,12 @@ class SamsungTVAsyncArt:
                         event = response.get("event", "")
                         await self._process_event(event, response)
                     except json.JSONDecodeError:
-                        _LOGGER.debug("Art API: Failed to decode message")
+                        self._log.debug("Art API: Failed to decode message")
                 elif msg.type == aiohttp.WSMsgType.ERROR:
-                    _LOGGER.debug("Art API: WebSocket error")
+                    self._log.debug("Art API: WebSocket error")
                     break
                 elif msg.type == aiohttp.WSMsgType.CLOSED:
-                    _LOGGER.debug("Art API: WebSocket closed")
+                    self._log.debug("Art API: WebSocket closed")
                     break
         except asyncio.CancelledError:
             # Cancellation is the normal path used by close(), which is about
@@ -451,7 +462,7 @@ class SamsungTVAsyncArt:
             cancelled = True
             raise
         except Exception as ex:
-            _LOGGER.debug("Art API: Receive loop error: %s", ex)
+            self._log.debug("Art API: Receive loop error: %s", ex)
         finally:
             if not cancelled:
                 # Receive loop is exiting on its own (TV standby, network
@@ -471,7 +482,7 @@ class SamsungTVAsyncArt:
 
     async def _process_event(self, event: str, response: dict) -> None:
         """Process incoming WebSocket events."""
-        _LOGGER.debug("Art API: Received event '%s'", event)
+        self._log.debug("Art API: Received event '%s'", event)
 
         if event != D2D_SERVICE_MESSAGE_EVENT:
             return
@@ -479,7 +490,7 @@ class SamsungTVAsyncArt:
         try:
             data_str = response.get("data", "{}")
             data = json.loads(data_str) if isinstance(data_str, str) else data_str
-            _LOGGER.debug("Art API: Event data: %s", data)
+            self._log.debug("Art API: Event data: %s", data)
         except json.JSONDecodeError:
             return
 
@@ -508,11 +519,11 @@ class SamsungTVAsyncArt:
         # Check for error
         if sub_event == "error":
             error_code = data.get("error_code", "unknown")
-            _LOGGER.debug("Art API: Error event: %s", error_code)
+            self._log.debug("Art API: Error event: %s", error_code)
 
         # Resolve pending requests
         request_id = data.get("request_id", data.get("id"))
-        _LOGGER.debug(
+        self._log.debug(
             "Art API: Looking for request_id='%s' or sub_event='%s' in pending: %s",
             request_id,
             sub_event,
@@ -523,7 +534,7 @@ class SamsungTVAsyncArt:
         if request_id and request_id in self._pending_requests:
             future = self._pending_requests.get(request_id)
             if future and not future.done():
-                _LOGGER.debug("Art API: Matched by request_id '%s'", request_id)
+                self._log.debug("Art API: Matched by request_id '%s'", request_id)
                 future.set_result(data)
                 return
 
@@ -531,7 +542,7 @@ class SamsungTVAsyncArt:
         if sub_event and sub_event in self._pending_requests:
             future = self._pending_requests.get(sub_event)
             if future and not future.done():
-                _LOGGER.debug("Art API: Matched by sub_event '%s'", sub_event)
+                self._log.debug("Art API: Matched by sub_event '%s'", sub_event)
                 future.set_result(data)
 
     async def _wait_for_response(
@@ -552,7 +563,7 @@ class SamsungTVAsyncArt:
             )
             return result
         except asyncio.TimeoutError:
-            _LOGGER.debug("Art API: Timeout waiting for '%s'", request_key)
+            self._log.debug("Art API: Timeout waiting for '%s'", request_key)
             return None
         except asyncio.CancelledError:
             return None
@@ -569,15 +580,15 @@ class SamsungTVAsyncArt:
         # Ensure connected - also reconnect if WebSocket was closed by TV
         if not self._connected or not self._ws or self._ws.closed:
             if self._ws and self._ws.closed:
-                _LOGGER.debug("Art API: WebSocket was closed, reconnecting...")
+                self._log.debug("Art API: WebSocket was closed, reconnecting...")
                 self._connected = False  # Reset flag to allow reconnection
             if not await self.open():
-                _LOGGER.debug("Art API: Failed to connect/reconnect")
+                self._log.debug("Art API: Failed to connect/reconnect")
                 return None
 
         # Double-check connection after open()
         if not self._ws or self._ws.closed:
-            _LOGGER.debug("Art API: WebSocket still not connected after open()")
+            self._log.debug("Art API: WebSocket still not connected after open()")
             return None
 
         # Set up request IDs (both old and new API style)
@@ -602,7 +613,7 @@ class SamsungTVAsyncArt:
 
         try:
             await self._ws.send_json(command)
-            _LOGGER.debug(
+            self._log.debug(
                 "Art API: Sent request '%s'", request_data.get("request", "unknown")
             )
 
@@ -610,7 +621,7 @@ class SamsungTVAsyncArt:
             return await self._wait_for_response(request_key, timeout)
 
         except Exception as ex:
-            _LOGGER.debug("Art API: Error sending request: %s", ex)
+            self._log.debug("Art API: Error sending request: %s", ex)
             self._pending_requests.pop(request_key, None)
             # Mark as disconnected to force reconnection on next request
             self._connected = False
@@ -630,7 +641,7 @@ class SamsungTVAsyncArt:
                         device = data.get("device", {})
                         return device.get("FrameTVSupport") == "true"
         except Exception as ex:
-            _LOGGER.debug("Art API: Error checking support: %s", ex)
+            self._log.debug("Art API: Error checking support: %s", ex)
         return False
 
     async def on(self) -> bool:
@@ -690,7 +701,9 @@ class SamsungTVAsyncArt:
 
     async def get_thumbnail_list(self, content_id_list: list[dict]) -> dict[str, bytes]:
         """Get thumbnails for a list of content IDs (multi-download)."""
-        _LOGGER.debug("Art API: Requesting get_thumbnail_list for %s", content_id_list)
+        self._log.debug(
+            "Art API: Requesting get_thumbnail_list for %s", content_id_list
+        )
 
         data = await self._send_art_request(
             {
@@ -706,12 +719,12 @@ class SamsungTVAsyncArt:
         )
 
         if not data:
-            _LOGGER.debug("Art API: No response for get_thumbnail_list")
+            self._log.debug("Art API: No response for get_thumbnail_list")
             return {}
 
         # Si la TV repond directement par un event d'erreur
         if data.get("event") == "error":
-            _LOGGER.debug(
+            self._log.debug(
                 "Art API: get_thumbnail_list returned error: %s",
                 data.get("error_code"),
             )
@@ -719,7 +732,7 @@ class SamsungTVAsyncArt:
 
         try:
             conn_info = data.get("conn_info", "{}")
-            _LOGGER.debug("Art API: get_thumbnail_list conn_info raw: %s", conn_info)
+            self._log.debug("Art API: get_thumbnail_list conn_info raw: %s", conn_info)
 
             if isinstance(conn_info, str):
                 conn_info = json.loads(conn_info)
@@ -729,7 +742,7 @@ class SamsungTVAsyncArt:
             secured = conn_info.get("secured", False)
 
             if not ip or not port:
-                _LOGGER.debug(
+                self._log.debug(
                     "Art API: Invalid conn_info for thumbnail_list - ip=%s, port=%s",
                     ip,
                     port,
@@ -737,7 +750,7 @@ class SamsungTVAsyncArt:
                 return {}
 
             ssl_context = _get_ssl_context() if secured else None
-            _LOGGER.debug(
+            self._log.debug(
                 "Art API: Opening thumbnail socket %s:%s (ssl=%s)",
                 ip,
                 port,
@@ -748,7 +761,7 @@ class SamsungTVAsyncArt:
                 asyncio.open_connection(ip, int(port), ssl=ssl_context),
                 timeout=10,
             )
-            _LOGGER.debug("Art API: Connected to thumbnail socket")
+            self._log.debug("Art API: Connected to thumbnail socket")
 
             try:
                 thumbnail_data_dict: dict[str, bytes] = {}
@@ -756,13 +769,13 @@ class SamsungTVAsyncArt:
                 current_thumb = -1
 
                 while current_thumb + 1 < total_num_thumbnails:
-                    _LOGGER.debug("Art API: Reading thumbnail header.")
+                    self._log.debug("Art API: Reading thumbnail header.")
                     header_len = int.from_bytes(await reader.readexactly(4), "big")
-                    _LOGGER.debug("Art API: Header length: %d", header_len)
+                    self._log.debug("Art API: Header length: %d", header_len)
 
                     header_raw = await reader.readexactly(header_len)
                     header = json.loads(header_raw)
-                    _LOGGER.debug("Art API: Thumbnail header: %s", header)
+                    self._log.debug("Art API: Thumbnail header: %s", header)
 
                     thumbnail_data_len = int(header["fileLength"])
                     current_thumb = int(header["num"])
@@ -772,7 +785,7 @@ class SamsungTVAsyncArt:
                         header.get("fileType", "jpg"),
                     )
 
-                    _LOGGER.debug(
+                    self._log.debug(
                         "Art API: Reading %d bytes for thumbnail %d/%d (%s)",
                         thumbnail_data_len,
                         current_thumb + 1,
@@ -781,7 +794,7 @@ class SamsungTVAsyncArt:
                     )
                     thumbnail_data = await reader.readexactly(thumbnail_data_len)
                     thumbnail_data_dict[filename] = thumbnail_data
-                    _LOGGER.debug(
+                    self._log.debug(
                         "Art API: Got thumbnail %s (%d bytes)",
                         filename,
                         len(thumbnail_data),
@@ -792,13 +805,13 @@ class SamsungTVAsyncArt:
             finally:
                 writer.close()
                 await writer.wait_closed()
-                _LOGGER.debug("Art API: Thumbnail socket closed")
+                self._log.debug("Art API: Thumbnail socket closed")
 
         except asyncio.TimeoutError:
-            _LOGGER.debug("Art API: Timeout connecting to thumbnail socket")
+            self._log.debug("Art API: Timeout connecting to thumbnail socket")
             return {}
         except asyncio.IncompleteReadError as ex:
-            _LOGGER.debug(
+            self._log.debug(
                 "Art API: Incomplete read in get_thumbnail_list "
                 "(%d bytes read, %d expected)",
                 len(ex.partial or b""),
@@ -806,14 +819,14 @@ class SamsungTVAsyncArt:
             )
             return {}
         except Exception as ex:
-            _LOGGER.debug(
+            self._log.debug(
                 "Art API: Error getting thumbnail_list: %s (type: %s)",
                 ex,
                 type(ex).__name__,
             )
             import traceback
 
-            _LOGGER.debug("Art API: Traceback: %s", traceback.format_exc())
+            self._log.debug("Art API: Traceback: %s", traceback.format_exc())
             return {}
 
     async def get_thumbnail(self, content_id: str) -> bytes | None:
@@ -825,13 +838,13 @@ class SamsungTVAsyncArt:
         - False (2024-2025 Tizen): skip get_thumbnail_list entirely and go straight to
           get_thumbnail, saving one useless WebSocket round-trip per image.
         """
-        _LOGGER.debug("Art API: Getting thumbnail for %s", content_id)
+        self._log.debug("Art API: Getting thumbnail for %s", content_id)
 
         # For SAM-S (Art Store) images, warm up the TV by calling get_content_list first
         # This seems to help the TV prepare the thumbnail data
         is_artstore = content_id.startswith("SAM-")
         if is_artstore:
-            _LOGGER.debug(
+            self._log.debug(
                 "Art API: Art Store image detected, warming up with get_content_list"
             )
             await self._send_art_request(
@@ -849,7 +862,7 @@ class SamsungTVAsyncArt:
         # on most TV models. Only the direct socket fallback (get_thumbnail) fails for
         # SAM-* images. Never set the flag to False: a startup error (TV not ready)
         # must not permanently disable the fast path for the whole session.
-        _LOGGER.debug(
+        self._log.debug(
             "Art API: Trying get_thumbnail_list for %s (capability=%s)",
             content_id,
             self._supports_thumbnail_list,
@@ -857,14 +870,14 @@ class SamsungTVAsyncArt:
         result = await self._get_thumbnail_via_list(content_id)
         if result:
             if self._supports_thumbnail_list is None:
-                _LOGGER.info(
+                self._log.info(
                     "Art API: TV supports get_thumbnail_list — "
                     "fast path active for this session"
                 )
                 self._supports_thumbnail_list = True
             return result
 
-        _LOGGER.debug("Art API: Using get_thumbnail direct for %s", content_id)
+        self._log.debug("Art API: Using get_thumbnail direct for %s", content_id)
 
         # Send the request and get connection info
         data = await self._send_art_request(
@@ -881,17 +894,17 @@ class SamsungTVAsyncArt:
         )
 
         if not data:
-            _LOGGER.debug("Art API: No response for get_thumbnail either")
+            self._log.debug("Art API: No response for get_thumbnail either")
             return None
 
         # Check for error
         if data.get("event") == "error":
-            _LOGGER.debug("Art API: get_thumbnail error: %s", data.get("error_code"))
+            self._log.debug("Art API: get_thumbnail error: %s", data.get("error_code"))
             return None
 
         try:
             conn_info = data.get("conn_info", "{}")
-            _LOGGER.debug("Art API: get_thumbnail conn_info: %s", conn_info)
+            self._log.debug("Art API: get_thumbnail conn_info: %s", conn_info)
 
             if isinstance(conn_info, str):
                 conn_info = json.loads(conn_info)
@@ -900,10 +913,10 @@ class SamsungTVAsyncArt:
             port = conn_info.get("port")
 
             if not ip or not port:
-                _LOGGER.debug("Art API: Invalid conn_info for thumbnail")
+                self._log.debug("Art API: Invalid conn_info for thumbnail")
                 return None
 
-            _LOGGER.debug("Art API: Connecting to %s:%s for thumbnail", ip, port)
+            self._log.debug("Art API: Connecting to %s:%s for thumbnail", ip, port)
 
             # Connect without SSL - reference implementation doesn't use SSL for thumbnail socket
             reader, writer = await asyncio.wait_for(
@@ -912,18 +925,20 @@ class SamsungTVAsyncArt:
             )
 
             try:
-                _LOGGER.debug("Art API: Reading thumbnail header...")
+                self._log.debug("Art API: Reading thumbnail header...")
                 header_len = int.from_bytes(await reader.readexactly(4), "big")
-                _LOGGER.debug("Art API: Header length: %d", header_len)
+                self._log.debug("Art API: Header length: %d", header_len)
                 header = json.loads(await reader.readexactly(header_len))
-                _LOGGER.debug("Art API: Thumbnail header: %s", header)
+                self._log.debug("Art API: Thumbnail header: %s", header)
 
                 thumbnail_len = int(header["fileLength"])
-                _LOGGER.debug(
+                self._log.debug(
                     "Art API: Reading %d bytes of thumbnail data...", thumbnail_len
                 )
                 thumbnail_data = await reader.readexactly(thumbnail_len)
-                _LOGGER.debug("Art API: Got thumbnail (%d bytes)", len(thumbnail_data))
+                self._log.debug(
+                    "Art API: Got thumbnail (%d bytes)", len(thumbnail_data)
+                )
 
                 return thumbnail_data
             finally:
@@ -931,10 +946,10 @@ class SamsungTVAsyncArt:
                 await writer.wait_closed()
 
         except asyncio.TimeoutError:
-            _LOGGER.debug("Art API: Timeout getting thumbnail")
+            self._log.debug("Art API: Timeout getting thumbnail")
             return None
         except Exception as ex:
-            _LOGGER.debug(
+            self._log.debug(
                 "Art API: Error getting thumbnail: %s (type: %s)", ex, type(ex).__name__
             )
             return None
@@ -945,7 +960,7 @@ class SamsungTVAsyncArt:
         retry_count: int = 0,
     ) -> bytes | None:
         """Get thumbnail for a single content via get_thumbnail_list."""
-        _LOGGER.debug(
+        self._log.debug(
             "Art API: Trying get_thumbnail_list for %s (attempt %d)",
             content_id,
             retry_count + 1,
@@ -965,12 +980,12 @@ class SamsungTVAsyncArt:
         )
 
         if not data:
-            _LOGGER.debug("Art API: No response for get_thumbnail_list (single)")
+            self._log.debug("Art API: No response for get_thumbnail_list (single)")
             return None
 
         # Sur certains modeles, la TV repond directement "event: error" (code -1)
         if data.get("event") == "error":
-            _LOGGER.debug(
+            self._log.debug(
                 "Art API: get_thumbnail_list error for %s: %s",
                 content_id,
                 data.get("error_code"),
@@ -979,7 +994,7 @@ class SamsungTVAsyncArt:
 
         try:
             conn_info = data.get("conn_info", "{}")
-            _LOGGER.debug(
+            self._log.debug(
                 "Art API: get_thumbnail_list (single) conn_info: %s", conn_info
             )
 
@@ -991,11 +1006,11 @@ class SamsungTVAsyncArt:
             secured = conn_info.get("secured", False)
 
             if not ip or not port:
-                _LOGGER.debug("Art API: Invalid conn_info for %s", content_id)
+                self._log.debug("Art API: Invalid conn_info for %s", content_id)
                 return None
 
             ssl_context = _get_ssl_context() if secured else None
-            _LOGGER.debug(
+            self._log.debug(
                 "Art API: Opening connection for %s to %s:%s (ssl=%s)",
                 content_id,
                 ip,
@@ -1008,12 +1023,12 @@ class SamsungTVAsyncArt:
                     asyncio.open_connection(ip, int(port), ssl=ssl_context),
                     timeout=10,
                 )
-                _LOGGER.debug("Art API: Connected successfully for %s", content_id)
+                self._log.debug("Art API: Connected successfully for %s", content_id)
             except ConnectionResetError as ex:
-                _LOGGER.debug("Art API: Connection reset for %s: %s", content_id, ex)
+                self._log.debug("Art API: Connection reset for %s: %s", content_id, ex)
                 # Retry uniquement pour le Art Store (SAM-), comme discute
                 if content_id.startswith("SAM-") and retry_count < 2:
-                    _LOGGER.debug(
+                    self._log.debug(
                         "Art API: Art Store image %s, retrying after delay", content_id
                     )
                     await asyncio.sleep(0.5 * (retry_count + 1))
@@ -1023,26 +1038,26 @@ class SamsungTVAsyncArt:
                 return None
 
             try:
-                _LOGGER.debug("Art API: Reading thumbnail header for %s", content_id)
+                self._log.debug("Art API: Reading thumbnail header for %s", content_id)
                 header_len = int.from_bytes(await reader.readexactly(4), "big")
-                _LOGGER.debug(
+                self._log.debug(
                     "Art API: Header length for %s: %d", content_id, header_len
                 )
 
                 header_raw = await reader.readexactly(header_len)
                 header = json.loads(header_raw)
-                _LOGGER.debug(
+                self._log.debug(
                     "Art API: Thumbnail header for %s: %s", content_id, header
                 )
 
                 thumbnail_len = int(header["fileLength"])
-                _LOGGER.debug(
+                self._log.debug(
                     "Art API: Reading %d bytes of thumbnail data for %s",
                     thumbnail_len,
                     content_id,
                 )
                 thumbnail_data = await reader.readexactly(thumbnail_len)
-                _LOGGER.debug(
+                self._log.debug(
                     "Art API: Got thumbnail for %s (%d bytes)",
                     content_id,
                     len(thumbnail_data),
@@ -1051,7 +1066,7 @@ class SamsungTVAsyncArt:
                 return thumbnail_data
 
             except asyncio.IncompleteReadError as ex:
-                _LOGGER.debug(
+                self._log.debug(
                     "Art API: Incomplete read for %s: %d bytes read on %d expected",
                     content_id,
                     len(ex.partial or b""),
@@ -1059,7 +1074,7 @@ class SamsungTVAsyncArt:
                 )
                 # meme logique : petit retry pour les images SAM- si besoin
                 if content_id.startswith("SAM-") and retry_count < 2:
-                    _LOGGER.debug(
+                    self._log.debug(
                         "Art API: Art Store image %s, retrying after incomplete read",
                         content_id,
                     )
@@ -1072,10 +1087,12 @@ class SamsungTVAsyncArt:
             finally:
                 writer.close()
                 await writer.wait_closed()
-                _LOGGER.debug("Art API: Thumbnail connection closed for %s", content_id)
+                self._log.debug(
+                    "Art API: Thumbnail connection closed for %s", content_id
+                )
 
         except Exception as ex:
-            _LOGGER.debug(
+            self._log.debug(
                 "Art API: Error in _get_thumbnail_via_list for %s: %s (type: %s)",
                 content_id,
                 ex,
@@ -1131,7 +1148,7 @@ class SamsungTVAsyncArt:
         # return False — so the success path is unchanged.
         desired = mode == "on"
         if self.art_mode == desired:
-            _LOGGER.debug(
+            self._log.debug(
                 "Art API: set_artmode(%s) timed out, but an art_mode_changed "
                 "broadcast confirms state=%s; treating as success",
                 mode,
@@ -1233,7 +1250,7 @@ class SamsungTVAsyncArt:
             )
 
             if cache_fresh:
-                _LOGGER.debug(
+                self._log.debug(
                     "Art API: get_artmode_settings served from cache (age=%.2fs)",
                     now - self._artmode_settings_cache_ts,
                 )
@@ -1291,7 +1308,7 @@ class SamsungTVAsyncArt:
             )
             if data:
                 if self._supports_get_brightness is None:
-                    _LOGGER.debug(
+                    self._log.debug(
                         "Art API: TV supports direct get_brightness, "
                         "enabling fast path"
                     )
@@ -1302,7 +1319,7 @@ class SamsungTVAsyncArt:
                 # Connected but silent to this specific request => genuine
                 # "unsupported" signal. (A falsy result while NOT connected is a
                 # transport issue, not a capability answer — stay unknown.)
-                _LOGGER.info(
+                self._log.info(
                     "Art API: TV did not respond to get_brightness within 1 s; "
                     "falling back to get_artmode_settings for future polls"
                 )
@@ -1337,7 +1354,7 @@ class SamsungTVAsyncArt:
             )
             if data:
                 if self._supports_get_color_temperature is None:
-                    _LOGGER.debug(
+                    self._log.debug(
                         "Art API: TV supports direct get_color_temperature, "
                         "enabling fast path"
                     )
@@ -1345,7 +1362,7 @@ class SamsungTVAsyncArt:
                     self._learn_capability("color_temperature", True)
                 return data
             if self._supports_get_color_temperature is None and self._connected:
-                _LOGGER.info(
+                self._log.info(
                     "Art API: TV did not respond to get_color_temperature within "
                     "1 s; falling back to get_artmode_settings for future polls"
                 )
@@ -1436,7 +1453,7 @@ class SamsungTVAsyncArt:
             async with asyncio.timeout(timeout):
                 slideshow_ok = _is_usable(await self.get_slideshow_status())
         except (asyncio.TimeoutError, Exception) as ex:  # noqa: BLE001
-            _LOGGER.debug(
+            self._log.debug(
                 "Art API: detect_slideshow_api: get_slideshow_status probe failed: %s",
                 ex,
             )
@@ -1446,7 +1463,7 @@ class SamsungTVAsyncArt:
             async with asyncio.timeout(timeout):
                 auto_rotation_ok = _is_usable(await self.get_auto_rotation_status())
         except (asyncio.TimeoutError, Exception) as ex:  # noqa: BLE001
-            _LOGGER.debug(
+            self._log.debug(
                 "Art API: detect_slideshow_api: get_auto_rotation_status probe failed: %s",
                 ex,
             )
@@ -1468,10 +1485,10 @@ class SamsungTVAsyncArt:
         hass=None,
     ) -> str | None:
         """Upload a new image to the TV."""
-        _LOGGER.debug("Art API: Starting upload, file type: %s", type(file))
+        self._log.debug("Art API: Starting upload, file type: %s", type(file))
 
         if isinstance(file, str):
-            _LOGGER.debug("Art API: Loading file from path: %s", file)
+            self._log.debug("Art API: Loading file from path: %s", file)
             file_name, file_extension = os.path.splitext(file)
             file_type = file_extension[1:].lower()
             try:
@@ -1488,16 +1505,16 @@ class SamsungTVAsyncArt:
                         None, read_file, file
                     )
 
-                _LOGGER.debug("Art API: File loaded, size: %d bytes", len(file))
+                self._log.debug("Art API: File loaded, size: %d bytes", len(file))
             except Exception as ex:
-                _LOGGER.error("Art API: Failed to read file: %s", ex)
+                self._log.error("Art API: Failed to read file: %s", ex)
                 return None
 
         file_size = len(file)
         if file_type == "jpeg":
             file_type = "jpg"
 
-        _LOGGER.debug(
+        self._log.debug(
             "Art API: Upload - file_size=%d, file_type=%s, matte=%s",
             file_size,
             file_type,
@@ -1508,7 +1525,9 @@ class SamsungTVAsyncArt:
             date = datetime.now().strftime("%Y:%m:%d %H:%M:%S")
 
         request_id = self._get_uuid()
-        _LOGGER.debug("Art API: Sending send_image request, request_id=%s", request_id)
+        self._log.debug(
+            "Art API: Sending send_image request, request_id=%s", request_id
+        )
 
         data = await self._send_art_request(
             {
@@ -1529,27 +1548,27 @@ class SamsungTVAsyncArt:
             timeout=15,
         )
 
-        _LOGGER.debug("Art API: send_image response: %s", data)
+        self._log.debug("Art API: send_image response: %s", data)
 
         if not data:
-            _LOGGER.error("Art API: No response from send_image request")
+            self._log.error("Art API: No response from send_image request")
             return None
 
         if data.get("event") == "error":
-            _LOGGER.error("Art API: send_image error: %s", data.get("error_code"))
+            self._log.error("Art API: send_image error: %s", data.get("error_code"))
             return None
 
         try:
             conn_info = data.get("conn_info", "{}")
-            _LOGGER.debug("Art API: Upload conn_info (raw): %s", conn_info)
+            self._log.debug("Art API: Upload conn_info (raw): %s", conn_info)
 
             if isinstance(conn_info, str):
                 conn_info = json.loads(conn_info)
 
-            _LOGGER.debug("Art API: Upload conn_info (parsed): %s", conn_info)
+            self._log.debug("Art API: Upload conn_info (parsed): %s", conn_info)
 
             if not conn_info.get("ip") or not conn_info.get("port"):
-                _LOGGER.error("Art API: Invalid conn_info - missing ip or port")
+                self._log.error("Art API: Invalid conn_info - missing ip or port")
                 return None
 
             header = json.dumps(
@@ -1564,7 +1583,7 @@ class SamsungTVAsyncArt:
                 }
             )
 
-            _LOGGER.debug(
+            self._log.debug(
                 "Art API: Connecting to %s:%s for upload (secured=%s)",
                 conn_info["ip"],
                 conn_info["port"],
@@ -1582,46 +1601,46 @@ class SamsungTVAsyncArt:
                     ),
                     timeout=10,
                 )
-                _LOGGER.debug("Art API: Connected for upload")
+                self._log.debug("Art API: Connected for upload")
             except asyncio.TimeoutError:
-                _LOGGER.error("Art API: Timeout connecting for upload")
+                self._log.error("Art API: Timeout connecting for upload")
                 return None
             except Exception as ex:
-                _LOGGER.error("Art API: Failed to connect for upload: %s", ex)
+                self._log.error("Art API: Failed to connect for upload: %s", ex)
                 return None
 
             try:
-                _LOGGER.debug("Art API: Sending header (%d bytes)", len(header))
+                self._log.debug("Art API: Sending header (%d bytes)", len(header))
                 writer.write(len(header).to_bytes(4, "big"))
                 writer.write(header.encode("ascii"))
 
-                _LOGGER.debug("Art API: Sending file data (%d bytes)", file_size)
+                self._log.debug("Art API: Sending file data (%d bytes)", file_size)
                 writer.write(file)
                 await writer.drain()
-                _LOGGER.debug("Art API: Data sent successfully")
+                self._log.debug("Art API: Data sent successfully")
             finally:
                 writer.close()
                 await writer.wait_closed()
 
             # Wait for image_added event
-            _LOGGER.debug(
+            self._log.debug(
                 "Art API: Waiting for image_added event (timeout=%ds)", timeout
             )
             result = await self._wait_for_response("image_added", timeout=timeout)
 
             if result:
                 content_id = result.get("content_id")
-                _LOGGER.info("Art API: Upload successful, content_id=%s", content_id)
+                self._log.info("Art API: Upload successful, content_id=%s", content_id)
                 return content_id
             else:
-                _LOGGER.error("Art API: No image_added event received")
+                self._log.error("Art API: No image_added event received")
                 return None
 
         except Exception as ex:
-            _LOGGER.error("Art API: Error uploading image: %s", ex)
+            self._log.error("Art API: Error uploading image: %s", ex)
             import traceback
 
-            _LOGGER.debug("Art API: Upload traceback: %s", traceback.format_exc())
+            self._log.debug("Art API: Upload traceback: %s", traceback.format_exc())
             return None
 
     async def delete(self, content_id: str) -> bool:
