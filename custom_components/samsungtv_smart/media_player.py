@@ -3587,19 +3587,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 # Get all artworks
                 artwork_list = await self._art_api.available()
 
-            if not artwork_list:
-                result = {
-                    "service": "art_get_thumbnails_batch",
-                    "success": False,
-                    "message": "No artworks found",
-                    "downloaded": 0,
-                    "skipped": 0,
-                    "failed": 0,
-                }
-                self._store_art_result(result)
-                return result
-
-            # Build set of valid content IDs
+            # Build set of valid content IDs (empty set if the TV reports no
+            # artworks at all for this filter, e.g. after a factory reset wipes
+            # all personal photos -- that's a legitimate signal that every
+            # locally cached file for this category is now an orphan, not a
+            # reason to skip cleanup).
             valid_content_ids = {
                 artwork.get("content_id")
                 for artwork in artwork_list
@@ -3612,6 +3604,20 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 removed_files = await self._cleanup_orphan_thumbnails(
                     valid_content_ids, favorites_only, personal_only, category_id
                 )
+
+            if not artwork_list:
+                result = {
+                    "service": "art_get_thumbnails_batch",
+                    "success": False,
+                    "message": "No artworks found",
+                    "downloaded": 0,
+                    "skipped": 0,
+                    "failed": 0,
+                    "removed": len(removed_files),
+                    "removed_list": removed_files,
+                }
+                self._store_art_result(result)
+                return result
 
             # Download thumbnails with progress tracking
             downloaded = []
