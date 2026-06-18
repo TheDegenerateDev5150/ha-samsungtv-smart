@@ -125,37 +125,37 @@ Normal TV params:
 
 | method | set params | notes |
 | --- | --- | --- |
-| `powerControl` | `power` string | accepts `powerOn`, `powerOff`, `reboot`, `force-reboot` |
-| `volumeUpDnControl` | `control` string | expected `volumeUp` or `volumeDn`; helper accepts any key alias below |
-| `channelUpDnControl` | `control` string | expected `channelUp` or `channelDn`; helper accepts any key alias below |
-| `remoteKeyControl` | `remoteKey` string | helper maps alias to Samsung `KEY_*` and sends `pressAndRelease` |
-| `directVolumeControl` | `volume` int | direct absolute volume |
-| `muteControl` | `mute` string | `muteOn` or `muteOff`; `getTVStates` is the clean mute getter |
-| `soundModeControl` | `soundMode` string | value passed through |
-| `speakerSelectControl` | `speakerSelect` string | public values are `Internal`, `External`, `AudioOut/Optical`; helper rewrites to internal values |
-| `externalSpeakerControl` | `deviceName` string, `deviceId` string | builds internal JSON with `id`/name |
-| `inputSourceControl` | `inputSource` string | value passed through; TV is normalized internally |
-| `USBSourceControl` | `deviceName` string, `deviceId` string | helper sends `deviceId` as internal `additionalData` |
-| `directChannelControl` | `atvDtv` string, `airCable` string, `channelNum` string | converted internally to `channelType`, `RFtype`, `channelNumber` |
-| `pictureModeControl` | `pictureMode` string | value passed through |
-| `pictureSizeControl` | `pictureSize` string | value passed through |
-| `contrastControl` | `contrast` int | |
-| `brightnessControl` | `brightness` int | |
-| `sharpnessControl` | `sharpness` int | |
-| `colorControl` | `color` int | |
-| `tintControl` | `tint` int | |
-| `artModeControl` | `artMode` string | `artModeOn` is special: emits `/v2/powerValue` with `{"mode":"ambient"}` |
-| `directAccessControl` | `applicationName` string | mapped to app id; known built-ins include `youTube`, `netflix`, `amazon` |
-| `firstScreenAppControl` | `applicationName` string | no extra params queries first-screen apps/state |
-| `multiviewControl` | `multiviewMode` string | no extra params queries supported/current modes |
-| `displayRotatorControl` | `orientation` string | accepts `portrait` or `landscape`; result uses `Portrait`/`Landscape` |
 | `ambientControl` | `ambientId` string | wall/microLED map |
-| `getCabinetStates` | `groupId` int | wall/microLED map |
+| `artModeControl` | `artMode` string | `artModeOn` is special: emits `/v2/powerValue` with `{"mode":"ambient"}` |
+| `brightnessControl` | `brightness` int | |
+| `channelUpDnControl` | `control` string | expected `channelUp` or `channelDn`; helper accepts any key alias below |
+| `colorControl` | `color` int | |
+| `contrastControl` | `contrast` int | |
+| `directAccessControl` | `applicationName` string | mapped to app id; known built-ins include `youTube`, `netflix`, `amazon` |
+| `directChannelControl` | `atvDtv` string, `airCable` string, `channelNum` string | converted internally to `channelType`, `RFtype`, `channelNumber` |
+| `directVolumeControl` | `volume` int | direct absolute volume, `0..100` |
+| `displayRotatorControl` | `orientation` string | accepts `portrait` or `landscape`; result uses `Portrait`/`Landscape` |
+| `externalSpeakerControl` | `deviceName` string, `deviceId` string | builds internal JSON with `id`/name |
+| `firstScreenAppControl` | `applicationName` string | no extra params queries first-screen apps/state |
 | `getBoxStates` | none | get-only |
 | `getCabinetGroupIds` | none | get-only |
-| `getVideoStates` | none | get-only; result has `contrast`, `sharpness`, `brightness`, `color` |
-| `getTVStates` | none | get-only; result is postprocessed TV state, including source/mute fields when present |
+| `getCabinetStates` | `groupId` int | wall/microLED map |
 | `getDeviceInformation` | none | get-only; result includes `modelID`, `serialNumber`, `FWVersion` |
+| `getTVStates` | none | get-only; result is postprocessed TV state, including source/mute fields when present |
+| `getVideoStates` | none | get-only; result has `contrast`, `sharpness`, `brightness`, `color` |
+| `inputSourceControl` | `inputSource` string | value passed through; TV is normalized internally |
+| `multiviewControl` | `multiviewMode` string | no extra params queries supported/current modes |
+| `muteControl` | `mute` string | `muteOn` or `muteOff`; `getTVStates` is the clean mute getter |
+| `pictureModeControl` | `pictureMode` string | value passed through |
+| `pictureSizeControl` | `pictureSize` string | value passed through |
+| `powerControl` | `power` string | accepts `powerOn`, `powerOff`, `reboot`, `force-reboot` |
+| `remoteKeyControl` | `remoteKey` string | helper maps alias to Samsung `KEY_*` and sends `pressAndRelease` |
+| `sharpnessControl` | `sharpness` int | |
+| `soundModeControl` | `soundMode` string | value passed through |
+| `speakerSelectControl` | `speakerSelect` string | public values are `Internal`, `External`, `AudioOut/Optical`; helper rewrites to internal values |
+| `tintControl` | `tint` int | |
+| `USBSourceControl` | `deviceName` string, `deviceId` string | helper sends `deviceId` as internal `additionalData` |
+| `volumeUpDnControl` | `control` string | expected `volumeUp` or `volumeDn`; helper accepts any key alias below |
 
 Remote/key aliases accepted by `control` and `remoteKey`:
 
@@ -216,41 +216,41 @@ AV/soundbar params:
 
 | method | set params | notes |
 | --- | --- | --- |
-| `powerControl` | `power` string | |
-| `remoteKeyControl` | `remoteKey` string | |
-| `inputSelectControl` | `inputSource` string | |
-| `soundModeControl` | `soundMode` string | |
-| `volumeControl` | `volume` int | |
-| `muteControl` | `mute` bool | AV path uses bool, not normal-TV `muteOn`/`muteOff` |
-| `getVolume` | none | get-only, returns `volume` |
-| `getMute` | none | get-only, returns `mute` |
 | `getCodec` | none | get-only, returns `codec` |
 | `getIdentifier` | none | get-only, returns `identifier` |
 | `getIPControlState` | none | get-only, returns `ipcontrolState` |
+| `getMute` | none | get-only, returns `mute` |
+| `getVolume` | none | get-only, returns `volume` |
+| `inputSelectControl` | `inputSource` string | |
+| `muteControl` | `mute` bool | AV path uses bool, not normal-TV `muteOn`/`muteOff` |
+| `powerControl` | `power` string | |
+| `remoteKeyControl` | `remoteKey` string | |
+| `soundModeControl` | `soundMode` string | |
+| `volumeControl` | `volume` int | |
 
 HTV params are not decoded per method in this library. `HTVMDEFHandler` forwards
 the full params JSON as `setCommand` when any non-`AccessToken` member exists,
 otherwise as `getCommand`; the external HTV service owns the method-specific
 schema.
 
-## QN55LS03FAFXZA Empirical Probe
+## QN55LS03FAFXZA Method Reference And Live Evidence
 
-Probe evidence:
+This section combines the decompiled method maps with live behavior observed on
+`QN55LS03FAFXZA` on `2026-06-18`. The goal is a usable reference for every
+known JSON-RPC function.
 
-- Generated: `2026-06-18T03:10:00Z`
-- Target: `192.168.86.68:1516`
-- Mode: unsafe (`--unsafe=true`, `--explore=true`)
-- Summary: ✅ `30`, ⚠️ `28`, ❌ `37`
-- Range/alternate restore calls: `14/14` succeeded.
-- Disruptive app/channel/remote actions were executed after the non-destructive getter/setter/range probes.
+Mode note: the none-ambient controls below were validated while the TV was in
+normal TV mode. In Art/Ambient modes some none-ambient methods can disappear
+from dispatch or return `-32601 Method not found`.
 
-Observed identity:
+Baseline state:
 
 ```json
 {
   "getDeviceInformation": {
     "modelID": "25_PTM_FTV",
-    "FWVersion": "T-PTMFAKUC-0090-1296.8"
+    "FWVersion": "T-PTMFAKUC-0090-1296.8",
+    "serialNumber": "<redacted>"
   },
   "getTVStates": {
     "inputSource": "TV",
@@ -259,7 +259,7 @@ Observed identity:
     "pictureSize": "16:9",
     "soundMode": "Standard",
     "speakerSelect": "internal",
-    "volume": 3
+    "volume": 0
   },
   "getVideoStates": {
     "brightness": 0,
@@ -271,144 +271,147 @@ Observed identity:
 }
 ```
 
-Legend: ✅ works, ⚠️ partial/params rejected/server error, ❌ failed or method not found. `n/a` means no method-specific setter form is documented.
+Legend: ✅ works on this TV/state, ⚠️ method exists but the listed operation is partial or state-dependent, ❌ failed on this TV/state, `decompiled` means the method/params came from the binary but were not live-validated in this state.
 
+### Auth
 
-### Group: auth
+| Method | Params / Values | Live Evidence | Notes |
+| --- | --- | --- | --- |
+| `createAccessToken` | no `AccessToken` required | ✅ returns `{"AccessToken":"..."}` | Pairing/token issuance path. Other methods require `params.AccessToken`. |
 
-| Method | Getter | Getter Results | Setter | Setter Params | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `createAccessToken` | ✅ | `{"AccessToken":"..."}` | n/a | n/a | Pairing only |
+### Normal / Open Methods
 
+| Method | Params / Values | Live Evidence | Notes |
+| --- | --- | --- | --- |
+| `artModeControl` | `artMode`: `artModeOn`, `artModeOff` | ✅ getter/setter supported | `artModeOn` emits `/v2/powerValue` with `{"mode":"ambient"}` internally. |
+| `channelUpDnControl` | `control`: `channelUp`, `channelDn` | ✅ `channelUp` accepted; no-param call returns `-32602` | Remote-key style setter, not a getter. |
+| `directAccessControl` | `applicationName`: e.g. `youTube`, `netflix`, `amazon`; optional URL/deeplink | ✅ `youTube` accepted | Direct app launch path. |
+| `displayRotatorControl` | `orientation`: `landscape`, `portrait` | ✅ both accepted | Getter returns `Landscape`/`Portrait`; setter wants lowercase. |
+| `firstScreenAppControl` | `applicationName` display/app alias | ✅ getter returns installed app list; sample setter returned `-32002` | Getter returned apps including Apple TV, Disney+, Hulu, Netflix, Prime Video, Plex, SmartThings, Spotify, YouTube, YouTube TV. |
+| `getDeviceInformation` | none | ✅ `{"modelID":"25_PTM_FTV","FWVersion":"T-PTMFAKUC-0090-1296.8","serialNumber":"<redacted>"}` | Device identity getter. |
+| `getTVStates` | none | ✅ `{"inputSource":"TV","mute":"muteOff","pictureMode":"Standard","pictureSize":"16:9","soundMode":"Standard","speakerSelect":"internal","volume":0}` | Baseline TV state getter. |
+| `getVideoStates` | none | ✅ `{"brightness":0,"color":15,"contrast":50,"sharpness":10,"tint":0}` | Baseline video state getter. |
+| `multiviewControl` | `multiviewMode`: values are state-dependent | ⚠️ getter returned `[]`; `Off`/`On` setters returned `-32002` | Method exists but no supported/current modes were returned in this state. |
+| `muteControl` | `mute`: `muteOff`, `muteOn` | ✅ both values accepted | Getter returns `mute`. |
+| `powerControl` | `power`: `powerOn`, `powerOff`, `reboot`, `force-reboot` | ✅ `powerOn` getter/setter works | `powerOff`, `reboot`, and `force-reboot` are decompiled values; they are intentionally dangerous but still part of the API. |
+| `remoteKeyControl` | `remoteKey`: aliases listed below | ✅ `return` accepted; no-param call returns `-32602` | Remote-key style setter, not a getter. |
+| `volumeUpDnControl` | `control`: `volumeUp`, `volumeDn` | ✅ `volumeUp` accepted; no-param call returns `-32602` | Remote-key style setter, not a getter. |
 
-### Group: av/soundbar
+### Normal / None-Ambient Methods
 
-| Method | Getter | Getter Results | Setter | Setter Params | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `getCodec` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | n/a | n/a | Soundbar-only get |
-| `getIPControlState` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | n/a | n/a | Soundbar-only get |
-| `getIdentifier` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | n/a | n/a | Soundbar-only get |
-| `getMute` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | n/a | n/a | Soundbar-only get |
-| `getVolume` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | n/a | n/a | Soundbar-only get |
-| `inputSelectControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"inputSource":"TV"}` | Soundbar-only on this TV |
-| `volumeControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"volume":3}` | Soundbar-only on this TV; no range probing |
+| Method | Params / Values | Live Evidence | Notes |
+| --- | --- | --- | --- |
+| `brightnessControl` | `brightness`: int | ✅ accepted `-5..5` | This is picture brightness, not panel backlight. |
+| `colorControl` | `color`: int | ✅ accepted `0..50` |  |
+| `contrastControl` | `contrast`: int | ✅ accepted `0..50` | Absolute picture contrast. |
+| `directChannelControl` | `atvDtv`, `airCable`, `channelNum` | ✅ getter returned `{"airCable":"cable","atvDtv":"tvplus","channelNum":"1001"}`; sample DTV/AIR/1 returned `-32002` | Converts to internal `channelType`, `RFtype`, `channelNumber`. |
+| `directVolumeControl` | `volume`: int `0..100` | ✅ accepted `0..100` | Absolute volume. |
+| `externalSpeakerControl` | `deviceName`, `deviceId` | ✅ getter returned `{}`; fake device setter returned `-32002` | Real setter needs a valid external speaker device. |
+| `inputSourceControl` | `inputSource`: `TV`; HDMI values appear source/state-dependent | ✅ `TV` accepted; `HDMI1`..`HDMI4` rejected in this state | Connected/available inputs likely affect setter success. |
+| `pictureModeControl` | `pictureMode`: `Dynamic`, `Standard`, `Movie` | ✅ accepted; `Filmmaker Mode` rejected | Values from live string exploration. |
+| `pictureSizeControl` | `pictureSize`: decompiled pass-through string | ✅ getter returned `16:9`; tested `16:9`, `4:3`, `Fit to Screen` setters returned `-32002` | Setter appears state/input dependent or uses different strings. |
+| `sharpnessControl` | `sharpness`: int | ✅ accepted `0..20` |  |
+| `soundModeControl` | `soundMode`: `Standard`, `Amplify`, `Movie`, `Music` | ✅ accepted; `Adaptive Sound` rejected | Values from live string exploration. |
+| `speakerSelectControl` | `speakerSelect`: `Internal`, `AudioOut/Optical` | ✅ accepted; `External`, `Optical` rejected | Getter may normalize case; helper rewrites to internal speaker values. |
+| `tintControl` | `tint`: int | ✅ accepted `-15..15` |  |
+| `USBSourceControl` | `deviceName`, `deviceId` | ✅ getter returned `[]`; fake device setter returned `-32002` | Real setter needs a valid USB source. |
 
+### Expert Picture Methods
 
-### Group: htv
+| Method | Params / Values | Live Evidence | Notes |
+| --- | --- | --- | --- |
+| `AMP.blurReductionControl` | `AMP.blurReduction`: int | ✅ getter returned `10`; same-value setter returned `-32002` | Usually gated by Auto Motion Plus custom state. |
+| `AMP.judderReductionControl` | `AMP.judderReduction`: int | ✅ getter returned `10`; same-value setter returned `-32002` | Usually gated by Auto Motion Plus custom state. |
+| `AMP.LEDClearMotionControl` | `AMP.LEDClearMotion`: `Off`, `On` | ✅ getter returned `Off`; tested setters returned `-32002` | Usually gated by Auto Motion Plus custom state. |
+| `applyPictureSettingsControl` | `applyPictureSettings`: `CurrentSource`, `AllSources` | ✅ accepted; strings with spaces rejected |  |
+| `autoHDRRemasteringControl` | `autoHDRRemastering`: `Off`, `On` | ✅ accepted |  |
+| `autoMotionPlusControl` | `autoMotionPlus`: `Off`, `Auto`, `Custom` | ✅ accepted; `Standard` rejected |  |
+| `autoPowerOffControl` | `autoPowerOff`: `Off`, `On` candidates | ✅ `Off` accepted; `On` returned `-32002` | Power behavior; state/model dependent. |
+| `autoPowerSavingControl` | `autoPowerSaving`: `Off`, `On` | ✅ `Off` accepted; `On` accepted in live evidence | Power/eco behavior; method remains documented from decompile and live evidence. |
+| `backlightControl` | `backlight`: int | ✅ accepted `0..50` | Separate from Art Mode brightness. |
+| `brightnessOptimizationControl` | `brightnessOptimization`: `Off`, `On` | ✅ accepted |  |
+| `colorBoosterControl` | `colorBooster`: `Off`, `Low`, `High` candidates | ❌ getter/setters returned `-32002` | Method exists in decompiled map. |
+| `colorSpace.BlueControl` | `colorSpace.Blue`: int | ✅ getter returned `50`; same-value setter returned `-32002` | Likely custom color-space only. |
+| `colorSpace.ColorAdjustmentPointControl` | `colorSpace.ColorAdjustmentPoint`: `Red`, `Green`, `Blue`, `Yellow`, `Cyan`, `Magenta` candidates | ❌ getter/setters returned `-32002` | Likely custom color-space only. |
+| `colorSpace.ColorControl` | `colorSpace.Color`: `Red`, `Green`, `Blue`, `Yellow`, `Cyan`, `Magenta` candidates | ✅ getter returned `Red`; tested setters returned `-32002` | Likely requires `colorSpace=Custom`. |
+| `colorSpace.GreenControl` | `colorSpace.Green`: int | ✅ getter returned `53`; same-value setter returned `-32002` | Likely custom color-space only. |
+| `colorSpace.RedControl` | `colorSpace.Red`: int | ✅ getter returned `40`; same-value setter returned `-32002` | Likely custom color-space only. |
+| `colorSpaceControl` | `colorSpace`: `Auto`, `Native`, `Custom` | ✅ accepted |  |
+| `colorSpaceGamutControl` | `colorSpaceGamut`: `BT.709`, `DCI-P3`, `BT.2020`, `Auto` candidates | ✅ getter returned `BT.709`; tested setters returned `-32002` | HDR/color-space state dependent. |
+| `colorToneControl` | `colorTone`: `Cool`, `Standard`, `Warm1`, `Warm2` | ✅ accepted | This is the verified color-tone enum for this TV. |
+| `contrastEnhancerControl` | `contrastEnhancer`: `Off`, `Low`, `High` | ✅ accepted |  |
+| `digitalCleanViewControl` | `digitalCleanView`: candidates `Off`, `Auto`, `Low`, `Medium`, `High`, `Standard` | ✅ getter returned `Standard`; tested setters returned `-32002` | Getter works; setter is state/input dependent or values differ. |
+| `energySavingSolutionControl` | `energySavingSolution`: `Off`; candidates `Low`, `Medium`, `High`, `Auto` rejected | ✅ `Off` accepted | Other values may be region/eco-mode dependent. |
+| `filmModeControl` | `filmMode`: `Off`, `Auto1`, `Auto2` | ✅ getter returned `Off`; tested setters returned `-32002` | Input/content dependent. |
+| `gameModeControl` | `gameMode`: `Off`, `On`, `Auto` candidates | ✅ getter returned `Off`; tested setters returned `-32002` | Input/source dependent. |
+| `gamma.BT1886Control` | `gamma.BT1886`: int | ✅ accepted `-3..3` |  |
+| `gamma.HLGControl` | `gamma.HLG`: int | ❌ getter/setter returned `-32002` | HDR/content dependent. |
+| `gamma.ST2084Control` | `gamma.ST2084`: int | ❌ getter/setter returned `-32002` | HDR/content dependent. |
+| `gammaModeControl` | `gammaMode`: `BT.1886`; candidates `ST.2084`, `HLG` rejected in this SDR state | ✅ `BT.1886` accepted | HDR gamma modes are content/state dependent. |
+| `HDRToneMappingControl` | `HDRToneMapping`: decompiled string; candidates `0`, `1`, `Static`, `Active` | ✅ getter returned `0`; tested setters returned `-32002` | HDR/content dependent. |
+| `localDimmingControl` | `localDimming`: `Off`, `Low`, `Standard`, `High` candidates | ❌ getter/setters returned `-32002` | Method exists in decompiled map. |
+| `motionLightingControl` | `motionLighting`: `Off`, `On` | ✅ accepted |  |
+| `peakBrightnessControl` | `peakBrightness`: `Off`, `Medium`, `High` candidates | ❌ getter/setters returned `-32002` | HDR/state dependent. |
+| `pictureCalibrationModeControl` | `pictureCalibrationMode`: `Off`, `On` candidates | ❌ getter/setters returned `-32002` | Method exists in decompiled expert-picture map. |
+| `pixelShiftMenuControl` | `pixelShiftMenu`: `Off`, `On` candidates | ❌ getter/setters returned `-32002` | OLED/panel-feature dependent. |
+| `RGBOnlyModeControl` | `RGBOnlyMode`: `Off`, `Red`, `Green`, `Blue` candidates | ❌ getter/setters returned `-32002` | Method exists in decompiled map. |
+| `WB20P.BlueControl` | `WB20P.Blue`: int | ✅ getter returned `0`; same-value setter returned `-32002` | Likely gated by 20-point mode. |
+| `WB20P.GreenControl` | `WB20P.Green`: int | ✅ getter returned `0`; same-value setter returned `-32002` | Likely gated by 20-point mode. |
+| `WB20P.IntervalControl` | `WB20P.Interval`: `5%`..`100%` candidates | ✅ getter returned `5%`; tested setters returned `-32002` | Likely requires `WB20PointMode=On` or a specific picture state. |
+| `WB20P.RedControl` | `WB20P.Red`: int | ✅ getter returned `0`; same-value setter returned `-32002` | Likely gated by 20-point mode. |
+| `WB20PointModeControl` | `WB20PointMode`: `Off`, `On` | ✅ accepted |  |
+| `WB2PointControl` | `R-Gain`, `G-Gain`, `B-Gain`, `R-Offset`, `G-Offset`, `B-Offset` ints | ✅ getter/same-value setter worked | All non-token params are serialized as the WB2Point JSON string. |
 
-| Method | Getter | Getter Results | Setter | Setter Params | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `HTVFactoryLockControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"probe":true}` | Expected to fail on consumer Frame |
-| `HTVRoomStatusControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"probe":true}` | Expected to fail on consumer Frame |
-| `duplicateHTVConfigControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"probe":true}` | Expected to fail on consumer Frame |
-| `forwardMessage` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"probe":true}` | Expected to fail on consumer Frame |
-| `getHTVInformation` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"probe":true}` | Expected to fail on consumer Frame |
-| `getHTVNetworkInformation` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"probe":true}` | Expected to fail on consumer Frame |
-| `getSoftAPSecurityKey` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"probe":true}` | Expected to fail on consumer Frame |
-| `setHTVTime` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"probe":true}` | Expected to fail on consumer Frame |
-| `showHTVNotification` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"probe":true}` | Expected to fail on consumer Frame |
-| `softAPSSIDControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"probe":true}` | Expected to fail on consumer Frame |
-| `softAPSignalLevelControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"probe":true}` | Expected to fail on consumer Frame |
-| `softAPStatusControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"probe":true}` | Expected to fail on consumer Frame |
-| `softAPWiFiChannelControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"probe":true}` | Expected to fail on consumer Frame |
-| `tvPlusDisable` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"probe":true}` | Expected to fail on consumer Frame |
-| `updateFirmware` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"probe":true}` | Expected to fail on consumer Frame |
+### Wall / MicroLED Methods
 
+| Method | Params / Values | Live Evidence | Notes |
+| --- | --- | --- | --- |
+| `ambientControl` | `ambientId`: string | ❌ `-32601` | Wall/microLED map only. |
+| `getBoxStates` | none | ❌ `-32601` | Wall/microLED getter. |
+| `getCabinetGroupIds` | none | ❌ `-32601` | Wall/microLED getter. |
+| `getCabinetStates` | `groupId`: int | ❌ `-32601` | Wall/microLED getter requiring group id. |
 
-### Group: normal/expert-picture
+### AV / Soundbar Methods
 
-| Method | Getter | Getter Results | Setter | Setter Params | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `AMP.LEDClearMotionControl` | ✅ | `{"AMP.LEDClearMotion":"Off"}` | ❌ -32002 | `{"AMP.LEDClearMotion":"Off"}` |  |
-| `AMP.blurReductionControl` | ✅ | `{"AMP.blurReduction":10}` | ❌ -32002 | `{"AMP.blurReduction":10}` |  |
-| `AMP.judderReductionControl` | ✅ | `{"AMP.judderReduction":10}` | ❌ -32002 | `{"AMP.judderReduction":10}` |  |
-| `HDRToneMappingControl` | ✅ | `{"HDRToneMapping":"0"}` | ❌ -32002 | `{"HDRToneMapping":"0"}` |  |
-| `RGBOnlyModeControl` | ❌ -32002 | `{"error":{"code":-32002,"message":"Server error","type":"jsonrpc"}}` | ❌ -32002 | `{"RGBOnlyMode":"Off"}` |  |
-| `WB20P.BlueControl` | ✅ | `{"WB20P.Blue":0}` | ❌ -32002 | `{"WB20P.Blue":0}` |  |
-| `WB20P.GreenControl` | ✅ | `{"WB20P.Green":0}` | ❌ -32002 | `{"WB20P.Green":0}` |  |
-| `WB20P.IntervalControl` | ✅ | `{"WB20P.Interval":"5%"}` | ❌ -32002 | `{"WB20P.Interval":"5%"}` |  |
-| `WB20P.RedControl` | ✅ | `{"WB20P.Red":0}` | ❌ -32002 | `{"WB20P.Red":0}` |  |
-| `WB20PointModeControl` | ✅ | `{"WB20PointMode":"Off"}` | ✅ | `{"WB20PointMode":"Off"}` | WB20PointMode alternate probe {"On":"✅"} restore=✅ |
-| `WB2PointControl` | ✅ | `{"B-Gain":0,"B-Offset":0,"G-Gain":0,"G-Offset":0,"R-Gain":0,"R-Offset":0}` | ✅ | `{"B-Gain":0,"B-Offset":0,"G-Gain":0,"G-Offset":0,"R-Gain":0,"R-Offset":0}` | Special WB2Point payload; same-value map when getter works |
-| `applyPictureSettingsControl` | ✅ | `{"applyPictureSettings":"AllSources"}` | ✅ | `{"applyPictureSettings":"AllSources"}` |  |
-| `autoHDRRemasteringControl` | ✅ | `{"autoHDRRemastering":"Off"}` | ✅ | `{"autoHDRRemastering":"Off"}` | autoHDRRemastering alternate probe {"On":"✅"} restore=✅ |
-| `autoMotionPlusControl` | ✅ | `{"autoMotionPlus":"Auto"}` | ✅ | `{"autoMotionPlus":"Auto"}` |  |
-| `autoPowerOffControl` | ✅ | `{"autoPowerOff":"Off"}` | ✅ | `{"autoPowerOff":"Off"}` | autoPowerOff alternate probe {"On":"❌ -32002"} restore=✅ |
-| `autoPowerSavingControl` | ✅ | `{"autoPowerSaving":"Off"}` | ✅ | `{"autoPowerSaving":"Off"}` | autoPowerSaving alternate probe {"On":"✅"} restore=✅ |
-| `backlightControl` | ✅ | `{"backlight":25}` | ✅ | `{"backlight":25}` | backlight probe accepted 0..50; accepted=[0,1,10,25,50] rejected=[-101,-100,-51,-50,-26,-25,-11,-10,-1,51,100,101] restore=✅ |
-| `brightnessOptimizationControl` | ✅ | `{"brightnessOptimization":"Off"}` | ✅ | `{"brightnessOptimization":"Off"}` | brightnessOptimization alternate probe {"On":"✅"} restore=✅ |
-| `colorBoosterControl` | ❌ -32002 | `{"error":{"code":-32002,"message":"Server error","type":"jsonrpc"}}` | ❌ -32002 | `{"colorBooster":"Off"}` |  |
-| `colorSpace.BlueControl` | ✅ | `{"colorSpace.Blue":50}` | ❌ -32002 | `{"colorSpace.Blue":50}` |  |
-| `colorSpace.ColorAdjustmentPointControl` | ❌ -32002 | `{"error":{"code":-32002,"message":"Server error","type":"jsonrpc"}}` | ❌ -32002 | `{"colorSpace.ColorAdjustmentPoint":"Off"}` |  |
-| `colorSpace.ColorControl` | ✅ | `{"colorSpace.Color":"Red"}` | ❌ -32002 | `{"colorSpace.Color":"Red"}` |  |
-| `colorSpace.GreenControl` | ✅ | `{"colorSpace.Green":53}` | ❌ -32002 | `{"colorSpace.Green":53}` |  |
-| `colorSpace.RedControl` | ✅ | `{"colorSpace.Red":40}` | ❌ -32002 | `{"colorSpace.Red":40}` |  |
-| `colorSpaceControl` | ✅ | `{"colorSpace":"Native"}` | ✅ | `{"colorSpace":"Native"}` |  |
-| `colorSpaceGamutControl` | ✅ | `{"colorSpaceGamut":"BT.709"}` | ❌ -32002 | `{"colorSpaceGamut":"BT.709"}` |  |
-| `colorToneControl` | ✅ | `{"colorTone":"Standard"}` | ✅ | `{"colorTone":"Standard"}` |  |
-| `contrastEnhancerControl` | ✅ | `{"contrastEnhancer":"High"}` | ✅ | `{"contrastEnhancer":"High"}` |  |
-| `digitalCleanViewControl` | ✅ | `{"digitalCleanView":"Standard"}` | ❌ -32002 | `{"digitalCleanView":"Standard"}` |  |
-| `energySavingSolutionControl` | ✅ | `{"energySavingSolution":"Off"}` | ✅ | `{"energySavingSolution":"Off"}` | energySavingSolution alternate probe {"On":"✅"} restore=✅ |
-| `filmModeControl` | ✅ | `{"filmMode":"Off"}` | ❌ -32002 | `{"filmMode":"Off"}` |  |
-| `gameModeControl` | ✅ | `{"gameMode":"Off"}` | ❌ -32002 | `{"gameMode":"Off"}` |  |
-| `gamma.BT1886Control` | ✅ | `{"gamma.BT1886":0}` | ✅ | `{"gamma.BT1886":0}` | gamma.BT1886 probe accepted -1..1; accepted=[-1,0,1] rejected=[-101,-100,-51,-50,-26,-25,-11,-10,10,25,50,51,100,101] restore=✅ |
-| `gamma.HLGControl` | ❌ -32002 | `{"error":{"code":-32002,"message":"Server error","type":"jsonrpc"}}` | ❌ -32002 | `{"gamma.HLG":0}` |  |
-| `gamma.ST2084Control` | ❌ -32002 | `{"error":{"code":-32002,"message":"Server error","type":"jsonrpc"}}` | ❌ -32002 | `{"gamma.ST2084":0}` |  |
-| `gammaModeControl` | ✅ | `{"gammaMode":"BT.1886"}` | ✅ | `{"gammaMode":"BT.1886"}` |  |
-| `localDimmingControl` | ❌ -32002 | `{"error":{"code":-32002,"message":"Server error","type":"jsonrpc"}}` | ❌ -32002 | `{"localDimming":"Off"}` |  |
-| `motionLightingControl` | ✅ | `{"motionLighting":"Off"}` | ✅ | `{"motionLighting":"Off"}` | motionLighting alternate probe {"On":"✅"} restore=✅ |
-| `peakBrightnessControl` | ❌ -32002 | `{"error":{"code":-32002,"message":"Server error","type":"jsonrpc"}}` | ❌ -32002 | `{"peakBrightness":"Off"}` |  |
-| `pictureCalibrationModeControl` | ❌ -32002 | `{"error":{"code":-32002,"message":"Server error","type":"jsonrpc"}}` | ❌ -32002 | `{"pictureCalibrationMode":"Off"}` |  |
-| `pixelShiftMenuControl` | ❌ -32002 | `{"error":{"code":-32002,"message":"Server error","type":"jsonrpc"}}` | ❌ -32002 | `{"pixelShiftMenu":"Off"}` |  |
+These methods are selected when the same library detects an AV/soundbar device
+type instead of normal TV.
 
+| Method | Params / Values | Live Evidence On This TV | Notes |
+| --- | --- | --- | --- |
+| `getCodec` | none | ❌ `-32601` | Soundbar-only getter. |
+| `getIdentifier` | none | ❌ `-32601` | Soundbar-only getter. |
+| `getIPControlState` | none | ❌ `-32601` | Soundbar-only getter. |
+| `getMute` | none | ❌ `-32601` | Soundbar-only getter. |
+| `getVolume` | none | ❌ `-32601` | Soundbar-only getter. |
+| `inputSelectControl` | `inputSource`: string | ❌ `-32601` | Soundbar-only on this TV. |
+| `muteControl` | `mute`: bool | normal-TV method uses `muteOn`/`muteOff`; AV-specific bool dispatch not selected on this TV | AV path uses bool instead of the normal-TV string enum. |
+| `powerControl` | `power`: string | normal-TV method works; AV-specific dispatch not selected on this TV | Shared method name; AV manager has its own property map. |
+| `remoteKeyControl` | `remoteKey`: string | normal-TV method works; AV-specific dispatch not selected on this TV | Shared method name; AV manager has its own property map. |
+| `soundModeControl` | `soundMode`: string | normal-TV method works; AV-specific dispatch not selected on this TV | Shared method name; AV manager has its own property map. |
+| `volumeControl` | `volume`: int | ❌ `-32601` | Soundbar-only on this TV. |
 
-### Group: normal/none-ambient
+### HTV Methods
 
-| Method | Getter | Getter Results | Setter | Setter Params | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `USBSourceControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"deviceId":"__probe__","deviceName":"__probe__"}` | Real set needs USB deviceName/deviceId |
-| `brightnessControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"brightness":0}` |  |
-| `colorControl` | ✅ | `{"color":15}` | ✅ | `{"color":15}` | color probe accepted 0..50; accepted=[0,1,10,15,25,50] rejected=[-101,-100,-51,-50,-26,-25,-11,-10,-1,51,100,101] restore=✅ |
-| `contrastControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"contrast":50}` |  |
-| `directChannelControl` | ✅ | `{"airCable":"cable","atvDtv":"tvplus","channelNum":"1001"}` | ❌ -32002 | `{"airCable":"AIR","atvDtv":"DTV","channelNum":"1"}` | Changes channel when set works |
-| `directVolumeControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"volume":3}` | No range probing; avoid loud volume jumps |
-| `externalSpeakerControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"deviceId":"__probe__","deviceName":"__probe__"}` | Real set needs deviceName/deviceId from speaker list |
-| `inputSourceControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"inputSource":"TV"}` |  |
-| `pictureModeControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"pictureMode":"Standard"}` |  |
-| `pictureSizeControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"pictureSize":"16:9"}` |  |
-| `sharpnessControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"sharpness":10}` |  |
-| `soundModeControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"soundMode":"Standard"}` |  |
-| `speakerSelectControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"speakerSelect":"internal"}` |  |
-| `tintControl` | ✅ | `{"tint":0}` | ✅ | `{"tint":0}` | tint probe accepted -11..10; accepted=[-11,-10,-1,0,1,10] rejected=[-101,-100,-51,-50,-26,-25,25,50,51,100,101] restore=✅ |
+These are in the decompiled HTV map. On this consumer Frame TV they return
+`-32601 Method not found`.
 
-
-### Group: normal/open
-
-| Method | Getter | Getter Results | Setter | Setter Params | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `artModeControl` | ✅ | `{"artMode":"artModeOff"}` | ✅ | `{"artMode":"artModeOff"}` | artMode alternate probe {"artModeOn":"✅"} restore=✅ |
-| `channelUpDnControl` | ⚠️ -32602 | `{"error":{"code":-32602,"message":"Invalid params","type":"jsonrpc"}}` | ✅ | `{"control":"channelUp"}` | Remote-key style |
-| `directAccessControl` | ✅ | `{"applicationName":"unknown"}` | ✅ | `{"applicationName":"youTube"}` | Launches app when set works |
-| `displayRotatorControl` | ✅ | `{"orientation":"Landscape"}` | ✅ | `{"orientation":"landscape"}` | orientation alternate probe {"portrait":"✅"} restore=✅ |
-| `firstScreenAppControl` | ✅ | `[{"applicationName":"Apple TV"},{"applicationName":"Bixby"},{"applicationName":"Disney+"},{"applicationName":"ESPN"},{"applicationName":"Hulu"},{"applicationName":"Internet"},{"applicationName":"Netflix"},{"applicationName":"Peacock TV"},{"applicationName":"Plex - Free Movies ＆ TV"},{"applicationName":"Prime Video"},{"applicationName":"Sling TV"},{"applicationName":"SmartThings"},{"applicationName":"Spotify - Music and Podcasts"},{"applicationName":"Vision AI Companion"},{"applicationName":"YouTube"},{"applicationName":"YouTube TV"}]` | ❌ -32002 | `{"applicationName":"youTube"}` | May launch/select app |
-| `getDeviceInformation` | ✅ | `{"FWVersion":"T-PTMFAKUC-0090-1296.8","modelID":"25_PTM_FTV","serialNumber":"<redacted>"}` | n/a | n/a | get-only |
-| `getTVStates` | ✅ | `{"inputSource":"TV","mute":"muteOff","pictureMode":"Standard","pictureSize":"16:9","soundMode":"Standard","speakerSelect":"internal","volume":3}` | n/a | n/a | get-only |
-| `getVideoStates` | ✅ | `{"brightness":0,"color":15,"contrast":50,"sharpness":10,"tint":0}` | n/a | n/a | get-only |
-| `multiviewControl` | ✅ | `[]` | ❌ -32002 | `{"multiviewMode":"Off"}` |  |
-| `muteControl` | ✅ | `{"mute":"muteOff"}` | ✅ | `{"mute":"muteOff"}` | mute alternate probe {"muteOn":"✅"} restore=✅ |
-| `powerControl` | ✅ | `{"power":"powerOn"}` | ✅ | `{"power":"powerOn"}` | Only tests powerOn, not powerOff/reboot |
-| `remoteKeyControl` | ⚠️ -32602 | `{"error":{"code":-32602,"message":"Invalid params","type":"jsonrpc"}}` | ✅ | `{"remoteKey":"return"}` | Remote-key style |
-| `volumeUpDnControl` | ⚠️ -32602 | `{"error":{"code":-32602,"message":"Invalid params","type":"jsonrpc"}}` | ✅ | `{"control":"volumeUp"}` | Remote-key style |
-
-
-### Group: normal/wall
-
-| Method | Getter | Getter Results | Setter | Setter Params | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `ambientControl` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"ambientId":"Off"}` |  |
-| `getBoxStates` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | n/a | n/a | get-only |
-| `getCabinetGroupIds` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | n/a | n/a | get-only |
-| `getCabinetStates` | ❌ -32601 | `{"error":{"code":-32601,"message":"Method not found","type":"jsonrpc"}}` | ❌ -32601 | `{"groupId":0}` | Getter that requires groupId |
+| Method | Params / Values |
+| --- | --- |
+| `duplicateHTVConfigControl` | full params JSON forwarded to HTV service |
+| `forwardMessage` | full params JSON forwarded to HTV service |
+| `getHTVInformation` | full params JSON forwarded to HTV service |
+| `getHTVNetworkInformation` | full params JSON forwarded to HTV service |
+| `getSoftAPSecurityKey` | full params JSON forwarded to HTV service |
+| `HTVFactoryLockControl` | full params JSON forwarded to HTV service |
+| `HTVRoomStatusControl` | full params JSON forwarded to HTV service |
+| `setHTVTime` | full params JSON forwarded to HTV service |
+| `showHTVNotification` | full params JSON forwarded to HTV service |
+| `softAPSignalLevelControl` | full params JSON forwarded to HTV service |
+| `softAPSSIDControl` | full params JSON forwarded to HTV service |
+| `softAPStatusControl` | full params JSON forwarded to HTV service |
+| `softAPWiFiChannelControl` | full params JSON forwarded to HTV service |
+| `tvPlusDisable` | full params JSON forwarded to HTV service |
+| `updateFirmware` | full params JSON forwarded to HTV service |
 
 
 Response shape:
@@ -425,7 +428,6 @@ or:
 
 Compiled error templates:
 
-- `-32700 Parse error`
 - `-32000 Server error / Unknown`
 - `-32001 Server error / Not supported model`
 - `-32002 Server error / Failed`
@@ -437,6 +439,7 @@ Compiled error templates:
 - `-32601 Method not found`
 - `-32602 Invalid params`
 - `-32603 Internal error`
+- `-32700 Parse error`
 
 ## Normal TV JSON-RPC Methods
 
@@ -456,80 +459,80 @@ The expert-picture map is inserted into the same open map.
 
 Open map:
 
-- `volumeUpDnControl`
+- `artModeControl`
 - `channelUpDnControl`
+- `directAccessControl`
+- `displayRotatorControl`
+- `firstScreenAppControl`
+- `getDeviceInformation`
+- `getTVStates`
+- `getVideoStates`
+- `multiviewControl`
 - `muteControl`
 - `powerControl`
-- `artModeControl`
-- `directAccessControl`
-- `firstScreenAppControl`
 - `remoteKeyControl`
-- `getVideoStates`
-- `getTVStates`
-- `multiviewControl`
-- `displayRotatorControl`
-- `getDeviceInformation`
+- `volumeUpDnControl`
 
 Expert-picture entries in open map:
 
-- `pictureCalibrationModeControl`
-- `backlightControl`
-- `digitalCleanViewControl`
-- `autoMotionPlusControl`
 - `AMP.blurReductionControl`
 - `AMP.judderReductionControl`
 - `AMP.LEDClearMotionControl`
-- `localDimmingControl`
-- `filmModeControl`
-- `contrastEnhancerControl`
+- `applyPictureSettingsControl`
+- `autoHDRRemasteringControl`
+- `autoMotionPlusControl`
+- `autoPowerOffControl`
+- `autoPowerSavingControl`
+- `backlightControl`
+- `brightnessOptimizationControl`
+- `colorBoosterControl`
+- `colorSpace.BlueControl`
+- `colorSpace.ColorAdjustmentPointControl`
+- `colorSpace.ColorControl`
+- `colorSpace.GreenControl`
+- `colorSpace.RedControl`
+- `colorSpaceControl`
+- `colorSpaceGamutControl`
 - `colorToneControl`
-- `WB2PointControl`
-- `WB20PointModeControl`
+- `contrastEnhancerControl`
+- `digitalCleanViewControl`
+- `energySavingSolutionControl`
+- `filmModeControl`
+- `gameModeControl`
+- `gamma.BT1886Control`
+- `gamma.HLGControl`
+- `gamma.ST2084Control`
+- `gammaModeControl`
+- `HDRToneMappingControl`
+- `localDimmingControl`
+- `motionLightingControl`
+- `peakBrightnessControl`
+- `pictureCalibrationModeControl`
+- `pixelShiftMenuControl`
+- `RGBOnlyModeControl`
+- `WB20P.BlueControl`
+- `WB20P.GreenControl`
 - `WB20P.IntervalControl`
 - `WB20P.RedControl`
-- `WB20P.GreenControl`
-- `WB20P.BlueControl`
-- `gammaModeControl`
-- `gamma.BT1886Control`
-- `gamma.ST2084Control`
-- `gamma.HLGControl`
-- `RGBOnlyModeControl`
-- `colorSpaceControl`
-- `colorSpace.ColorControl`
-- `colorSpace.ColorAdjustmentPointControl`
-- `colorSpace.RedControl`
-- `colorSpace.GreenControl`
-- `colorSpace.BlueControl`
-- `HDRToneMappingControl`
-- `colorSpaceGamutControl`
-- `peakBrightnessControl`
-- `colorBoosterControl`
-- `autoHDRRemasteringControl`
-- `brightnessOptimizationControl`
-- `energySavingSolutionControl`
-- `gameModeControl`
-- `applyPictureSettingsControl`
-- `motionLightingControl`
-- `autoPowerSavingControl`
-- `autoPowerOffControl`
-- `pixelShiftMenuControl`
+- `WB20PointModeControl`
+- `WB2PointControl`
 
 None-ambient map:
 
-- `directVolumeControl`
-- `inputSourceControl`
+- `brightnessControl`
+- `colorControl`
+- `contrastControl`
 - `directChannelControl`
+- `directVolumeControl`
+- `externalSpeakerControl`
+- `inputSourceControl`
 - `pictureModeControl`
 - `pictureSizeControl`
+- `sharpnessControl`
 - `soundModeControl`
 - `speakerSelectControl`
-- `externalSpeakerControl`
-- `USBSourceControl`
-- `brightnessControl`
-- `contrastControl`
-- `sharpnessControl`
-- `colorControl`
 - `tintControl`
+- `USBSourceControl`
 
 Wall map:
 
@@ -540,28 +543,28 @@ Wall map:
 
 Not present as exact strings in this pulled library:
 
-- `RVUSourceControl`
 - `ambientModeControl`
+- `RVUSourceControl`
 
 ## HTV JSON-RPC Methods
 
 HTV-specific map:
 
-- `softAPStatusControl`
-- `softAPSSIDControl`
-- `getSoftAPSecurityKey`
-- `softAPWiFiChannelControl`
-- `softAPSignalLevelControl`
-- `getHTVNetworkInformation`
-- `getHTVInformation`
 - `duplicateHTVConfigControl`
+- `forwardMessage`
+- `getHTVInformation`
+- `getHTVNetworkInformation`
+- `getSoftAPSecurityKey`
 - `HTVFactoryLockControl`
 - `HTVRoomStatusControl`
 - `setHTVTime`
 - `showHTVNotification`
-- `updateFirmware`
-- `forwardMessage`
+- `softAPSignalLevelControl`
+- `softAPSSIDControl`
+- `softAPStatusControl`
+- `softAPWiFiChannelControl`
 - `tvPlusDisable`
+- `updateFirmware`
 
 ## AV/Soundbar JSON-RPC Methods
 
@@ -569,17 +572,17 @@ Only selected when `SystemInfoUtil::IsSoundbar()` makes device type `AV`.
 
 AV property map:
 
-- `powerControl`
-- `remoteKeyControl`
-- `inputSelectControl`
-- `soundModeControl`
-- `volumeControl`
-- `getVolume`
-- `muteControl`
-- `getMute`
 - `getCodec`
 - `getIdentifier`
 - `getIPControlState`
+- `getMute`
+- `getVolume`
+- `inputSelectControl`
+- `muteControl`
+- `powerControl`
+- `remoteKeyControl`
+- `soundModeControl`
+- `volumeControl`
 
 ## UPnP In Same Module
 
