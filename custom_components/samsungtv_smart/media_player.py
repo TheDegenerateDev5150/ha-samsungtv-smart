@@ -193,6 +193,12 @@ KEYHOLD_MAX_DELAY = 5.0
 KEYPRESS_DEFAULT_DELAY = 0.5
 KEYPRESS_MAX_DELAY = 2.0
 KEYPRESS_MIN_DELAY = 0.2
+# Delay after KEY_HOME when waking the panel from Art Mode before a source
+# switch. 2024 Frames take noticeably longer than the standard key delay to
+# leave Art Mode and render the home UI; sending the source key too early makes
+# the TV reject it with an on-screen "not available" error (reported by Preston,
+# #40). Mirrors the manual "home, wait, source" workaround.
+SOURCE_WAKE_DELAY = 1.5
 MAX_ST_ERROR_COUNT = 4
 MEDIA_TYPE_BROWSER = "browser"
 MEDIA_TYPE_KEY = "send_key"
@@ -2769,6 +2775,36 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         """Implement the websocket media browsing helper."""
         return await media_source.async_browse_media(self.hass, media_content_id)
 
+    async def _async_wake_for_source_switch(self, source, source_key) -> None:
+        """Wake the panel from Art Mode before sending a source-switch key.
+
+        2024+ Frame panels ignore HDMI/source keys while in Art Mode, so we
+        send KEY_HOME first (matching the manual "home, wait, source"
+        workaround). The art state is gated on ``is not False`` rather than a
+        plain truthiness check: on 2024 Frames ``_art_mode_is_on()`` can return
+        None/stale-False even while artwork is on screen (the art WebSocket
+        channel is unreliable there), and skipping the wake makes the TV reject
+        the source key with an on-screen "not available" error. Frame TVs only,
+        so a non-Frame source switch is never burdened with an extra HOME press.
+        """
+        art_on = self._art_mode_is_on()
+        is_frame = self._frame_tv_supported or art_on is not None
+        wake = art_on is True or (is_frame and art_on is not False)
+        self._log.debug(
+            "Source switch to '%s' (key=%s): art_mode_is_on=%s, frame=%s, wake=%s",
+            source,
+            source_key,
+            art_on,
+            is_frame,
+            wake,
+        )
+        if wake:
+            self._log.debug(
+                "Waking panel from Art Mode with KEY_HOME before source switch"
+            )
+            await self.async_send_command("KEY_HOME")
+            await asyncio.sleep(SOURCE_WAKE_DELAY)
+
     async def async_select_source(self, source):
         """Select input source."""
         running_app = DEFAULT_APP
@@ -2782,22 +2818,14 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         if self._source_list and source in self._source_list:
             source_key = self._source_list[source]
-            if self._art_mode_is_on():
-                # The panel ignores HDMI/source-switch keys while in Art
-                # Mode (confirmed by Preston: the TV stayed on the previous
-                # source and art_mode_status never changed). KEY_HOME wakes
-                # it first, matching the manual home+source workaround.
-                await self.async_send_command("KEY_HOME")
-                await asyncio.sleep(KEYPRESS_DEFAULT_DELAY)
+            await self._async_wake_for_source_switch(source, source_key)
             if not await self._async_send_keys(source_key):
                 return
         elif self._source_list and (resolved := self._resolve_source_by_id(source)):
             # Accept technical IDs (e.g. "HDMI3") in addition to display names
             source_key = resolved[1]
             source = resolved[0]  # Use display name for state
-            if self._art_mode_is_on():
-                await self.async_send_command("KEY_HOME")
-                await asyncio.sleep(KEYPRESS_DEFAULT_DELAY)
+            await self._async_wake_for_source_switch(source, source_key)
             if not await self._async_send_keys(source_key):
                 return
         elif self._app_list and source in self._app_list:
