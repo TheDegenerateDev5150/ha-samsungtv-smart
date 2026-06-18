@@ -51,6 +51,13 @@ ERROR_UNAUTHORIZED = -32010
 # AccessToken is stale/unrecognized: a fresh pairing always clears it. Treated
 # as an auth error (re-pair required) when a token was actually sent.
 ERROR_PARSE_STALE_TOKEN = -32700
+# Generic "Server error". Observed for expert-picture controls (e.g.
+# colorToneControl) when the TV's current picture mode does not allow the
+# setting to be changed — Dynamic/HDR-dynamic modes drive color tone
+# automatically and reject manual writes, while Standard/Movie/Filmmaker
+# accept them. Not a transport or pairing problem: retrying after switching
+# picture mode succeeds.
+ERROR_SERVER = -32002
 
 # Art-mode desync guard: number of consecutive reads where the artModeControl
 # flag claims "on" while getTVStates.pictureMode shows a real (non-art) picture
@@ -66,6 +73,15 @@ class SamsungIPControlError(Exception):
 
 class SamsungIPControlAuthError(SamsungIPControlError):
     """The access token is missing, invalid or expired — re-pairing is required."""
+
+
+class SamsungIPControlModeLockedError(SamsungIPControlError):
+    """The control is rejected by the TV's current picture mode (code -32002).
+
+    Not a transport, pairing, or capability problem — the same request
+    succeeds once the TV is switched to a picture mode that allows manual
+    writes (e.g. Standard/Movie/Filmmaker rather than Dynamic/HDR-dynamic).
+    """
 
 
 class SamsungIPControl:
@@ -366,6 +382,13 @@ class SamsungIPControl:
             ):
                 raise SamsungIPControlAuthError(
                     f"token rejected (code {code}): {message} — re-pair required"
+                )
+            if code == ERROR_SERVER:
+                raise SamsungIPControlModeLockedError(
+                    f"TV returned error {code}: {message} — the current "
+                    "picture mode likely blocks this control (e.g. "
+                    "Dynamic/HDR-dynamic); switch to Standard/Movie/"
+                    "Filmmaker and retry"
                 )
             raise SamsungIPControlError(f"TV returned error {code}: {message}")
 

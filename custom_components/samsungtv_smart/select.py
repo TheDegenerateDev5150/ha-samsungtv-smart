@@ -21,6 +21,7 @@ from .api.ipcontrol import (
     SamsungIPControl,
     SamsungIPControlAuthError,
     SamsungIPControlError,
+    SamsungIPControlModeLockedError,
 )
 from .const import (
     AUTH_METHOD_OAUTH,
@@ -362,6 +363,13 @@ class SamsungTVIPControlColorToneSelect(SelectEntity):
             )
             raise HomeAssistantError(
                 f"IP Control token rejected while setting color tone: {ex}"
+            ) from ex
+        except SamsungIPControlModeLockedError as ex:
+            # Reversible TV-side state, not a pairing or capability problem —
+            # leave the entity available so the next attempt (after switching
+            # picture mode) can succeed without re-pairing.
+            raise HomeAssistantError(
+                f"Color tone can't be changed right now: {ex}"
             ) from ex
         except SamsungIPControlError as ex:
             self._mark_unavailable()
