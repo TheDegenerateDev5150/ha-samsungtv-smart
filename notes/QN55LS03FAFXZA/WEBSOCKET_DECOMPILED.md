@@ -1,16 +1,11 @@
 # Samsung 8001/8002 WebSocket Decompile
 
-Device: `QN55LS03FAFXZA`
-
-Samsung support: https://www.samsung.com/us/support/downloads/?model=N0003009&modelCode=QN55LS03FAFXZA
-
-Documented: `2026-06-18`
-
-Firmware: `T-PTMFAKUC-0090-1296.8`
-
-Tizen: `9.0.0`
-
-Linux: `5.4.261 armv7l`
+- Device: `QN55LS03FAFXZA`
+- Samsung support: https://www.samsung.com/us/support/downloads/?model=N0003009&modelCode=QN55LS03FAFXZA
+- Documented: `2026-06-18`
+- Firmware: `T-PTMFAKUC-0090-1296.8`
+- Tizen: `9.0.0`
+- Linux: `5.4.261 armv7l`
 
 ## Sources
 
