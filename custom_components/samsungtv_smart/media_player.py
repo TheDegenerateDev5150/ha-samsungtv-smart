@@ -2772,12 +2772,22 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         if self._source_list and source in self._source_list:
             source_key = self._source_list[source]
+            if self._art_mode_is_on():
+                # The panel ignores HDMI/source-switch keys while in Art
+                # Mode (confirmed by Preston: the TV stayed on the previous
+                # source and art_mode_status never changed). KEY_HOME wakes
+                # it first, matching the manual home+source workaround.
+                await self.async_send_command("KEY_HOME")
+                await asyncio.sleep(KEYPRESS_DEFAULT_DELAY)
             if not await self._async_send_keys(source_key):
                 return
         elif self._source_list and (resolved := self._resolve_source_by_id(source)):
             # Accept technical IDs (e.g. "HDMI3") in addition to display names
             source_key = resolved[1]
             source = resolved[0]  # Use display name for state
+            if self._art_mode_is_on():
+                await self.async_send_command("KEY_HOME")
+                await asyncio.sleep(KEYPRESS_DEFAULT_DELAY)
             if not await self._async_send_keys(source_key):
                 return
         elif self._app_list and source in self._app_list:
