@@ -1,10 +1,11 @@
-"""Samsung TV Smart - Number entities for Frame TV Art Mode.
+"""Samsung TV Smart - Number entities.
 
 Provides interactive Number entities (sliders in HA UI) for:
+- IP Control picture backlight (0-50)
 - Art Mode brightness (0-100)
 - Art Mode color temperature (-5 to +5)
 
-Both wrap the existing art_api methods and only appear on Frame TVs.
+Art Mode numbers wrap the existing art_api methods and only appear on Frame TVs.
 """
 
 from __future__ import annotations
@@ -12,17 +13,25 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from homeassistant.components.number import NumberMode, RestoreNumber
+from homeassistant.components.number import NumberEntity, NumberMode, RestoreNumber
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_ID, CONF_NAME, CONF_PORT, CONF_TOKEN
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api.art import SamsungTVAsyncArt
+from .api.ipcontrol import (
+    SamsungIPControl,
+    SamsungIPControlAuthError,
+    SamsungIPControlError,
+)
 from .const import (
+    CONF_ENABLE_IP_CONTROL,
+    CONF_IP_CONTROL_TOKEN,
     CONF_IS_FRAME_TV,
     CONF_WS_NAME,
     DATA_ART_API,
@@ -31,8 +40,16 @@ from .const import (
     DOMAIN,
     WS_PREFIX,
 )
+from .token_notify import METHOD_IP_CONTROL, clear_token_problem, notify_token_problem
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _ip_control_active(entry: ConfigEntry) -> bool:
+    """True when IP Control is paired AND enabled in the options."""
+    return bool(entry.data.get(CONF_IP_CONTROL_TOKEN)) and entry.options.get(
+        CONF_ENABLE_IP_CONTROL, True
+    )
 
 
 async def async_setup_entry(
@@ -48,6 +65,17 @@ async def async_setup_entry(
     ws_name = config.get(CONF_WS_NAME, "HomeAssistant")
     device_unique_id = config.get(CONF_ID, entry.entry_id)
     device_name = config.get(CONF_NAME) or entry.title or host
+
+    if _ip_control_active(entry):
+        async_add_entities(
+            [
+                SamsungTVIPControlBacklightNumber(
+                    hass, entry, host, device_name, device_unique_id
+                )
+            ],
+            True,
+        )
+        _LOGGER.debug("IP Control backlight number entity created for %s", device_name)
 
     session = async_get_clientsession(hass)
 
@@ -81,7 +109,7 @@ async def async_setup_entry(
         )
         return
 
-    entities = [
+    entities: list[RestoreNumber] = [
         SamsungTVArtBrightnessNumber(
             hass, entry, art_api, device_name, device_unique_id
         ),
@@ -94,6 +122,140 @@ async def async_setup_entry(
         "Frame Art number entities (brightness, color temperature) created for %s",
         device_name,
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# IP Control Backlight (0-50, native TV scale)
+# ══════════════════════════════════════════════════════════════════════════
+
+
+class SamsungTVIPControlBacklightNumber(NumberEntity):
+    """Number entity for the IP Control picture backlight value."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:brightness-6"
+    _attr_mode = NumberMode.SLIDER
+    _attr_native_min_value = 0
+    _attr_native_max_value = 50
+    _attr_native_step = 1
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        host: str,
+        device_name: str,
+        device_unique_id: str,
+    ) -> None:
+        """Initialize the IP Control backlight number."""
+        self.hass = hass
+        self._entry_id = entry.entry_id
+        self._host = host
+        self._device_name = device_name
+        self._device_unique_id = device_unique_id
+        self._ip_control: SamsungIPControl | None = None
+        self._ip_control_token: str | None = None
+        self._attr_unique_id = f"{device_unique_id}_ip_control_backlight"
+        self._attr_name = "Backlight"
+        self._attr_native_value: float | None = None
+        self._attr_available = False
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Link this entity to the TV device."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._device_unique_id)},
+            name=self._device_name,
+        )
+
+    @property
+    def available(self) -> bool:
+        """Available only while IP Control is paired, enabled, and reachable."""
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        return bool(entry and _ip_control_active(entry) and self._attr_available)
+
+    def _device_title(self) -> str:
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        return entry.title if entry else (self._device_name or "this Samsung TV")
+
+    def _get_ip_control(self) -> SamsungIPControl | None:
+        """Return a live IP Control client if paired AND enabled."""
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None or not _ip_control_active(entry):
+            self._ip_control = None
+            self._ip_control_token = None
+            return None
+        token = entry.data.get(CONF_IP_CONTROL_TOKEN)
+        if self._ip_control is None or self._ip_control_token != token:
+            self._ip_control = SamsungIPControl(self.hass, self._host, token=token)
+            self._ip_control_token = token
+        return self._ip_control
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Set picture backlight through IP Control."""
+        backlight = int(value)
+        if backlight < 0 or backlight > 50:
+            raise HomeAssistantError("Backlight must be between 0 and 50.")
+
+        client = self._get_ip_control()
+        if client is None:
+            raise HomeAssistantError(
+                "IP Control is not paired or is disabled for this TV."
+            )
+
+        try:
+            self._attr_native_value = await client.async_set_backlight(backlight)
+            self._attr_available = True
+        except SamsungIPControlAuthError as ex:
+            self._mark_unavailable()
+            notify_token_problem(
+                self.hass, self._entry_id, METHOD_IP_CONTROL, self._device_title()
+            )
+            raise HomeAssistantError(
+                f"IP Control token rejected while setting backlight: {ex}"
+            ) from ex
+        except SamsungIPControlError as ex:
+            self._mark_unavailable()
+            raise HomeAssistantError(
+                f"Failed to set backlight via IP Control: {ex}"
+            ) from ex
+
+        clear_token_problem(self.hass, self._entry_id, METHOD_IP_CONTROL)
+        self.async_write_ha_state()
+
+    async def async_update(self) -> None:
+        """Read current picture backlight from IP Control."""
+        client = self._get_ip_control()
+        if client is None:
+            self._mark_unavailable()
+            return
+
+        try:
+            self._attr_native_value = await client.async_get_backlight()
+            self._attr_available = True
+        except SamsungIPControlAuthError as ex:
+            _LOGGER.warning(
+                "IP Control backlight read for %s: token rejected (%s) — "
+                "re-pair via the integration options",
+                self._host,
+                ex,
+            )
+            self._mark_unavailable()
+            notify_token_problem(
+                self.hass, self._entry_id, METHOD_IP_CONTROL, self._device_title()
+            )
+        except SamsungIPControlError as ex:
+            _LOGGER.debug(
+                "Could not refresh IP Control backlight for %s: %s", self._host, ex
+            )
+            self._mark_unavailable()
+        else:
+            clear_token_problem(self.hass, self._entry_id, METHOD_IP_CONTROL)
+
+    def _mark_unavailable(self) -> None:
+        """Expose no slider value until a live IP Control read succeeds."""
+        self._attr_available = False
+        self._attr_native_value = None
 
 
 # ══════════════════════════════════════════════════════════════════════════
