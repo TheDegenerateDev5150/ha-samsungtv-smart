@@ -238,9 +238,7 @@ class SamsungIPControl:
         backlight = int(value)
         if backlight < 0 or backlight > 50:
             raise SamsungIPControlError("backlight must be between 0 and 50")
-        result = await self._async_request(
-            "backlightControl", {"backlight": backlight}
-        )
+        result = await self._async_request("backlightControl", {"backlight": backlight})
         response_value = result.get("backlight", backlight)
         try:
             return int(response_value)

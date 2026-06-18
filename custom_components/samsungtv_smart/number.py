@@ -31,8 +31,8 @@ from .api.ipcontrol import (
 )
 from .const import (
     CONF_ENABLE_IP_CONTROL,
-    CONF_IS_FRAME_TV,
     CONF_IP_CONTROL_TOKEN,
+    CONF_IS_FRAME_TV,
     CONF_WS_NAME,
     DATA_ART_API,
     DATA_CFG,
