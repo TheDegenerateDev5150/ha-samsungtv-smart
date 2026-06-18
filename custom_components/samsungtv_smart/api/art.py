@@ -208,9 +208,7 @@ class SamsungTVAsyncArt:
             try:
                 callback()
             except Exception:  # noqa: BLE001 - callback must not break the loop
-                self._log.debug(
-                    "Art API: art-content callback raised", exc_info=True
-                )
+                self._log.debug("Art API: art-content callback raised", exc_info=True)
 
     @property
     def _ws_url(self) -> str:
