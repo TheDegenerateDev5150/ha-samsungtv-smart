@@ -323,19 +323,20 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         entry: ConfigEntry,
     ) -> None:
         """Initialize the coordinator."""
+        # Mirrors api.art's per-host log prefix so Frame Art lines can be told
+        # apart the same way the Art API and media_player logs already are.
+        # Passed to super() too so the base coordinator's own messages
+        # ("Finished fetching …", "Manually updated …") are prefixed as well.
+        self._log = _DeviceLoggerAdapter(_LOGGER, {"host": entry.data.get(CONF_HOST)})
         super().__init__(
             hass,
-            _LOGGER,
+            self._log,
             name=f"Frame Art {entry.title}",
             update_interval=SCAN_INTERVAL,
         )
         self._art_api = art_api
         self._entry = entry
         self._hass = hass
-        # Mirrors api.art's per-host log prefix so Frame Art lines can be told
-        # apart from other devices' the same way the Art API and media_player
-        # logs already are.
-        self._log = _DeviceLoggerAdapter(_LOGGER, {"host": entry.data.get(CONF_HOST)})
         self._last_content_id: str | None = None
         # Enabled by default - thumbnails are fetched for current artwork
         self._thumbnail_fetch_enabled = True
