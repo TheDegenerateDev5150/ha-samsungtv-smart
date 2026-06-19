@@ -600,6 +600,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 ),
             )
         self._art_api.register_capability_callback(self._persist_art_capability)
+        self._art_api.register_port_callback(self._persist_art_port)
         self._art_api.register_art_event_callback(self._on_art_transition)
         self._frame_tv_supported: bool | None = None
         self._frame_art_last_result: dict | None = None
@@ -842,6 +843,21 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             return
         self.hass.config_entries.async_update_entry(
             entry, data={**entry.data, key: value}
+        )
+
+    def _persist_art_port(self, port: int) -> None:
+        """Persist the Art API's runtime port fallback to entry.data.
+
+        Called (on the event loop) by the Art API when its configured port
+        stopped responding and the alternate port (8001 <-> 8002) worked
+        instead, so the next restart connects directly instead of paying the
+        failed attempt again.
+        """
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None or entry.data.get(CONF_PORT) == port:
+            return
+        self.hass.config_entries.async_update_entry(
+            entry, data={**entry.data, CONF_PORT: port}
         )
 
     async def _do_oauth_refresh(self) -> bool:
