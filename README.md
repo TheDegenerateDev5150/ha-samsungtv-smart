@@ -21,6 +21,7 @@ This fork brings improved WebSocket stability, full Samsung Frame TV Art Mode su
   - [SmartThings Authentication](#smartthings-authentication)
   - [Integration Setup](#integration-setup)
   - [Options](#options)
+  - [Reconfigure](#reconfigure)
 - [Entities](#entities)
 - [Services](#services)
   - [Standard TV Services](#standard-tv-services)
@@ -239,10 +240,24 @@ After initial setup, click **Configure** on the integration card to access these
 | **Sync turn on/off** | Optional entity to mirror TV power state |
 | **External power entity** | Use an external sensor to determine power state |
 | **Toggle Art Mode** | Toggle Art Mode when turning on a Frame TV that is already in Art Mode |
-| **Enable IP Control** | Use the local JSON-RPC channel (port 1516) for reliable power on/off without SmartThings (shown only once the TV is paired for IP Control) |
-| **Enable IP Control Art Mode** | Use IP Control to read and switch Art Mode. **Off by default — leave it off unless you know your firmware handles it.** ⚠️ Can break Art Mode entirely and may need a factory reset to recover (seen on QE55LS03D fw 2123). See [IP Control reports Art Mode "on" when it isn't](#ip-control-reports-art-mode-on-when-it-isnt) |
 | **Ping port** | Port used to detect TV presence |
 | **WS name** | Name shown on the TV when pairing (default: `[Home Assistant]`) |
+
+> **IP Control moved.** Pairing and the *Enable IP Control* / *Enable IP Control Art Mode* toggles are no longer in this Options screen — they now live under **Reconfigure → IP Control** (see [Reconfigure](#reconfigure) below).
+
+---
+
+### Reconfigure
+
+To change connection or credentials after setup, open **Settings → Devices & Services → Samsung TV Smart → Reconfigure**. The flow is split into three clear sections so you only touch what you need:
+
+| Section | What it changes |
+|---|---|
+| **Connection** | TV IP address and WebSocket port (8001, or 8002 for SSL-only TVs). Use **8001** unless your TV only answers on **8002**. The integration also falls back between the two ports automatically at runtime if a firmware update filters the configured one. |
+| **Authentication** | The auth method (OAuth2 / Personal Access Token / SmartThings link). For OAuth2, selecting it starts the login flow immediately. |
+| **IP Control** | Pair the local JSON-RPC channel (port 1516) and, once paired, toggle **Enable IP Control** (reliable power on/off without SmartThings) and **Enable IP Control Art Mode** (⚠️ off by default — see the warning below). To pair, check *Pair now* with the TV **ON and in normal viewing (not Art Mode)** and accept the on-screen prompt. |
+
+> ⚠️ **Do not enable *Enable IP Control Art Mode*** unless you know your firmware handles it — it can break Art Mode entirely and may need a factory reset to recover (seen on QE55LS03D fw 2123). See [IP Control reports Art Mode "on" when it isn't](#ip-control-reports-art-mode-on-when-it-isnt).
 
 ---
 
@@ -612,10 +627,10 @@ This typically appears **after a TV factory reset and re-pairing** of the IP Con
 
 **Workarounds, in order of preference:**
 
-1. **Disable Art Mode over IP Control.** In the integration options, turn **Enable IP Control Art Mode** off (this is the default). Art Mode detection and switching then fall back to the WebSocket / Frame Art channel, which is unaffected. Power on/off over IP Control (**Enable IP Control** / the *IP Control* power-on method) keeps working — only the Art Mode path is disabled.
+1. **Disable Art Mode over IP Control.** Under **Reconfigure → IP Control**, turn **Enable IP Control Art Mode** off (this is the default). Art Mode detection and switching then fall back to the WebSocket / Frame Art channel, which is unaffected. Power on/off over IP Control (**Enable IP Control** / the *IP Control* power-on method) keeps working — only the Art Mode path is disabled.
 2. **Factory reset the TV.** If you need IP Control for Art Mode and the flag is wedged, the only known way to clear the stuck `artModeControl` flag on the TV side is a **factory reset of the TV** (Settings → General → Reset), followed by re-pairing. There is no remote/API command that unsticks it.
 
-Once a firmware update reports `artModeControl` correctly again, you can re-enable **Enable IP Control Art Mode** in the options.
+Once a firmware update reports `artModeControl` correctly again, you can re-enable **Enable IP Control Art Mode** under **Reconfigure → IP Control**.
 
 ---
 

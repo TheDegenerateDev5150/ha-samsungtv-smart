@@ -47,7 +47,7 @@ with each channel independently selectable and resilient to a bad credential.
 
 ## IP Control (new channel — JSON-RPC, port 1516)
 
-- **Pairing** from the integration options (TV must be ON and in normal
+- **Pairing** from **Reconfigure → IP Control** (TV must be ON and in normal
   viewing, not Art Mode). The access token is stored per entry and **survives
   TV reboots** (no re-pairing needed afterwards).
 - **Power on/off** and **reboot** over a channel that is independent of the
@@ -59,8 +59,9 @@ with each channel independently selectable and resilient to a bad credential.
 - **Art Mode set** now goes through IP Control **first**, falling back to the
   WebSocket only on failure — avoiding the WebSocket path that could become
   unresponsive.
-- **Enable/disable toggle** in the options: turn the whole IP Control channel
-  off without un-pairing (hides the reboot button and stops IP Control polling).
+- **Enable/disable toggle** under **Reconfigure → IP Control**: turn the whole
+  IP Control channel off without un-pairing (hides the reboot button and stops
+  IP Control polling).
 - **Power-on method**: "IP Control" can be selected as the power-on method,
   available even without SmartThings, with WOL as automatic fallback.
 - Robust error handling: the firmware's flat `-32700` "Parse error" (returned
@@ -101,6 +102,32 @@ with each channel independently selectable and resilient to a bad credential.
   (`slideshow` vs `auto_rotation`), accepting custom durations.
 - Bundled `folder-gallery-card` for the art gallery frontend.
 
+## Reliability & consolidation
+
+A round of stabilization fixes on top of the three-channel rework:
+
+- **Reconfigure flow restructured** into three clear sections — **Connection**,
+  **Authentication** and **IP Control** — instead of one cramped form. IP Control
+  pairing and toggles moved here from the Options screen.
+- **Port selection fixed** in Reconfigure: choosing 8001/8002 was always
+  rejected (a type-coercion bug); both ports now validate correctly.
+- **Art Mode self-heals on a port change**: the Art channel now falls back
+  between **8001 and 8002 at runtime** (like the main WebSocket already did) and
+  persists the working port, so a firmware update that filters the configured
+  port no longer leaves Art Mode unreachable until a manual reconfigure.
+- **Art Mode motion settings** (sensitivity / timer) decoded correctly — the
+  TV reports `valid_values` as a JSON-encoded string, which was previously
+  exploded into one option per character.
+- **Orphan thumbnail cleanup** now runs even when the TV reports an empty
+  artwork list (e.g. after a factory reset), instead of leaving stale local
+  thumbnails behind.
+- **Per-TV log prefixes**: Frame Art, SmartThings and coordinator log lines are
+  now prefixed with the TV's host (`[192.168.x.y]`), matching the WebSocket and
+  media-player logs, so multi-TV setups are readable.
+- **Brightness / colour-temperature capability detection is now persisted**
+  across restarts, so the one-off probe (and its timeout cost) is not re-paid on
+  every start.
+
 ## Localization
 
 - All UI strings (config, options, IP Control pairing, the new toggle and the
@@ -121,8 +148,8 @@ with each channel independently selectable and resilient to a bad credential.
   default** — see the warning above.
 - The reboot/IP-Control recovery of an unresponsive ("zombie") Art WebSocket is
   implemented but **not yet confirmed empirically** in that exact state.
-- Brightness / colour-temperature capability flags are re-detected on every
-  start (not yet persisted).
+- The runtime **Art channel port fallback** (8001↔8002) is implemented but not
+  yet confirmed on a TV that actually drops its configured port.
 - The three power-on-method labels are currently English-only in all locales.
 
 ---
