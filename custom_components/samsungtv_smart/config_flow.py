@@ -67,6 +67,8 @@ from .const import (
     CONF_ENABLE_IP_CONTROL,
     CONF_EXT_POWER_ENTITY,
     CONF_IP_CONTROL_ART_MODE,
+    CONF_IP_CONTROL_FW_VERSION,
+    CONF_IP_CONTROL_MODEL_ID,
     CONF_IP_CONTROL_TOKEN,
     CONF_LOGO_OPTION,
     CONF_OAUTH_TOKEN,
@@ -822,9 +824,23 @@ class SamsungTVSmartOAuth2FlowHandler(
                     )
                     errors[CONF_BASE] = "ip_control_pair_failed"
                 else:
+                    data_updates: dict[str, Any] = {CONF_IP_CONTROL_TOKEN: token}
+                    try:
+                        device_info = await client.async_get_device_information()
+                    except SamsungIPControlError as ex:
+                        _LOGGER.debug(
+                            "IP Control getDeviceInformation failed for %s: %s",
+                            host,
+                            ex,
+                        )
+                    else:
+                        data_updates[CONF_IP_CONTROL_MODEL_ID] = device_info["modelID"]
+                        data_updates[CONF_IP_CONTROL_FW_VERSION] = device_info[
+                            "FWVersion"
+                        ]
                     return self.async_update_reload_and_abort(
                         entry,
-                        data_updates={CONF_IP_CONTROL_TOKEN: token},
+                        data_updates=data_updates,
                         reason="ip_control_pair_successful",
                     )
 

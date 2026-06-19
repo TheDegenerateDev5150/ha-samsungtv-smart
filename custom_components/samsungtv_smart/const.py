@@ -109,6 +109,14 @@ CONF_ENABLE_IP_CONTROL = "enable_ip_control"
 # correctly again.
 CONF_IP_CONTROL_ART_MODE = "ip_control_art_mode"
 
+# Device identity, learned once via IP Control's getDeviceInformation right
+# after pairing. Used to gate which model-dependent features/entities get
+# created (not every TV supports the same IP Control capability set).
+# Distinct from CONF_DEVICE_MODEL (the WS-discovered friendly model name):
+# modelID here is the raw internal code IP Control returns (e.g. "25_PTM_FTV").
+CONF_IP_CONTROL_MODEL_ID = "ip_control_model_id"
+CONF_IP_CONTROL_FW_VERSION = "ip_control_fw_version"
+
 # Authentication methods
 AUTH_METHOD_OAUTH = "oauth"
 AUTH_METHOD_PAT = "pat"
