@@ -34,7 +34,7 @@ import subprocess
 import sys
 from threading import Lock, Thread
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlencode, urljoin
 import uuid
 
@@ -211,25 +211,67 @@ class SamsungTVAsyncRest:
         self._port = port
         self._session = session
         self._timeout = None if timeout == 0 else timeout
+        self._port_callback: Callable[[int], None] | None = None
+
+    def register_port_callback(self, func: Callable[[int], None]) -> None:
+        """Register a callback invoked when the working REST port changes.
+
+        Mirrors api.art's port self-heal: lets the caller persist the
+        learned port (entry.data) so a misconfigured/changed port doesn't
+        keep failing on every restart.
+        """
+        self._port_callback = func
+
+    def _learn_port(self, port: int) -> None:
+        """Switch to the alternate port and report it via the callback."""
+        self._port = port
+        if self._port_callback is not None:
+            self._port_callback(port)
+
+    async def _rest_request_once(
+        self, target: str, method: str, port: int
+    ) -> dict[str, Any]:
+        """Perform a single async rest request against a specific port."""
+        url = _format_rest_url(self._host, target, port)
+        if method == "POST":
+            req = self._session.post(url, timeout=self._timeout, verify_ssl=False)
+        elif method == "PUT":
+            req = self._session.put(url, timeout=self._timeout, verify_ssl=False)
+        elif method == "DELETE":
+            req = self._session.delete(url, timeout=self._timeout, verify_ssl=False)
+        else:
+            req = self._session.get(url, timeout=self._timeout, verify_ssl=False)
+        async with req as resp:
+            return _process_api_response(await resp.text())
 
     async def _rest_request(self, target: str, method: str = "GET") -> dict[str, Any]:
-        """Perform async rest request."""
-        url = _format_rest_url(self._host, target, self._port)
+        """Perform async rest request.
+
+        Tries the configured port first, then falls back to the other REST
+        port (8001/8002) on a connection failure — some firmwares (e.g.
+        2024+ Frame) only serve the REST API on 8002, while older sets may
+        only answer on 8001. On a successful fallback the working port is
+        learned for subsequent calls and persisted via register_port_callback.
+        """
         try:
-            if method == "POST":
-                req = self._session.post(url, timeout=self._timeout, verify_ssl=False)
-            elif method == "PUT":
-                req = self._session.put(url, timeout=self._timeout, verify_ssl=False)
-            elif method == "DELETE":
-                req = self._session.delete(url, timeout=self._timeout, verify_ssl=False)
-            else:
-                req = self._session.get(url, timeout=self._timeout, verify_ssl=False)
-            async with req as resp:
-                return _process_api_response(await resp.text())
-        except aiohttp.ClientConnectionError as ex:
-            raise HttpApiError(
-                "TV unreachable or feature not supported on this model."
-            ) from ex
+            return await self._rest_request_once(target, method, self._port)
+        except aiohttp.ClientConnectionError:
+            alternate_port = 8001 if self._port == 8002 else 8002
+            try:
+                result = await self._rest_request_once(target, method, alternate_port)
+            except aiohttp.ClientConnectionError as ex:
+                raise HttpApiError(
+                    "TV unreachable or feature not supported on this model."
+                ) from ex
+            self._log.warning(
+                "REST request for %s failed on port %s, succeeded on %s "
+                "-- switching to it",
+                self._host,
+                self._port,
+                alternate_port,
+            )
+            self._learn_port(alternate_port)
+            return result
 
     async def async_rest_device_info(self) -> dict[str, Any]:
         """Get device info using rest api call."""

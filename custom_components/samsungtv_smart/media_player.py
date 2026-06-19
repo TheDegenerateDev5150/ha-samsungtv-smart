@@ -581,7 +581,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             host=self._host,
             session=session,
             timeout=DEFAULT_TIMEOUT,
+            port=config.get(CONF_PORT, DEFAULT_PORT),
         )
+        self._rest_api.register_port_callback(self._persist_art_port)
 
         # Frame Art API - use shared instance if available, otherwise create new one
         shared_art_api = entry_data.get(DATA_ART_API) if entry_data else None
