@@ -21,6 +21,20 @@ CAP_MEDIA_INPUT_SOURCE = "mediaInputSource"
 
 _LOGGER = logging.getLogger(__name__)
 
+
+class _STLoggerAdapter(logging.LoggerAdapter):
+    """Prefix every log line with the TV's host so multi-TV logs can be told apart.
+
+    Mirrors api.art._DeviceLoggerAdapter. SmartThings instances are keyed by
+    device_id, not host, so fall back to the (short) device_id when no host
+    was supplied (e.g. the transient config-flow validation instance).
+    """
+
+    def process(self, msg, kwargs):
+        ident = self.extra.get("host") or self.extra.get("device_id")
+        return f"[{ident}] {msg}", kwargs
+
+
 # SmartThings REST API
 API_BASEURL = "https://api.smartthings.com/v1"
 API_DEVICES = f"{API_BASEURL}/devices"
@@ -52,12 +66,16 @@ class SmartThingsTV:
         use_channel_info: bool = True,
         session: ClientSession | None = None,
         api_key_callback: Callable[[], str | None] | None = None,
+        host: str | None = None,
     ):
         """Initialize SmartThingsTV with pysmartthings."""
         self._api_key = api_key
         self._device_id = device_id
         self._use_channel_info = use_channel_info
         self._api_key_callback = api_key_callback
+        # Per-TV log prefix, consistent with api.art / media_player. Falls back
+        # to the device_id when no host is supplied (config-flow validation).
+        self._log = _STLoggerAdapter(_LOGGER, {"host": host, "device_id": device_id})
 
         # Store session for direct REST API calls (source selection)
         self._session = session
@@ -225,7 +243,7 @@ class SmartThingsTV:
         v6.x and cannot be instantiated with keyword arguments.
         """
         if not self._device_id or not self._session:
-            _LOGGER.error("Cannot send REST command: device_id or session missing")
+            self._log.error("Cannot send REST command: device_id or session missing")
             return
 
         api_key = self._get_api_key()
@@ -249,7 +267,7 @@ class SmartThingsTV:
             raise_for_status=True,
         ) as resp:
             result = await resp.json()
-            _LOGGER.debug(
+            self._log.debug(
                 "REST command %s/%s sent, status: %s, response: %s",
                 capability,
                 command,
@@ -266,7 +284,7 @@ class SmartThingsTV:
         the capability or the map attribute.
         """
         has_media_input = "mediaInputSource" in main_comp
-        _LOGGER.debug(
+        self._log.debug(
             "Samsung TV: _update_source_list called, mediaInputSource in comp: %s",
             has_media_input,
         )
@@ -277,7 +295,7 @@ class SmartThingsTV:
             supported_val = (
                 media_input["supportedInputSources"].value if has_supported else None
             )
-            _LOGGER.debug(
+            self._log.debug(
                 "Samsung TV: supportedInputSources present=%s, value=%s",
                 has_supported,
                 supported_val,
@@ -310,16 +328,16 @@ class SmartThingsTV:
 
         # Fallback: if pysmartthings didn't provide sources, fetch via REST
         if not self._source_list and self._state == STStatus.STATE_ON:
-            _LOGGER.debug("Samsung TV: source_list empty, trying REST fallback")
+            self._log.debug("Samsung TV: source_list empty, trying REST fallback")
             await self._fetch_input_source_map()
 
         if self._source_list:
-            _LOGGER.debug(
+            self._log.debug(
                 "Samsung TV: sources loaded: %s",
                 {k: v for k, v in self._source_list_map.items()},
             )
         else:
-            _LOGGER.debug("Samsung TV: no sources available after update")
+            self._log.debug("Samsung TV: no sources available after update")
 
     def _apply_source_name_map(self, sources_map_raw: list) -> None:
         """Apply custom names from supportedInputSourcesMap."""
@@ -342,7 +360,7 @@ class SmartThingsTV:
         Tries both standard and Samsung-specific capabilities.
         """
         if not self._device_id or not self._session:
-            _LOGGER.debug("Cannot fetch input sources: missing device_id or session")
+            self._log.debug("Cannot fetch input sources: missing device_id or session")
             return
         api_key = self._get_api_key()
 
@@ -357,7 +375,7 @@ class SmartThingsTV:
                 f"{API_DEVICES}/{self._device_id}"
                 f"/components/main/capabilities/{cap_name}/status"
             )
-            _LOGGER.debug("Samsung TV: fetching input sources via REST: %s", cap_name)
+            self._log.debug("Samsung TV: fetching input sources via REST: %s", cap_name)
             try:
                 async with self._session.get(
                     url,
@@ -367,12 +385,12 @@ class SmartThingsTV:
                     },
                 ) as resp:
                     if resp.status != 200:
-                        _LOGGER.debug(
+                        self._log.debug(
                             "Samsung TV: %s returned status %s", cap_name, resp.status
                         )
                         continue
                     data = await resp.json()
-                    _LOGGER.debug("Samsung TV: %s REST response: %s", cap_name, data)
+                    self._log.debug("Samsung TV: %s REST response: %s", cap_name, data)
 
                     # Try supportedInputSourcesMap first (has custom names)
                     raw_map = data.get("supportedInputSourcesMap", {}).get("value")
@@ -390,7 +408,7 @@ class SmartThingsTV:
                             if s_id:
                                 self._source_list[s_id] = s_name
                                 self._source_list_map[s_id] = s_name
-                        _LOGGER.debug(
+                        self._log.debug(
                             "Samsung TV: sources from %s map: %s",
                             cap_name,
                             self._source_list_map,
@@ -417,7 +435,7 @@ class SmartThingsTV:
                                     self._source_list[s_id] = s_name
                                     self._source_list_map[s_id] = s_name
                         if self._source_list:
-                            _LOGGER.debug(
+                            self._log.debug(
                                 "Samsung TV: sources from %s list: %s",
                                 cap_name,
                                 self._source_list_map,
@@ -425,7 +443,7 @@ class SmartThingsTV:
                             return
 
             except Exception as err:
-                _LOGGER.debug("Error fetching %s: %s", cap_name, err)
+                self._log.debug("Error fetching %s: %s", cap_name, err)
 
     async def _update_picture_mode(self, main_comp: dict) -> None:
         """Update picture mode from device status or REST fallback.
@@ -537,7 +555,7 @@ class SmartThingsTV:
                 },
             ) as resp:
                 if resp.status != 200:
-                    _LOGGER.debug(
+                    self._log.debug(
                         "Could not fetch picture mode map (status %s)", resp.status
                     )
                     return
@@ -561,7 +579,7 @@ class SmartThingsTV:
                     if new_map:
                         self._picture_mode_map = new_map
                         self._picture_mode_list = list(new_map.keys())
-                        _LOGGER.debug(
+                        self._log.debug(
                             "Picture mode map loaded via REST: %s", list(new_map.keys())
                         )
 
@@ -573,14 +591,14 @@ class SmartThingsTV:
                         self._picture_mode = reverse.get(raw_mode, raw_mode)
                     else:
                         self._picture_mode = raw_mode
-                    _LOGGER.debug(
+                    self._log.debug(
                         "Picture mode from REST: %s (raw: %s)",
                         self._picture_mode,
                         raw_mode,
                     )
 
         except Exception as err:
-            _LOGGER.debug("Error fetching picture mode map: %s", err)
+            self._log.debug("Error fetching picture mode map: %s", err)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Device discovery
@@ -642,7 +660,7 @@ class SmartThingsTV:
             components = await self._st.get_device_status(self._device_id)
 
             if COMPONENT_MAIN not in components:
-                _LOGGER.warning("Main component not found in device status")
+                self._log.warning("Main component not found in device status")
                 return
 
             main_comp = components[COMPONENT_MAIN]
@@ -653,7 +671,7 @@ class SmartThingsTV:
                     device = await self._st.get_device(self._device_id)
                     self._device_name = device.label or device.name
                 except Exception as err:
-                    _LOGGER.debug("Could not get device name: %s", err)
+                    self._log.debug("Could not get device name: %s", err)
 
             # Update state
             self._prev_state = self._state
@@ -721,7 +739,7 @@ class SmartThingsTV:
             await self._update_picture_mode(main_comp)
 
         except Exception as err:
-            _LOGGER.error("Error updating SmartThings status: %s", err)
+            self._log.error("Error updating SmartThings status: %s", err)
             raise
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -735,7 +753,7 @@ class SmartThingsTV:
             health = await self._st.get_device_health(self._device_id)
             return health.state
         except Exception as err:
-            _LOGGER.error("Error getting device health: %s", err)
+            self._log.error("Error getting device health: %s", err)
             return "UNKNOWN"
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -756,13 +774,13 @@ class SmartThingsTV:
             # ERROR to reduce noise in logs.
             err_str = str(err)
             if "409" in err_str or "Conflict" in err_str:
-                _LOGGER.warning(
+                self._log.warning(
                     "Cannot turn on device via SmartThings "
                     "(device appears offline): %s",
                     err,
                 )
             else:
-                _LOGGER.error("Error turning on device: %s", err)
+                self._log.error("Error turning on device: %s", err)
             raise
 
     async def async_turn_off(self):
@@ -772,7 +790,7 @@ class SmartThingsTV:
             await self._send_rest_command(capability=CAP_SWITCH, command="off")
             self._state = STStatus.STATE_OFF
         except Exception as err:
-            _LOGGER.error("Error turning off device: %s", err)
+            self._log.error("Error turning off device: %s", err)
             raise
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -815,11 +833,11 @@ class SmartThingsTV:
                     command=cmd_name,
                 )
             else:
-                _LOGGER.warning("Unknown command type: %s", cmd_type)
+                self._log.warning("Unknown command type: %s", cmd_type)
                 return
 
         except Exception as err:
-            _LOGGER.error("Error sending command %s: %s", cmd_type, err)
+            self._log.error("Error sending command %s: %s", cmd_type, err)
             raise
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -842,7 +860,7 @@ class SmartThingsTV:
             )
             self._set_source(source)
         except Exception as err:
-            _LOGGER.error("Error selecting source: %s", err)
+            self._log.error("Error selecting source: %s", err)
             raise
 
     async def async_select_vd_source(self, source: str):
@@ -855,7 +873,7 @@ class SmartThingsTV:
                 arguments=[source],
             )
         except Exception as err:
-            _LOGGER.error("Error selecting VD source: %s", err)
+            self._log.error("Error selecting VD source: %s", err)
             raise
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -865,10 +883,12 @@ class SmartThingsTV:
     async def async_set_sound_mode(self, mode: str):
         """Select sound mode using direct REST API."""
         if self._state != STStatus.STATE_ON:
-            _LOGGER.debug("Cannot set sound mode: TV state is %s (not ON)", self._state)
+            self._log.debug(
+                "Cannot set sound mode: TV state is %s (not ON)", self._state
+            )
             return
         if self._sound_mode_list and mode not in self._sound_mode_list:
-            _LOGGER.warning(
+            self._log.warning(
                 "Sound mode '%s' not in known list %s — sending anyway",
                 mode,
                 self._sound_mode_list,
@@ -883,7 +903,7 @@ class SmartThingsTV:
             )
             self._sound_mode = mode
         except Exception as err:
-            _LOGGER.error("Error setting sound mode: %s", err)
+            self._log.error("Error setting sound mode: %s", err)
             raise
 
     async def async_set_picture_mode(self, mode: str):
@@ -894,7 +914,7 @@ class SmartThingsTV:
         We try the detected capability first, then fall back to the other.
         """
         if self._state != STStatus.STATE_ON:
-            _LOGGER.debug(
+            self._log.debug(
                 "Cannot set picture mode: TV state is %s (not ON)", self._state
             )
             return
@@ -903,7 +923,7 @@ class SmartThingsTV:
         mode_id = self._picture_mode_map.get(mode, mode)
 
         if self._picture_mode_list and mode not in self._picture_mode_list:
-            _LOGGER.warning(
+            self._log.warning(
                 "Picture mode '%s' not in known list %s — sending anyway",
                 mode,
                 self._picture_mode_list,
@@ -927,7 +947,7 @@ class SmartThingsTV:
                     command="setPictureMode",
                     arguments=[mode_id],
                 )
-                _LOGGER.debug(
+                self._log.debug(
                     "Picture mode '%s' (id: %s) sent via %s",
                     mode,
                     mode_id,
@@ -943,13 +963,13 @@ class SmartThingsTV:
                 await self._async_refresh_device_status()
                 return
             except Exception as err:
-                _LOGGER.debug(
+                self._log.debug(
                     "setPictureMode via %s failed: %s, trying fallback",
                     capability,
                     err,
                 )
 
-        _LOGGER.error("Failed to set picture mode '%s' via both capabilities", mode)
+        self._log.error("Failed to set picture mode '%s' via both capabilities", mode)
 
     async def _async_refresh_device_status(self) -> None:
         """Send a 'refresh' command to force SmartThings to re-read TV state.
@@ -963,9 +983,9 @@ class SmartThingsTV:
                 capability="refresh",
                 command="refresh",
             )
-            _LOGGER.debug("Sent refresh command to update SmartThings state")
+            self._log.debug("Sent refresh command to update SmartThings state")
         except Exception as err:
-            _LOGGER.debug("Refresh command failed (non-critical): %s", err)
+            self._log.debug("Refresh command failed (non-critical): %s", err)
 
     @Throttle(timedelta(seconds=60))
     async def _periodic_refresh(self) -> None:

@@ -681,6 +681,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 use_channel_info=True,
                 session=session,
                 api_key_callback=api_key_callback if use_callbck else None,
+                host=self._host,
             )
 
         self._st_error_count = 0
