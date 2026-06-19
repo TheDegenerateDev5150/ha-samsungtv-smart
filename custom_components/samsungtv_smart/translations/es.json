@@ -55,16 +55,6 @@
           "device_id": "Identificador de dispositivo SmartThings"
         }
       },
-      "reconfigure": {
-        "title": "Reconfigurar televisor Samsung",
-        "description": "Actualizar la configuración del televisor.\n\nAutenticación actual: {current_auth}",
-        "data": {
-          "host": "Dirección IP del televisor",
-          "switch_to_oauth": "🔄 Cambiar a autenticación OAuth2",
-          "st_entry_unique_id": "Integración SmartThings",
-          "api_key": "Token de acceso personal de SmartThings (PAT)"
-        }
-      },
       "reauth_confirm": {
         "title": "Reautenticación requerida",
         "description": "Tu autenticación de SmartThings ha expirado. Haz clic en Enviar para volver a iniciar sesión."
@@ -96,9 +86,6 @@
     }
   },
   "options": {
-    "abort": {
-      "ip_control_pair_successful": "IP Control emparejado correctamente. El token de acceso se ha actualizado y guardado."
-    },
     "step": {
       "init": {
         "title": "Opciones de SamsungTV Smart",
@@ -110,9 +97,7 @@
           "use_st_channel_info": "Usar SmartThings para la información de canales",
           "show_channel_number": "Mostrar número de canal",
           "power_on_method": "Método de encendido",
-          "show_adv_opt": "Mostrar opciones avanzadas",
-          "enable_ip_control": "Activar IP Control",
-          "ip_control_art_mode": "Activar Modo Arte por IP Control"
+          "show_adv_opt": "Mostrar opciones avanzadas"
         }
       },
       "menu": {
@@ -124,8 +109,7 @@
           "sync_ent": "Entidades sincronizadas",
           "init": "Opciones básicas",
           "adv_opt": "Opciones avanzadas",
-          "save_exit": "Guardar y salir",
-          "ip_control_pair": "Emparejar IP Control (encendido fiable)"
+          "save_exit": "Guardar y salir"
         }
       },
       "source_list": {
@@ -171,10 +155,6 @@
       },
       "save_exit": {
         "title": "Guardar configuración"
-      },
-      "ip_control_pair": {
-        "title": "Emparejar IP Control",
-        "description": "Empareja la interfaz IP Control del televisor para un encendido/apagado fiable (funciona incluso desde el modo Arte, sin necesidad de SmartThings).\n\nAntes de continuar:\n1. El televisor debe estar ENCENDIDO y en visualización NORMAL, no en modo Arte.\n2. Activa IP Remote: Ajustes → Todos los ajustes → Conexiones → Red → Ajustes de experto → Activar IP Remote.\n\nAcepta el aviso de autorización en el televisor cuando aparezca. Estado actual: {status}."
       }
     },
     "error": {

@@ -55,16 +55,6 @@
           "device_id": "SmartThings TV deviceID"
         }
       },
-      "reconfigure": {
-        "title": "Reconfigure Samsung TV",
-        "description": "Inserisci le informazioni da aggiornare del tuo Samsung TV. Le configurazioni SmartThings possono essere cambiate ma non rimosse.\nDopo aver confermato i dati, potresti vedere un messaggio sul TV in cui è richiesta l'autorizzazione.",
-        "data": {
-          "host": "Host o indirizzo IP",
-          "switch_to_oauth": "🔄 Passa all'autenticazione OAuth2",
-          "st_entry_unique_id": "Entry SmartThings usata per fornire le credenziali SmartThings",
-          "api_key": "SmartThings token generato (opzionale, se vuoto verrà usato quello esistente)"
-        }
-      },
       "reauth_confirm": {
         "title": "Re-authentication Required",
         "description": "Your SmartThings authentication has expired. Click Submit to sign in again."
@@ -96,9 +86,6 @@
     }
   },
   "options": {
-    "abort": {
-      "ip_control_pair_successful": "IP Control associato correttamente. Il token di accesso è stato aggiornato e salvato."
-    },
     "step": {
       "init": {
         "title": "Opzioni SamsungTV Smart",
@@ -110,9 +97,7 @@
           "use_st_channel_info": "Usa informazioni Canale TV da SmartThings",
           "show_channel_number": "Usa informazioni Numero Canale TV da SmartThings",
           "power_on_method": "Metodo usato per accendere la TV",
-          "show_adv_opt": "Mostra menu opzioni",
-          "enable_ip_control": "Abilita IP Control",
-          "ip_control_art_mode": "Abilita Art Mode tramite IP Control"
+          "show_adv_opt": "Mostra menu opzioni"
         }
       },
       "menu": {
@@ -124,8 +109,7 @@
           "sync_ent": "Configurazione entità collegate",
           "init": "Opzioni standard",
           "adv_opt": "Opzioni avanzate",
-          "save_exit": "Salva le opzioni ed esci",
-          "ip_control_pair": "Associa IP Control (accensione affidabile)"
+          "save_exit": "Salva le opzioni ed esci"
         }
       },
       "source_list": {
@@ -171,10 +155,6 @@
       },
       "save_exit": {
         "title": "Save Configuration"
-      },
-      "ip_control_pair": {
-        "title": "Associa IP Control",
-        "description": "Associa l'interfaccia IP Control del televisore per un'accensione/spegnimento affidabile (funziona anche dalla modalità Arte, senza SmartThings).\n\nPrima di continuare:\n1. Il televisore deve essere ACCESO e in visualizzazione NORMALE, non in modalità Arte.\n2. Abilita IP Remote: Impostazioni → Tutte le impostazioni → Connessioni → Rete → Impostazioni avanzate → Abilita IP Remote.\n\nAccetta la richiesta di autorizzazione sul televisore quando appare. Stato attuale: {status}."
       }
     },
     "error": {

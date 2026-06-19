@@ -636,7 +636,12 @@ class SamsungTVSmartOAuth2FlowHandler(
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle reconfiguration of the integration."""
+        """Reconfiguration entry point: show a clear sectioned menu.
+
+        Splits what used to be one cramped form into focused sections so the
+        user picks exactly what they want to change (connection, auth, or IP
+        Control) instead of guessing which mix of fields applies.
+        """
         entry = self._get_reconfigure_entry()
         if entry.unique_id == entry.data[CONF_HOST]:
             return self.async_abort(reason="host_unique_id")
@@ -646,54 +651,191 @@ class SamsungTVSmartOAuth2FlowHandler(
             if CONF_API_KEY in entry.data:
                 self._device_id = entry.data.get(CONF_DEVICE_ID)
 
+        return self.async_show_menu(
+            step_id="reconfigure",
+            menu_options=[
+                "reconfigure_connection",
+                "reconfigure_auth",
+                "reconfigure_ip_control",
+            ],
+        )
+
+    async def async_step_reconfigure_connection(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Reconfigure the TV connection (IP address and WebSocket port)."""
+        entry = self._get_reconfigure_entry()
         if user_input is None:
-            return self._show_reconfigure_form()
+            return self._show_connection_form()
 
         ip_address = await self.hass.async_add_executor_job(
             _get_ip, user_input[CONF_HOST]
         )
         if not ip_address:
-            return self._show_reconfigure_form(errors="invalid_host")
+            return self._show_connection_form(errors="invalid_host")
 
         self._async_abort_entries_match({CONF_HOST: ip_address})
 
-        # Check if user wants to (re-)authenticate with OAuth
-        if user_input.get("reauth_oauth"):
-            self._reauth_entry = entry
-            oauth_available = await self._async_oauth_available()
-            if not oauth_available:
-                return self.async_abort(reason="oauth_not_configured")
-            return await self.async_step_pick_implementation()
-
-        api_key = user_input.get(CONF_API_KEY)
-        st_entry_unique_id = user_input.get(CONF_ST_ENTRY_UNIQUE_ID)
-        if api_key and st_entry_unique_id:
-            return self._show_reconfigure_form(errors="only_key_or_st")
-
-        self._st_entry_unique_id = None
-        if st_entry_unique_id:
-            if not (api_key := get_smartthings_api_key(self.hass, st_entry_unique_id)):
-                return self._show_reconfigure_form(errors="st_api_key_fail")
-            self._st_entry_unique_id = st_entry_unique_id
-        else:
-            api_key = api_key or entry.data.get(CONF_API_KEY)
-
+        # Preserve the existing authentication unchanged -- this section only
+        # touches the connection, so _apply_reconfigure_and_reload must not
+        # wipe the stored credentials.
         self._host = ip_address
-        self._api_key = api_key
-        self._auth_method = (
-            AUTH_METHOD_ST_ENTRY if self._st_entry_unique_id else AUTH_METHOD_PAT
-        )
-
-        # Validate SmartThings token if provided
-        if self._api_key:
-            if not await self._validate_smartthings_token(self._api_key):
-                return self._show_reconfigure_form(errors=RESULT_WRONG_APIKEY)
+        self._api_key = entry.data.get(CONF_API_KEY)
+        self._auth_method = entry.data.get(CONF_AUTH_METHOD, AUTH_METHOD_PAT)
+        self._st_entry_unique_id = entry.data.get(CONF_ST_ENTRY_UNIQUE_ID)
 
         result = await self._try_connect(
             port=user_input.get(CONF_PORT) or entry.data.get(CONF_PORT),
             skip_info=True,
         )
-        return self._manage_reconfigure(result)
+        if result != RESULT_SUCCESS:
+            return self._show_connection_form(errors=result)
+        return self._apply_reconfigure_and_reload()
+
+    async def async_step_reconfigure_auth(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Reconfigure authentication (OAuth2, PAT, or SmartThings)."""
+        entry = self._get_reconfigure_entry()
+
+        if user_input is None:
+            return await self._async_show_auth_form()
+
+        method = user_input.get(CONF_AUTH_METHOD_SELECT, AUTH_METHOD_PAT)
+
+        if method == AUTH_METHOD_OAUTH:
+            if not await self._async_oauth_available():
+                return self.async_abort(reason="oauth_not_configured")
+            # Reuse the reauth machinery: async_oauth_create_entry will see
+            # _reauth_entry set and finish by updating + reloading this entry.
+            self._reauth_entry = entry
+            return await self.async_step_pick_implementation()
+
+        api_key = user_input.get(CONF_API_KEY)
+        st_entry_unique_id = user_input.get(CONF_ST_ENTRY_UNIQUE_ID)
+        if api_key and st_entry_unique_id:
+            return await self._async_show_auth_form(errors="only_key_or_st")
+
+        self._st_entry_unique_id = None
+        if method == AUTH_METHOD_ST_ENTRY and st_entry_unique_id:
+            if not (api_key := get_smartthings_api_key(self.hass, st_entry_unique_id)):
+                return await self._async_show_auth_form(errors="st_api_key_fail")
+            self._st_entry_unique_id = st_entry_unique_id
+        else:
+            api_key = api_key or entry.data.get(CONF_API_KEY)
+
+        self._host = entry.data[CONF_HOST]
+        self._api_key = api_key
+        self._auth_method = (
+            AUTH_METHOD_ST_ENTRY if self._st_entry_unique_id else AUTH_METHOD_PAT
+        )
+
+        if self._api_key and not await self._validate_smartthings_token(self._api_key):
+            return await self._async_show_auth_form(errors=RESULT_WRONG_APIKEY)
+
+        result = await self._try_connect(port=entry.data.get(CONF_PORT), skip_info=True)
+        if result != RESULT_SUCCESS:
+            return await self._async_show_auth_form(errors=result)
+        return self._apply_reconfigure_and_reload()
+
+    async def async_step_reconfigure_ip_control(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Reconfigure IP Control: pairing and behaviour toggles.
+
+        Moved here from the options flow so all connection-related setup lives
+        in one place. The enable/art-mode toggles are still persisted to
+        entry.options, since the rest of the integration reads them from there.
+        """
+        entry = self._get_reconfigure_entry()
+        paired = bool(entry.data.get(CONF_IP_CONTROL_TOKEN))
+
+        if user_input is not None:
+            if paired:
+                new_options = dict(entry.options)
+                new_options[CONF_ENABLE_IP_CONTROL] = user_input.get(
+                    CONF_ENABLE_IP_CONTROL, True
+                )
+                new_options[CONF_IP_CONTROL_ART_MODE] = user_input.get(
+                    CONF_IP_CONTROL_ART_MODE, False
+                )
+                self.hass.config_entries.async_update_entry(entry, options=new_options)
+
+            if user_input.get("pair_now"):
+                return await self.async_step_reconfigure_ip_pair()
+
+            await self.hass.config_entries.async_reload(entry.entry_id)
+            return self.async_abort(reason="reconfigure_successful")
+
+        schema: dict = {vol.Optional("pair_now", default=False): bool}
+        if paired:
+            schema[
+                vol.Required(
+                    CONF_ENABLE_IP_CONTROL,
+                    default=entry.options.get(CONF_ENABLE_IP_CONTROL, True),
+                )
+            ] = bool
+            schema[
+                vol.Required(
+                    CONF_IP_CONTROL_ART_MODE,
+                    default=entry.options.get(CONF_IP_CONTROL_ART_MODE, False),
+                )
+            ] = bool
+
+        return self.async_show_form(
+            step_id="reconfigure_ip_control",
+            data_schema=vol.Schema(schema),
+            description_placeholders={
+                "status": "paired" if paired else "not paired",
+            },
+        )
+
+    async def async_step_reconfigure_ip_pair(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Pair the TV's IP Control (JSON-RPC) interface.
+
+        Requires the TV ON in NORMAL viewing (not Art Mode) with "IP Remote"
+        enabled (Settings -> Connections -> Network -> Expert Settings).
+        """
+        from .api.ipcontrol import SamsungIPControl, SamsungIPControlError
+
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        paired = bool(entry.data.get(CONF_IP_CONTROL_TOKEN))
+
+        if user_input is not None:
+            host = entry.data.get(CONF_HOST)
+            if not host:
+                errors[CONF_BASE] = "ip_control_no_host"
+            else:
+                client = SamsungIPControl(self.hass, host)
+                try:
+                    token = await client.async_pair()
+                except SamsungIPControlError as ex:
+                    _LOGGER.warning(
+                        "IP Control pairing failed for %s: %s (TV must be ON in "
+                        "normal viewing -- not Art Mode, not standby -- and IP "
+                        "Remote enabled in Settings)",
+                        host,
+                        ex,
+                    )
+                    errors[CONF_BASE] = "ip_control_pair_failed"
+                else:
+                    return self.async_update_reload_and_abort(
+                        entry,
+                        data_updates={CONF_IP_CONTROL_TOKEN: token},
+                        reason="ip_control_pair_successful",
+                    )
+
+        return self.async_show_form(
+            step_id="reconfigure_ip_pair",
+            data_schema=vol.Schema({}),
+            errors=errors,
+            description_placeholders={
+                "status": "already paired" if paired else "not paired",
+            },
+        )
 
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> ConfigFlowResult:
         """Handle re-authentication."""
@@ -762,12 +904,8 @@ class SamsungTVSmartOAuth2FlowHandler(
         return self._save_entry()
 
     @callback
-    def _manage_reconfigure(self, result: str) -> ConfigFlowResult:
-        """Manage the reconfigure result."""
-        if result != RESULT_SUCCESS:
-            self._error = result
-            return self._show_reconfigure_form()
-
+    def _apply_reconfigure_and_reload(self) -> ConfigFlowResult:
+        """Persist the reconfigured connection/auth data and reload the entry."""
         entry = self._get_reconfigure_entry()
         updates = {
             CONF_HOST: self._host,
@@ -885,58 +1023,87 @@ class SamsungTVSmartOAuth2FlowHandler(
         )
 
     @callback
-    def _show_reconfigure_form(self, errors: str | None = None) -> ConfigFlowResult:
-        """Show the reconfiguration form."""
+    def _show_connection_form(self, errors: str | None = None) -> ConfigFlowResult:
+        """Show the connection (IP + port) reconfigure form."""
+        base_err = errors or self._error
+        self._error = None
+
+        data = self._get_reconfigure_entry().data
+
+        schema = {
+            vol.Required(CONF_HOST, default=data.get(CONF_HOST, "")): str,
+            vol.Optional(
+                CONF_PORT,
+                description={"suggested_value": data.get(CONF_PORT, DEFAULT_PORT)},
+            ): vol.All(vol.Coerce(int), vol.In([8001, 8002])),
+        }
+
+        return self.async_show_form(
+            step_id="reconfigure_connection",
+            data_schema=vol.Schema(schema),
+            errors={CONF_BASE: base_err} if base_err else None,
+        )
+
+    async def _async_show_auth_form(
+        self, errors: str | None = None
+    ) -> ConfigFlowResult:
+        """Show the authentication reconfigure form with a method selector."""
         base_err = errors or self._error
         self._error = None
 
         entry = self._get_reconfigure_entry()
         data = entry.data
         st_entries = get_smartthings_entries(self.hass)
+        oauth_available = await self._async_oauth_available()
 
         current_auth = data.get(CONF_AUTH_METHOD, AUTH_METHOD_PAT)
-        auth_label = {
-            AUTH_METHOD_OAUTH: "OAuth2",
-            AUTH_METHOD_PAT: "PAT",
-            AUTH_METHOD_ST_ENTRY: "SmartThings Integration",
-        }.get(current_auth, "Unknown")
 
-        init_schema = {
-            vol.Required(CONF_HOST, default=data.get(CONF_HOST, "")): str,
-            vol.Optional(
-                CONF_PORT,
-                description={"suggested_value": data.get(CONF_PORT, DEFAULT_PORT)},
-            ): vol.In([8001, 8002]),
+        auth_options = {}
+        if oauth_available:
+            auth_options[AUTH_METHOD_OAUTH] = "🔐 OAuth2 (Recommended)"
+        auth_options[AUTH_METHOD_PAT] = "🔑 Personal Access Token (PAT)"
+        if st_entries:
+            auth_options[AUTH_METHOD_ST_ENTRY] = "🔗 Use SmartThings Integration"
+
+        default_method = current_auth
+        if default_method not in auth_options:
+            default_method = AUTH_METHOD_OAUTH if oauth_available else AUTH_METHOD_PAT
+
+        schema = {
+            vol.Required(
+                CONF_AUTH_METHOD_SELECT, default=default_method
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=[
+                        SelectOptionDict(value=k, label=v)
+                        for k, v in auth_options.items()
+                    ],
+                    mode=SelectSelectorMode.LIST,
+                )
+            ),
         }
 
-        # Always show OAuth option - for switching to OAuth or re-authenticating
-        # This allows users to get a fresh token even if already using OAuth
-        init_schema[vol.Optional("reauth_oauth", default=False)] = bool
-
-        # Show API key field (hidden if using OAuth, but kept for switching back)
         st_unique_id = data.get(CONF_ST_ENTRY_UNIQUE_ID)
         use_st_key = st_entries is not None and st_unique_id in st_entries
-        # Don't show API key field if using OAuth
-        if current_auth != AUTH_METHOD_OAUTH:
-            sugg_val = data.get(CONF_API_KEY, "") if not use_st_key else ""
-            init_schema[
-                vol.Optional(CONF_API_KEY, description={"suggested_value": sugg_val})
-            ] = str
 
-            if st_entries:
-                sugg_val = st_unique_id if use_st_key else None
-                init_schema[
-                    vol.Optional(
-                        CONF_ST_ENTRY_UNIQUE_ID,
-                        description={"suggested_value": sugg_val},
-                    )
-                ] = SelectSelector(_dict_to_select(st_entries))
+        sugg_val = data.get(CONF_API_KEY, "") if not use_st_key else ""
+        schema[
+            vol.Optional(CONF_API_KEY, description={"suggested_value": sugg_val})
+        ] = str
+
+        if st_entries:
+            sugg_val = st_unique_id if use_st_key else None
+            schema[
+                vol.Optional(
+                    CONF_ST_ENTRY_UNIQUE_ID,
+                    description={"suggested_value": sugg_val},
+                )
+            ] = SelectSelector(_dict_to_select(st_entries))
 
         return self.async_show_form(
-            step_id="reconfigure",
-            data_schema=vol.Schema(init_schema),
+            step_id="reconfigure_auth",
+            data_schema=vol.Schema(schema),
             errors={CONF_BASE: base_err} if base_err else None,
-            description_placeholders={"current_auth": auth_label},
         )
 
     @staticmethod
@@ -1030,21 +1197,9 @@ class OptionsFlowHandler(OptionsFlow):
             ): bool,
         }
 
-        # Offer enabling/disabling the IP Control channel only once it is paired.
-        entry = self.hass.config_entries.async_get_entry(self._entry_id)
-        if entry and entry.data.get(CONF_IP_CONTROL_TOKEN):
-            opt_schema[
-                vol.Required(
-                    CONF_ENABLE_IP_CONTROL,
-                    default=options.get(CONF_ENABLE_IP_CONTROL, True),
-                )
-            ] = bool
-            opt_schema[
-                vol.Required(
-                    CONF_IP_CONTROL_ART_MODE,
-                    default=options.get(CONF_IP_CONTROL_ART_MODE, False),
-                )
-            ] = bool
+        # IP Control pairing and its enable/art-mode toggles now live in the
+        # Reconfigure flow (Settings -> Devices -> Reconfigure), alongside the
+        # rest of the connection setup, instead of here in Options.
 
         if not self._app_list:
             opt_schema.update(
@@ -1119,7 +1274,6 @@ class OptionsFlowHandler(OptionsFlow):
                 "app_list",
                 "channel_list",
                 "sync_ent",
-                "ip_control_pair",
                 "init",
                 "adv_opt",
                 "save_exit",
@@ -1129,53 +1283,6 @@ class OptionsFlowHandler(OptionsFlow):
     async def async_step_save_exit(self, _) -> ConfigFlowResult:
         """Handle save and exit flow."""
         return self._save_entry(data=self._std_options)
-
-    async def async_step_ip_control_pair(self, user_input=None) -> ConfigFlowResult:
-        """Pair the TV's IP Control (JSON-RPC) interface for reliable power off/on.
-
-        Requires the TV to be ON and in NORMAL viewing (not Art Mode) with
-        "IP Remote" enabled (Settings -> Connections -> Network -> Expert
-        Settings). The returned token is stored in entry.data so the Power
-        switch can use it; the switch reads it live, so no reload is needed.
-        """
-        from .api.ipcontrol import SamsungIPControl, SamsungIPControlError
-
-        entry = self.hass.config_entries.async_get_entry(self._entry_id)
-        errors: dict[str, str] = {}
-        already_paired = bool(entry.data.get(CONF_IP_CONTROL_TOKEN))
-
-        if user_input is not None:
-            host = entry.data.get(CONF_HOST)
-            if not host:
-                errors[CONF_BASE] = "ip_control_no_host"
-            else:
-                client = SamsungIPControl(self.hass, host)
-                try:
-                    token = await client.async_pair()
-                except SamsungIPControlError as ex:
-                    _LOGGER.warning(
-                        "IP Control pairing failed for %s: %s (TV must be ON in "
-                        "normal viewing — not Art Mode, not standby — and IP "
-                        "Remote enabled in Settings)",
-                        host,
-                        ex,
-                    )
-                    errors[CONF_BASE] = "ip_control_pair_failed"
-                else:
-                    new_data = dict(entry.data)
-                    new_data[CONF_IP_CONTROL_TOKEN] = token
-                    self.hass.config_entries.async_update_entry(entry, data=new_data)
-                    _LOGGER.debug("IP Control paired for %s", host)
-                    return self.async_abort(reason="ip_control_pair_successful")
-
-        return self.async_show_form(
-            step_id="ip_control_pair",
-            data_schema=vol.Schema({}),
-            errors=errors,
-            description_placeholders={
-                "status": "already paired" if already_paired else "not paired",
-            },
-        )
 
     async def async_step_source_list(self, user_input=None):
         """Handle sources list flow."""

@@ -55,16 +55,6 @@
           "device_id": "SmartThings TV eszközazonosító (deviceID)"
         }
       },
-      "reconfigure": {
-        "title": "Reconfigure Samsung TV",
-        "description": "Update the TV configuration.\n\nCurrent authentication: {current_auth}",
-        "data": {
-          "host": "TV IP Address",
-          "switch_to_oauth": "🔄 Váltás OAuth2 hitelesítésre",
-          "st_entry_unique_id": "SmartThings Integration",
-          "api_key": "SmartThings Personal Access Token (PAT)"
-        }
-      },
       "reauth_confirm": {
         "title": "Re-authentication Required",
         "description": "Your SmartThings authentication has expired. Click Submit to sign in again."
@@ -96,9 +86,6 @@
     }
   },
   "options": {
-    "abort": {
-      "ip_control_pair_successful": "Az IP Control sikeresen párosítva. A hozzáférési token frissítve és elmentve."
-    },
     "step": {
       "init": {
         "title": "SamsungTV Smart beállítások",
@@ -110,9 +97,7 @@
           "use_st_channel_info": "Használja a SmartThings TV csatornainformációt",
           "show_channel_number": "Használja a SmartThings TV csatornaszám információt",
           "power_on_method": "A TV bekapcsolásához használt módszer",
-          "show_adv_opt": "Opciók menü mutatása",
-          "enable_ip_control": "IP Control engedélyezése",
-          "ip_control_art_mode": "Art Mode engedélyezése IP Control-on keresztül"
+          "show_adv_opt": "Opciók menü mutatása"
         }
       },
       "menu": {
@@ -124,8 +109,7 @@
           "sync_ent": "Szinkronizált entitások konfigurálása",
           "init": "Alapbeállítások",
           "adv_opt": "Haladó opciók",
-          "save_exit": "Opciók mentése és kilépés",
-          "ip_control_pair": "IP Control párosítása (megbízható kapcsolás)"
+          "save_exit": "Opciók mentése és kilépés"
         }
       },
       "source_list": {
@@ -171,10 +155,6 @@
       },
       "save_exit": {
         "title": "Save Configuration"
-      },
-      "ip_control_pair": {
-        "title": "IP Control párosítása",
-        "description": "Párosítja a TV IP Control felületét a megbízható be-/kikapcsoláshoz (Art módból is működik, SmartThings nélkül).\n\nMielőtt folytatná:\n1. A TV-nek BEKAPCSOLT állapotban és NORMÁL nézetben kell lennie — nem Art módban.\n2. Engedélyezze az IP Remote funkciót: Beállítások → Összes beállítás → Csatlakozás → Hálózat → Szakértői beállítások → IP Remote engedélyezése.\n\nFogadja el a TV-n megjelenő engedélyezési kérést. Jelenlegi állapot: {status}."
       }
     },
     "error": {

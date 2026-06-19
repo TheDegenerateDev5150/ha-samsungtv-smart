@@ -57,17 +57,46 @@
       },
       "reconfigure": {
         "title": "Reconfigurer la télévision Samsung",
-        "description": "Mettre à jour la configuration de la TV.\n\nAuthentification actuelle : {current_auth}",
-        "data": {
-          "host": "Adresse IP de la TV",
-          "switch_to_oauth": "🔄 Basculer vers l'authentification OAuth2",
-          "st_entry_unique_id": "Intégration SmartThings",
-          "api_key": "Token d'accès personnel SmartThings (PAT)"
+        "description": "Choisissez ce que vous voulez modifier pour cette TV.",
+        "menu_options": {
+          "reconfigure_connection": "Connexion (adresse IP et port)",
+          "reconfigure_auth": "Authentification (OAuth2 / PAT / SmartThings)",
+          "reconfigure_ip_control": "IP Control (alimentation fiable et appairage)"
         }
       },
       "reauth_confirm": {
         "title": "Ré-authentification requise",
         "description": "Votre authentification SmartThings a expiré. Cliquez sur Soumettre pour vous reconnecter."
+      },
+      "reconfigure_connection": {
+        "title": "Connexion",
+        "description": "Mettez à jour l'adresse IP et le port WebSocket de la TV. Utilisez 8001 sauf si votre TV ne répond que sur le port SSL 8002.",
+        "data": {
+          "host": "Adresse IP de la TV",
+          "port": "Port"
+        }
+      },
+      "reconfigure_auth": {
+        "title": "Authentification",
+        "description": "Choisissez comment Home Assistant s'authentifie auprès de cette TV. Pour OAuth2, sélectionnez-le et validez — la connexion démarre automatiquement (les champs ci-dessous sont ignorés). Pour PAT, collez un jeton d'accès personnel SmartThings. Pour l'intégration SmartThings, choisissez une entrée existante.",
+        "data": {
+          "auth_method": "Méthode d'authentification",
+          "api_key": "Jeton d'accès personnel SmartThings (PAT)",
+          "st_entry_unique_id": "Intégration SmartThings"
+        }
+      },
+      "reconfigure_ip_control": {
+        "title": "IP Control",
+        "description": "IP Control permet une alimentation fiable (même depuis le mode Art) sans SmartThings. Statut actuel : {status}.\n\nCochez « Appairer maintenant » pour (ré)appairer la TV — elle doit être allumée en mode normal avec IP Remote activé. Les options ci-dessous apparaissent une fois appairée.",
+        "data": {
+          "pair_now": "Appairer maintenant",
+          "enable_ip_control": "Activer IP Control",
+          "ip_control_art_mode": "Utiliser IP Control pour le mode Art"
+        }
+      },
+      "reconfigure_ip_pair": {
+        "title": "Appairer IP Control",
+        "description": "Appaire l'interface IP Control de la TV.\n\nAvant de continuer :\n1. La TV doit être allumée en mode normal — pas en mode Art.\n2. Activez IP Remote : Paramètres → Tous les paramètres → Connexions → Réseau → Paramètres experts → Activer IP Remote.\n\nAcceptez la demande d'autorisation sur la TV quand elle apparaît. Statut actuel : {status}."
       }
     },
     "error": {
@@ -77,7 +106,9 @@
       "wrong_api_key": "Le token SmartThings est invalide. Veuillez vérifier et réessayer.",
       "st_device_not_found": "Aucune TV Samsung trouvée avec cet identifiant SmartThings.",
       "st_device_used": "Cet appareil SmartThings est déjà configuré.",
-      "not_successful": "Impossible de créer une connexion WebSocket avec cette télévision Samsung."
+      "not_successful": "Impossible de créer une connexion WebSocket avec cette télévision Samsung.",
+      "ip_control_pair_failed": "Échec de l'appairage IP Control. Assurez-vous que la TV est allumée en mode normal (pas en mode Art) et que IP Remote est activé dans les Paramètres, puis réessayez.",
+      "ip_control_no_host": "Aucun hôte TV n'est configuré pour cette entrée."
     },
     "abort": {
       "already_configured": "Cette télévision Samsung est déjà configurée.",
@@ -89,16 +120,15 @@
       "missing_scopes": "Les permissions accordées sont insuffisantes. Veuillez vous assurer d'accorder toutes les permissions demandées.",
       "reauth_account_mismatch": "Le compte utilisé pour la ré-authentification ne correspond pas au compte d'origine.",
       "reauth_successful": "Ré-authentification réussie.",
-      "reauth_failed": "Échec de la ré-authentification."
+      "reauth_failed": "Échec de la ré-authentification.",
+      "reconfigure_successful": "Configuration mise à jour.",
+      "ip_control_pair_successful": "IP Control appairé avec succès. Le jeton d'accès a été enregistré."
     },
     "create_entry": {
       "default": "{name} configuré avec succès"
     }
   },
   "options": {
-    "abort": {
-      "ip_control_pair_successful": "IP Control appairé avec succès. Le jeton d'accès a été rafraîchi et enregistré."
-    },
     "step": {
       "init": {
         "title": "Options SamsungTV Smart",
@@ -110,9 +140,7 @@
           "use_st_channel_info": "Utiliser SmartThings pour les chaînes",
           "show_channel_number": "Afficher le numéro de chaîne",
           "power_on_method": "Méthode d'allumage",
-          "show_adv_opt": "Afficher les options avancées",
-          "enable_ip_control": "Activer IP Control",
-          "ip_control_art_mode": "Activer le Mode Art par IP Control"
+          "show_adv_opt": "Afficher les options avancées"
         }
       },
       "menu": {
@@ -124,8 +152,7 @@
           "sync_ent": "Entités synchronisées",
           "init": "Options de base",
           "adv_opt": "Options avancées",
-          "save_exit": "Enregistrer et quitter",
-          "ip_control_pair": "Appairer IP Control (alimentation fiable)"
+          "save_exit": "Enregistrer et quitter"
         }
       },
       "source_list": {
@@ -171,10 +198,6 @@
       },
       "save_exit": {
         "title": "Enregistrer la configuration"
-      },
-      "ip_control_pair": {
-        "title": "Appairer IP Control",
-        "description": "Appaire l'interface IP Control du téléviseur pour une marche/arrêt fiable (fonctionne même depuis le mode Art, sans SmartThings).\n\nAvant de continuer :\n1. Le téléviseur doit être ALLUMÉ en visionnage NORMAL — pas en mode Art.\n2. Activez IP Remote : Paramètres → Tous les paramètres → Connexions → Réseau → Paramètres d'expert → Activer IP Remote.\n\nAcceptez l'invite d'autorisation sur le téléviseur lorsqu'elle apparaît. Statut actuel : {status}."
       }
     },
     "error": {

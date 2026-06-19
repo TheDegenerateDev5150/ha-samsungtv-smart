@@ -57,17 +57,46 @@
       },
       "reconfigure": {
         "title": "Reconfigure Samsung TV",
-        "description": "Update the TV configuration.\n\nCurrent authentication: {current_auth}",
-        "data": {
-          "host": "TV IP Address",
-          "switch_to_oauth": "🔄 Switch to OAuth2 authentication",
-          "st_entry_unique_id": "SmartThings Integration",
-          "api_key": "SmartThings Personal Access Token (PAT)"
+        "description": "Choose what to change for this TV.",
+        "menu_options": {
+          "reconfigure_connection": "Connection (IP address & port)",
+          "reconfigure_auth": "Authentication (OAuth2 / PAT / SmartThings)",
+          "reconfigure_ip_control": "IP Control (reliable power & pairing)"
         }
       },
       "reauth_confirm": {
         "title": "Re-authentication Required",
         "description": "Your SmartThings authentication has expired. Click Submit to sign in again."
+      },
+      "reconfigure_connection": {
+        "title": "Connection",
+        "description": "Update the TV's IP address and WebSocket port. Use 8001 unless your TV only answers on the SSL port 8002.",
+        "data": {
+          "host": "TV IP Address",
+          "port": "Port"
+        }
+      },
+      "reconfigure_auth": {
+        "title": "Authentication",
+        "description": "Pick how Home Assistant authenticates with this TV. For OAuth2, just select it and submit — the login flow starts automatically (the fields below are ignored). For PAT, paste a SmartThings Personal Access Token. For SmartThings Integration, pick an existing entry.",
+        "data": {
+          "auth_method": "Authentication method",
+          "api_key": "SmartThings Personal Access Token (PAT)",
+          "st_entry_unique_id": "SmartThings Integration"
+        }
+      },
+      "reconfigure_ip_control": {
+        "title": "IP Control",
+        "description": "IP Control gives reliable power on/off (even from Art Mode) without SmartThings. Current status: {status}.\n\nCheck \"Pair now\" to (re)pair the TV — it must be ON in normal viewing with IP Remote enabled. The toggles below appear once paired.",
+        "data": {
+          "pair_now": "Pair now",
+          "enable_ip_control": "Enable IP Control",
+          "ip_control_art_mode": "Use IP Control for Art Mode"
+        }
+      },
+      "reconfigure_ip_pair": {
+        "title": "Pair IP Control",
+        "description": "Pairs the TV's IP Control interface.\n\nBefore continuing:\n1. The TV must be ON and in NORMAL viewing — not Art Mode.\n2. Enable IP Remote: Settings → All Settings → Connections → Network → Expert Settings → Enable IP Remote.\n\nAccept the authorization prompt on the TV when it appears. Current status: {status}."
       }
     },
     "error": {
@@ -77,7 +106,9 @@
       "wrong_api_key": "The SmartThings token is invalid. Please check and try again.",
       "st_device_not_found": "No Samsung TV found with this SmartThings Device ID.",
       "st_device_used": "This SmartThings device is already configured.",
-      "not_successful": "Could not connect to the TV. Ensure it's on and allow the connection when prompted."
+      "not_successful": "Could not connect to the TV. Ensure it's on and allow the connection when prompted.",
+      "ip_control_pair_failed": "IP Control pairing failed. Make sure the TV is ON in normal viewing (not Art Mode) and IP Remote is enabled in Settings, then try again.",
+      "ip_control_no_host": "No TV host is configured for this entry."
     },
     "abort": {
       "already_configured": "This TV is already configured.",
@@ -89,16 +120,15 @@
       "missing_scopes": "The granted permissions are insufficient. Please ensure you grant all requested permissions.",
       "reauth_account_mismatch": "The account used for re-authentication doesn't match the original account.",
       "reauth_successful": "Re-authentication successful.",
-      "reauth_failed": "Re-authentication failed."
+      "reauth_failed": "Re-authentication failed.",
+      "reconfigure_successful": "Configuration updated.",
+      "ip_control_pair_successful": "IP Control paired successfully. The access token has been stored."
     },
     "create_entry": {
       "default": "Successfully configured {name}"
     }
   },
   "options": {
-    "abort": {
-      "ip_control_pair_successful": "IP Control paired successfully. The access token has been refreshed and stored."
-    },
     "step": {
       "init": {
         "title": "Samsung TV Smart Options",
@@ -110,9 +140,7 @@
           "use_st_channel_info": "Use SmartThings for Channel Info",
           "show_channel_number": "Show Channel Number",
           "power_on_method": "Power On Method",
-          "show_adv_opt": "Show Advanced Options",
-          "enable_ip_control": "Enable IP Control",
-          "ip_control_art_mode": "Enable IP Control Art Mode"
+          "show_adv_opt": "Show Advanced Options"
         }
       },
       "menu": {
@@ -124,8 +152,7 @@
           "sync_ent": "Synchronized Entities",
           "init": "Basic Options",
           "adv_opt": "Advanced Options",
-          "save_exit": "Save and Exit",
-          "ip_control_pair": "Pair IP Control (reliable power)"
+          "save_exit": "Save and Exit"
         }
       },
       "source_list": {
@@ -171,10 +198,6 @@
       },
       "save_exit": {
         "title": "Save Configuration"
-      },
-      "ip_control_pair": {
-        "title": "Pair IP Control",
-        "description": "Pairs the TV's IP Control interface for reliable power on/off (works even from Art Mode, no SmartThings needed).\n\nBefore continuing:\n1. The TV must be ON and in NORMAL viewing — not Art Mode.\n2. Enable IP Remote: Settings → All Settings → Connections → Network → Expert Settings → Enable IP Remote.\n\nAccept the authorization prompt on the TV when it appears. Current status: {status}."
       }
     },
     "error": {
