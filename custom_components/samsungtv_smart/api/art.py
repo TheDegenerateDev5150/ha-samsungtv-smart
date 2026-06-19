@@ -136,6 +136,11 @@ class SamsungTVAsyncArt:
         # genuine signal, so the caller can persist it. Never fired on a
         # transport/connection failure (the result stays unknown then).
         self._capability_callback = None
+        # Fired (port: int) when the runtime port fallback in open() finds
+        # the TV listening on the alternate port, so the caller can persist
+        # it (CONF_PORT) and avoid re-paying the failed attempt on the
+        # configured port every reconnect.
+        self._port_callback = None
         # Fired (no args) when the async art channel reports a panel transition
         # (art_mode_changed / go_to_standby), so the caller can refresh its
         # authoritative state (e.g. the IP Control pictureMode read) at once
@@ -172,6 +177,20 @@ class SamsungTVAsyncArt:
         """Notify the caller that a capability has been determined."""
         if self._capability_callback is not None:
             self._capability_callback(flag_name, value)
+
+    def register_port_callback(self, func) -> None:
+        """Register a callback fired when the runtime port fallback succeeds.
+
+        Signature: func(port: int). Called when open() connects on the
+        alternate port after the configured one failed, so the caller can
+        persist the new port (CONF_PORT) for future restarts.
+        """
+        self._port_callback = func
+
+    def _learn_port(self, port: int) -> None:
+        """Notify the caller that the working port has changed."""
+        if self._port_callback is not None:
+            self._port_callback(port)
 
     def register_art_event_callback(self, func) -> None:
         """Register a callback fired on a panel-transition broadcast.
@@ -288,131 +307,144 @@ class SamsungTVAsyncArt:
 
             self._last_connection_attempt = time.time()
 
-            try:
-                session = await self._get_session()
-                ssl_context = _get_ssl_context() if self._port == 8002 else None
-
-                self._log.debug("Art API: Connecting to %s", self._ws_url)
-
-                self._ws = await session.ws_connect(
-                    self._ws_url,
-                    timeout=aiohttp.ClientTimeout(total=self._timeout),
-                    ssl=ssl_context,
-                )
-
-                # Wait for connection events
-                # Frame TV 2024 sends "connect" but may never send "ready"
-                connected = False
-                for _ in range(3):  # Max 3 events (reduced from 5)
-                    try:
-                        msg = await asyncio.wait_for(
-                            self._ws.receive(), timeout=2
-                        )  # Reduced timeout
-                        if msg.type == aiohttp.WSMsgType.TEXT:
-                            response = json.loads(msg.data)
-                            event = response.get("event", "")
-                            self._log.debug("Art API: Connection event: %s", event)
-
-                            if event == MS_CHANNEL_READY_EVENT:
-                                # Perfect! Got ready event
-                                connected = True
-                                break
-                            elif event == MS_CHANNEL_CONNECT_EVENT:
-                                # Frame TV 2024 often only sends connect, accept it!
-                                self._log.debug(
-                                    "Art API: Accepting connect event (Frame TV 2024 compatible)"
-                                )
-                                connected = True
-                                break
-                        elif msg.type in (
-                            aiohttp.WSMsgType.CLOSED,
-                            aiohttp.WSMsgType.ERROR,
-                        ):
-                            break
-                    except asyncio.TimeoutError:
-                        break
-
-                if not connected:
-                    self._log.warning(
-                        "Art API: Did not receive connect/ready event, connection may not be stable"
-                    )
-                    await self.close()
-
-                    # Track connection failure
-                    self._connection_failures += 1
-                    self._log.warning(
-                        "Art API: Connection failure %d/%d",
-                        self._connection_failures,
-                        self._max_connection_failures,
-                    )
-
-                    # Activate backoff if too many failures
-                    if self._connection_failures >= self._max_connection_failures:
-                        # Exponential backoff: 2, 5, 10, 20, 30 minutes (capped)
-                        backoff_minutes = min(
-                            2
-                            ** (
-                                self._connection_failures
-                                - self._max_connection_failures
-                                + 1
-                            ),
-                            30,
-                        )
-                        self._backoff_until = time.time() + (backoff_minutes * 60)
-                        self._log.warning(
-                            "Art API: Too many connection failures (%d), entering %d minute backoff period",
-                            self._connection_failures,
-                            backoff_minutes,
-                        )
-
-                    return False
-
-                # Connection successful! Reset failure counter
-                if self._connection_failures > 0:
-                    self._log.info(
-                        "Art API: Connection successful, resetting failure counter"
-                    )
-                    self._connection_failures = 0
-
-                self._connected = True
-
-                # Start the receive loop
-                self._recv_task = asyncio.create_task(self._receive_loop())
-
-                self._log.debug("Art API: Connected and listening")
+            # Try the configured port first, then fall back to the alternate
+            # port (8001 <-> 8002) on the same connection attempt. The main
+            # WebSocket connection (SamsungTVInfo._try_connect_ws) already
+            # learns the working port during setup/reconfigure, but the Art
+            # API is constructed once at startup from the static config value
+            # and never re-learns it  -  a firmware update that filters the
+            # configured port (e.g. 2024 Tizen filtering 8002) would otherwise
+            # leave Art Mode permanently unreachable until the user manually
+            # reconfigures. Mirror the same fallback here so it self-heals.
+            if await self._connect_once(self._port):
                 return True
 
-            except Exception as ex:
-                self._log.warning("Art API: Connection failed: %s", ex)
-                await self.close()
-
-                # Track connection failure
-                self._connection_failures += 1
+            alternate_port = 8001 if self._port == 8002 else 8002
+            self._log.debug(
+                "Art API: Port %d failed, trying alternate port %d",
+                self._port,
+                alternate_port,
+            )
+            if await self._connect_once(alternate_port):
                 self._log.warning(
-                    "Art API: Connection failure %d/%d",
+                    "Art API: Port changed from %d to %d "
+                    "(likely a firmware update filtered the previous port)",
+                    self._port,
+                    alternate_port,
+                )
+                self._port = alternate_port
+                self._learn_port(alternate_port)
+                return True
+
+            # Both ports failed: track the failure once for the whole attempt
+            # (not once per port), so a temporarily unreachable TV does not
+            # reach the backoff threshold twice as fast.
+            self._connection_failures += 1
+            self._log.warning(
+                "Art API: Connection failure %d/%d",
+                self._connection_failures,
+                self._max_connection_failures,
+            )
+
+            if self._connection_failures >= self._max_connection_failures:
+                # Exponential backoff: 2, 5, 10, 20, 30 minutes (capped)
+                backoff_minutes = min(
+                    2
+                    ** (self._connection_failures - self._max_connection_failures + 1),
+                    30,
+                )
+                self._backoff_until = time.time() + (backoff_minutes * 60)
+                self._log.warning(
+                    "Art API: Too many connection failures (%d), entering %d minute backoff period",
                     self._connection_failures,
-                    self._max_connection_failures,
+                    backoff_minutes,
                 )
 
-                # Activate backoff if too many failures
-                if self._connection_failures >= self._max_connection_failures:
-                    backoff_minutes = min(
-                        2
-                        ** (
-                            self._connection_failures
-                            - self._max_connection_failures
-                            + 1
-                        ),
-                        30,
-                    )
-                    self._backoff_until = time.time() + (backoff_minutes * 60)
-                    self._log.warning(
-                        "Art API: Too many connection failures (%d), entering %d minute backoff period",
-                        self._connection_failures,
-                        backoff_minutes,
-                    )
+            return False
 
+    async def _connect_once(self, port: int) -> bool:
+        """Attempt a single WebSocket connection on the given port.
+
+        Does not touch failure counters or backoff state — the caller (open())
+        decides how to account for failure across both ports of a single
+        connection attempt. On success, starts the receive loop and resets
+        the failure counter.
+        """
+        original_port = self._port
+        self._port = port
+        try:
+            session = await self._get_session()
+            ssl_context = _get_ssl_context() if self._port == 8002 else None
+
+            self._log.debug("Art API: Connecting to %s", self._ws_url)
+
+            self._ws = await session.ws_connect(
+                self._ws_url,
+                timeout=aiohttp.ClientTimeout(total=self._timeout),
+                ssl=ssl_context,
+            )
+
+            # Wait for connection events
+            # Frame TV 2024 sends "connect" but may never send "ready"
+            connected = False
+            for _ in range(3):  # Max 3 events (reduced from 5)
+                try:
+                    msg = await asyncio.wait_for(
+                        self._ws.receive(), timeout=2
+                    )  # Reduced timeout
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        response = json.loads(msg.data)
+                        event = response.get("event", "")
+                        self._log.debug("Art API: Connection event: %s", event)
+
+                        if event == MS_CHANNEL_READY_EVENT:
+                            # Perfect! Got ready event
+                            connected = True
+                            break
+                        elif event == MS_CHANNEL_CONNECT_EVENT:
+                            # Frame TV 2024 often only sends connect, accept it!
+                            self._log.debug(
+                                "Art API: Accepting connect event (Frame TV 2024 compatible)"
+                            )
+                            connected = True
+                            break
+                    elif msg.type in (
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.ERROR,
+                    ):
+                        break
+                except asyncio.TimeoutError:
+                    break
+
+            if not connected:
+                self._log.debug(
+                    "Art API: Did not receive connect/ready event on port %d",
+                    port,
+                )
+                await self.close()
+                self._port = original_port
                 return False
+
+            # Connection successful! Reset failure counter
+            if self._connection_failures > 0:
+                self._log.info(
+                    "Art API: Connection successful, resetting failure counter"
+                )
+                self._connection_failures = 0
+
+            self._connected = True
+
+            # Start the receive loop
+            self._recv_task = asyncio.create_task(self._receive_loop())
+
+            self._log.debug("Art API: Connected and listening on port %d", port)
+            return True
+
+        except Exception as ex:
+            self._log.debug("Art API: Connection on port %d failed: %s", port, ex)
+            await self.close()
+            self._port = original_port
+            return False
 
     async def close(self) -> None:
         """Close the connection."""
