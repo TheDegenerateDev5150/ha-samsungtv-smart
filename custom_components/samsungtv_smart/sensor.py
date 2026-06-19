@@ -35,7 +35,7 @@ from homeassistant.helpers.update_coordinator import (
 )
 
 from . import async_get_samsungtv_api_key
-from .api.art import SamsungTVAsyncArt
+from .api.art import SamsungTVAsyncArt, _DeviceLoggerAdapter
 from .const import (
     CONF_API_KEY,
     CONF_DEVICE_ID,
@@ -332,6 +332,10 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         self._art_api = art_api
         self._entry = entry
         self._hass = hass
+        # Mirrors api.art's per-host log prefix so Frame Art lines can be told
+        # apart from other devices' the same way the Art API and media_player
+        # logs already are.
+        self._log = _DeviceLoggerAdapter(_LOGGER, {"host": entry.data.get(CONF_HOST)})
         self._last_content_id: str | None = None
         # Enabled by default - thumbnails are fetched for current artwork
         self._thumbnail_fetch_enabled = True
@@ -344,7 +348,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         self._max_connection_failures = 5
         self._backoff_until: float | None = None
 
-        _LOGGER.info(
+        self._log.info(
             "Frame Art Coordinator initialized with thumbnail fetching enabled"
         )
 
@@ -359,7 +363,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 # data), instead of publishing the literal string
                 # "unavailable" as a state while claiming to be available.
                 remaining = self._backoff_until - time.time()
-                _LOGGER.debug(
+                self._log.debug(
                     "Frame Art: Skipping update due to connection backoff (%.0fs remaining)",
                     remaining,
                 )
@@ -368,7 +372,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 )
             else:
                 # Backoff period expired, reset and try again
-                _LOGGER.info("Frame Art: Backoff period expired, resuming updates")
+                self._log.info("Frame Art: Backoff period expired, resuming updates")
                 self._backoff_until = None
                 self._connection_failures = 0
 
@@ -384,7 +388,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
 
         # FIRST: Check if TV is powered off
         if self._is_tv_powered_off():
-            _LOGGER.debug("Frame Art: TV is powered off, returning minimal data")
+            self._log.debug("Frame Art: TV is powered off, returning minimal data")
             data["tv_powered_off"] = True
             data["art_mode"] = "off"
             # Keep current_thumbnail_url from last known state (for Lovelace display)
@@ -407,7 +411,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             media_player_art_mode = self._get_media_player_art_mode()
             if media_player_art_mode is not None:
                 data["art_mode"] = media_player_art_mode
-                _LOGGER.debug(
+                self._log.debug(
                     "Frame Art: Using media_player art_mode_status: %s",
                     media_player_art_mode,
                 )
@@ -417,11 +421,11 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                     async with asyncio.timeout(8):
                         art_mode = await self._art_api.get_artmode()
                         data["art_mode"] = art_mode
-                        _LOGGER.debug("Frame Art: Direct API art_mode: %s", art_mode)
+                        self._log.debug("Frame Art: Direct API art_mode: %s", art_mode)
                 except asyncio.TimeoutError:
-                    _LOGGER.debug("Timeout getting art mode status")
+                    self._log.debug("Timeout getting art mode status")
                 except Exception as ex:
-                    _LOGGER.debug("Error getting art mode: %s", ex)
+                    self._log.debug("Error getting art mode: %s", ex)
 
             # Get current artwork with timeout
             content_id = None
@@ -436,9 +440,9 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                             "matte_id": current.get("matte_id"),
                         }
             except asyncio.TimeoutError:
-                _LOGGER.debug("Timeout getting current artwork")
+                self._log.debug("Timeout getting current artwork")
             except Exception as ex:
-                _LOGGER.debug("Error getting current artwork: %s", ex)
+                self._log.debug("Error getting current artwork: %s", ex)
 
             # Only fetch thumbnail if:
             # - Thumbnail fetching is not in backoff period
@@ -453,7 +457,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 pass
             elif self._thumbnail_backoff_until is not None:
                 # Backoff expired — reset state and allow fetch
-                _LOGGER.info(
+                self._log.info(
                     "Frame Art: Thumbnail fetch backoff expired, resuming automatic fetch"
                 )
                 self._thumbnail_backoff_until = None
@@ -464,7 +468,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 # service — honor the flag (it is also surfaced in the
                 # sensor's thumbnail_auto_fetch attribute).
                 if content_id:
-                    _LOGGER.debug(
+                    self._log.debug(
                         "Frame Art: Thumbnail auto-fetch disabled, skipping %s",
                         content_id,
                     )
@@ -476,7 +480,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                     or not self._has_current_thumbnail()
                 )
             ):
-                _LOGGER.info(
+                self._log.info(
                     "Frame Art: Triggering thumbnail fetch for %s (changed: %s, has_thumbnail: %s)",
                     content_id,
                     content_id != self._last_content_id,
@@ -489,13 +493,13 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 )
                 self._last_content_id = content_id
             elif content_id and thumbnail_in_backoff:
-                _LOGGER.debug(
+                self._log.debug(
                     "Frame Art: Thumbnail fetch in backoff (%.0fs remaining), skipping %s",
                     self._thumbnail_backoff_until - time.time(),
                     content_id,
                 )
             elif content_id:
-                _LOGGER.debug(
+                self._log.debug(
                     "Frame Art: Skipping thumbnail fetch - same content_id %s, has_thumbnail: %s",
                     content_id,
                     self._has_current_thumbnail(),
@@ -514,9 +518,9 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                         artwork_list = await self._art_api.available()
                         data["artwork_count"] = len(artwork_list) if artwork_list else 0
                 except asyncio.TimeoutError:
-                    _LOGGER.debug("Timeout getting artwork list")
+                    self._log.debug("Timeout getting artwork list")
                 except Exception as ex:
-                    _LOGGER.debug("Error getting artwork list: %s", ex)
+                    self._log.debug("Error getting artwork list: %s", ex)
 
             # Get slideshow / auto-rotation status (routed via persisted API).
             # Samsung Frame TVs split this feature across two parallel APIs
@@ -538,20 +542,20 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                             },
                         )
                         active_api = detected
-                        _LOGGER.info(
+                        self._log.info(
                             "Frame Art: slideshow API detected as %r, "
                             "persisted in entry data",
                             detected,
                         )
                     else:
-                        _LOGGER.debug(
+                        self._log.debug(
                             "Frame Art: slideshow API detection inconclusive "
                             "(neither endpoint responded); will retry next cycle"
                         )
                 except asyncio.TimeoutError:
-                    _LOGGER.debug("Frame Art: timeout during slideshow API detection")
+                    self._log.debug("Frame Art: timeout during slideshow API detection")
                 except Exception as ex:  # noqa: BLE001
-                    _LOGGER.debug(
+                    self._log.debug(
                         "Frame Art: error during slideshow API detection: %s",
                         ex,
                     )
@@ -565,9 +569,9 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                     if slideshow:
                         data["slideshow_status"] = slideshow.get("value", "off")
             except asyncio.TimeoutError:
-                _LOGGER.debug("Timeout getting slideshow status")
+                self._log.debug("Timeout getting slideshow status")
             except Exception as ex:
-                _LOGGER.debug("Error getting slideshow status: %s", ex)
+                self._log.debug("Error getting slideshow status: %s", ex)
 
         except Exception as ex:
             # Track connection failures to prevent infinite reconnection loops
@@ -579,7 +583,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
 
             if is_connection_error:
                 self._connection_failures += 1
-                _LOGGER.warning(
+                self._log.warning(
                     "Frame Art: Connection error (%d/%d): %s",
                     self._connection_failures,
                     self._max_connection_failures,
@@ -601,7 +605,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                         30,
                     )
                     self._backoff_until = time.time() + (backoff_minutes * 60)
-                    _LOGGER.warning(
+                    self._log.warning(
                         "Frame Art: Too many connection failures (%d), "
                         "entering %d minute backoff period. "
                         "Frame Art sensor will pause updates until backoff expires.",
@@ -609,13 +613,15 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                         backoff_minutes,
                     )
             else:
-                _LOGGER.warning("Frame Art: Error updating data: %s", ex)
+                self._log.warning("Frame Art: Error updating data: %s", ex)
 
             # Don't raise just return partial data
         else:
             # Update successful, reset failure counters
             if self._connection_failures > 0:
-                _LOGGER.info("Frame Art: Update successful, resetting failure counter")
+                self._log.info(
+                    "Frame Art: Update successful, resetting failure counter"
+                )
                 self._connection_failures = 0
             # Also reset thumbnail failures on a successful update cycle
             # (TV is reachable again, timeouts were transient)
@@ -660,7 +666,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                         return state.attributes.get("art_mode_status") != "on"
                     break
         except Exception as ex:
-            _LOGGER.debug("Could not check media_player power state: %s", ex)
+            self._log.debug("Could not check media_player power state: %s", ex)
         return False
 
     def _get_media_player_art_mode(self) -> str | None:
@@ -683,7 +689,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                             return art_mode_status
                     break
         except Exception as ex:
-            _LOGGER.debug("Could not get media_player art_mode_status: %s", ex)
+            self._log.debug("Could not get media_player art_mode_status: %s", ex)
         return None
 
     def _has_current_thumbnail(self) -> bool:
@@ -856,10 +862,10 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 return file_path
 
             await self._hass.async_add_executor_job(_write_placeholder)
-            _LOGGER.debug("Saved error placeholder for %s", content_id)
+            self._log.debug("Saved error placeholder for %s", content_id)
 
         except Exception as ex:
-            _LOGGER.debug("Error saving error placeholder: %s", ex)
+            self._log.debug("Error saving error placeholder: %s", ex)
 
     async def _fetch_and_save_thumbnail(self, content_id: str) -> None:
         """Fetch and save thumbnail in background (non-blocking).
@@ -870,7 +876,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         """
         import os
 
-        _LOGGER.info("Frame Art: Starting thumbnail fetch for %s", content_id)
+        self._log.info("Frame Art: Starting thumbnail fetch for %s", content_id)
 
         # Retry logic: up to 3 attempts with progressive delays.
         max_retries = 3
@@ -881,7 +887,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         for attempt in range(max_retries):
             try:
                 async with asyncio.timeout(15):
-                    _LOGGER.debug(
+                    self._log.debug(
                         "Frame Art: get_thumbnail attempt %d/%d for %s",
                         attempt + 1,
                         max_retries,
@@ -892,7 +898,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
 
                     if data and received > 1:
                         thumbnail_data = data
-                        _LOGGER.info(
+                        self._log.info(
                             "Frame Art: get_thumbnail returned %d bytes for %s "
                             "(attempt %d/%d)",
                             received,
@@ -903,7 +909,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                         break
 
                     last_error = f"got {received} bytes"
-                    _LOGGER.debug(
+                    self._log.debug(
                         "Frame Art: Empty thumbnail data for %s on attempt %d/%d (%s)",
                         content_id,
                         attempt + 1,
@@ -913,7 +919,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
 
             except asyncio.TimeoutError:
                 last_error = "timeout (15s)"
-                _LOGGER.debug(
+                self._log.debug(
                     "Frame Art: Timeout on attempt %d/%d for %s",
                     attempt + 1,
                     max_retries,
@@ -921,7 +927,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 )
             except Exception as ex:
                 last_error = str(ex)
-                _LOGGER.debug(
+                self._log.debug(
                     "Frame Art: Error on attempt %d/%d for %s: %s",
                     attempt + 1,
                     max_retries,
@@ -966,12 +972,12 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 with open(content_path, "wb") as f:
                     f.write(thumbnail_data)
 
-                _LOGGER.info("Frame Art: Written thumbnail to %s", file_path)
+                self._log.info("Frame Art: Written thumbnail to %s", file_path)
                 return file_path, content_path
 
             await self._hass.async_add_executor_job(_write_thumbnails)
 
-            _LOGGER.info("Frame Art: Successfully saved thumbnail for %s", content_id)
+            self._log.info("Frame Art: Successfully saved thumbnail for %s", content_id)
             self._thumbnail_failures = 0
             self.async_set_updated_data(self.data)
             return
@@ -989,7 +995,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         # No cached copy available — save generic error placeholder.
         # NOT a DRM issue: thumbnails are never DRM-protected.
         self._thumbnail_failures += 1
-        _LOGGER.warning(
+        self._log.warning(
             "Frame Art: Could not download thumbnail for %s after %d attempts "
             "(last error: %s), and no cached copy was found. "
             "Transient transport failure, not DRM.",
@@ -1001,7 +1007,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
 
         if self._thumbnail_failures >= 3:
             self._thumbnail_backoff_until = time.time() + 300  # 5 minutes
-            _LOGGER.warning(
+            self._log.warning(
                 "Frame Art: Too many thumbnail failures (%d), pausing automatic "
                 "fetch for 5 minutes. Will retry automatically.",
                 self._thumbnail_failures,
@@ -1056,7 +1062,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         try:
             promoted = await self._hass.async_add_executor_job(_promote)
         except Exception as ex:  # noqa: BLE001
-            _LOGGER.debug(
+            self._log.debug(
                 "Frame Art: error restoring cached thumbnail for %s: %s",
                 content_id,
                 ex,
@@ -1064,7 +1070,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             return False
 
         if promoted:
-            _LOGGER.info(
+            self._log.info(
                 "Frame Art: live thumbnail fetch failed for %s; reused cached "
                 "copy from %s/ as current.jpg",
                 content_id,
