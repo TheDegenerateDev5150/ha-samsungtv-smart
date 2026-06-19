@@ -906,7 +906,7 @@ class SamsungTVSmartOAuth2FlowHandler(
             vol.Optional(
                 CONF_PORT,
                 description={"suggested_value": data.get(CONF_PORT, DEFAULT_PORT)},
-            ): vol.In([8001, 8002]),
+            ): vol.All(vol.Coerce(int), vol.In([8001, 8002])),
         }
 
         # Always show OAuth option - for switching to OAuth or re-authenticating
