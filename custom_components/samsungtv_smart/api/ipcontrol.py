@@ -288,6 +288,20 @@ class SamsungIPControl:
             raise SamsungIPControlError(f"unexpected colorTone response: {result!r}")
         return response_value
 
+    async def async_get_device_information(self) -> dict[str, str]:
+        """Return the TV's model, firmware version and serial number."""
+        result = await self._async_request("getDeviceInformation")
+        model_id = result.get("modelID")
+        if not isinstance(model_id, str):
+            raise SamsungIPControlError(
+                f"no modelID in getDeviceInformation response: {result!r}"
+            )
+        return {
+            "modelID": model_id,
+            "FWVersion": str(result.get("FWVersion", "")),
+            "serialNumber": str(result.get("serialNumber", "")),
+        }
+
     # -- transport -----------------------------------------------------------
 
     async def _async_request(
