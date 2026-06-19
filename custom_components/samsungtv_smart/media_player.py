@@ -104,6 +104,8 @@ from .const import (
     CONF_ENABLE_IP_CONTROL,
     CONF_EXT_POWER_ENTITY,
     CONF_IP_CONTROL_ART_MODE,
+    CONF_IP_CONTROL_FW_VERSION,
+    CONF_IP_CONTROL_MODEL_ID,
     CONF_IP_CONTROL_TOKEN,
     CONF_LOGO_OPTION,
     CONF_OAUTH_TOKEN,
@@ -241,6 +243,11 @@ IP_ART_MODE_REFRESH_INTERVAL = timedelta(seconds=5)
 # art-mode value is considered stale and cleared (TV likely in deep standby
 # with port 1516 closed). 3 × 5s = 15s worst-case staleness.
 IP_ART_MODE_MAX_FAILURES = 3
+# Device identity (model / firmware) is fetched via IP Control once at startup
+# and then re-checked on this cadence, so a firmware upgrade is picked up
+# without re-pairing. It is a get-only LAN call and the value rarely changes,
+# so a daily refresh is plenty.
+IP_DEVICE_INFO_REFRESH_INTERVAL = timedelta(hours=24)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -619,6 +626,8 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         self._ip_art_mode_failures = 0
         self._ip_art_mode_refresh_unsub: Callable[[], None] | None = None
         self._ip_art_mode_initial_task: asyncio.Task | None = None
+        self._ip_device_info_refresh_unsub: Callable[[], None] | None = None
+        self._ip_device_info_initial_task: asyncio.Task | None = None
 
         # upnp initialization
         self._upnp = SamsungUPnP(host=self._host, session=session)
@@ -1138,6 +1147,48 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 value,
             )
 
+    async def _refresh_device_information(self, _now=None) -> None:
+        """Refresh the TV's model / firmware via IP Control and persist it.
+
+        The model/firmware are first learned at pairing, but the firmware
+        version can change after an over-the-air upgrade — and it gates which
+        IP Control capabilities a TV exposes. So we re-read it periodically
+        (see IP_DEVICE_INFO_REFRESH_INTERVAL) and write the new value back to
+        entry.data only when it actually changed. No-ops when the TV isn't
+        paired, is disabled, or is unreachable (logged at debug).
+        """
+        client = self._get_ip_control_client()
+        if client is None:
+            return
+        try:
+            info = await client.async_get_device_information()
+        except SamsungIPControlError as ex:
+            self._log.debug(
+                "IP Control getDeviceInformation for %s failed (%s); "
+                "keeping last known model/firmware",
+                self._host,
+                ex,
+            )
+            return
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None:
+            return
+        updates: dict[str, str] = {}
+        if entry.data.get(CONF_IP_CONTROL_MODEL_ID) != info["modelID"]:
+            updates[CONF_IP_CONTROL_MODEL_ID] = info["modelID"]
+        if entry.data.get(CONF_IP_CONTROL_FW_VERSION) != info["FWVersion"]:
+            updates[CONF_IP_CONTROL_FW_VERSION] = info["FWVersion"]
+        if not updates:
+            return
+        self._log.info(
+            "IP Control device info for %s updated: %s",
+            self._host,
+            updates,
+        )
+        self.hass.config_entries.async_update_entry(
+            entry, data={**entry.data, **updates}
+        )
+
     async def async_added_to_hass(self):
         """Set config parameter when add to hass."""
         await super().async_added_to_hass()
@@ -1199,6 +1250,17 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             self._refresh_ip_art_mode()
         )
 
+        # Periodically re-read model/firmware so an OTA firmware upgrade is
+        # picked up without re-pairing. No-ops for unpaired TVs.
+        self._ip_device_info_refresh_unsub = async_track_time_interval(
+            self.hass,
+            self._refresh_device_information,
+            IP_DEVICE_INFO_REFRESH_INTERVAL,
+        )
+        self._ip_device_info_initial_task = self.hass.async_create_task(
+            self._refresh_device_information()
+        )
+
     async def async_will_remove_from_hass(self):
         """Run when entity will be removed from hass."""
         if self._ip_art_mode_initial_task is not None:
@@ -1207,6 +1269,12 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         if self._ip_art_mode_refresh_unsub is not None:
             self._ip_art_mode_refresh_unsub()
             self._ip_art_mode_refresh_unsub = None
+        if self._ip_device_info_initial_task is not None:
+            self._ip_device_info_initial_task.cancel()
+            self._ip_device_info_initial_task = None
+        if self._ip_device_info_refresh_unsub is not None:
+            self._ip_device_info_refresh_unsub()
+            self._ip_device_info_refresh_unsub = None
         self._ws.unregister_status_callback()
         await self.hass.async_add_executor_job(self._ws.stop_poll)
 
