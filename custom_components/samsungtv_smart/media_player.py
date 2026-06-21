@@ -1822,6 +1822,21 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
     async def async_update(self):
         """Update state of device."""
+        start_time = time.monotonic()
+        try:
+            await self._async_update()
+        finally:
+            elapsed = time.monotonic() - start_time
+            if elapsed > SCAN_INTERVAL.total_seconds():
+                self._log.warning(
+                    "%s - Update took %.1fs, longer than the %.0fs scan interval",
+                    self.entity_id,
+                    elapsed,
+                    SCAN_INTERVAL.total_seconds(),
+                )
+
+    async def _async_update(self):
+        """Perform the actual state update."""
 
         # Refresh OAuth token if needed (before any SmartThings API call)
         if self._auth_method == AUTH_METHOD_OAUTH:
