@@ -24,6 +24,7 @@ class PowerOnMethod(Enum):
 
     WOL = 1
     SmartThings = 2
+    IPControl = 3
 
 
 DOMAIN = "samsungtv_smart"
@@ -94,6 +95,19 @@ CONF_DEVICE_ID = "device_id"
 # OAuth2 authentication
 CONF_AUTH_METHOD = "auth_method"
 CONF_OAUTH_TOKEN = "oauth_token"
+
+# IP Control (JSON-RPC, port 1516) — persisted access token, per TV (entry.data).
+# Presence of a token means the feature is paired/enabled for that TV.
+CONF_IP_CONTROL_TOKEN = "ip_control_token"
+CONF_ENABLE_IP_CONTROL = "enable_ip_control"
+# Whether IP Control's artModeControl/getTVStates are used for Art Mode
+# detection and switching. Disabled by default: some firmwares (e.g. after a
+# factory reset) leave artModeControl wedged "on" regardless of the actual
+# panel state, causing false art_mode_status readings. Power on/off via IP
+# Control (CONF_ENABLE_IP_CONTROL / CONF_POWER_ON_METHOD) is unaffected by
+# this setting. Re-enable once the TV's firmware reports artModeControl
+# correctly again.
+CONF_IP_CONTROL_ART_MODE = "ip_control_art_mode"
 
 # Authentication methods
 AUTH_METHOD_OAUTH = "oauth"
@@ -226,5 +240,10 @@ STD_APP_LIST = {
         "st_app_id": "kIciSQlYEM.plex",
         "logo": "",
         "name": "Plex",
+    },
+    "com.samsung.tv.csfs": {
+        "st_app_id": "",
+        "logo": "",
+        "name": "Smart Hub",
     },
 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 import logging
 from typing import Any
 
@@ -23,13 +24,20 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 
 from . import async_get_samsungtv_api_key
 from .api.art import SamsungTVAsyncArt
+from .api.ipcontrol import (
+    SamsungIPControl,
+    SamsungIPControlAuthError,
+    SamsungIPControlError,
+)
 from .const import (
     AUTH_METHOD_OAUTH,
     CONF_AUTH_METHOD,
+    CONF_ENABLE_IP_CONTROL,
+    CONF_IP_CONTROL_TOKEN,
     CONF_IS_FRAME_TV,
     CONF_WS_NAME,
     DATA_ART_API,
@@ -40,6 +48,23 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class _DeviceLoggerAdapter(logging.LoggerAdapter):
+    """Prefix every log line with the TV's host so multi-TV logs can be told apart."""
+
+    def process(self, msg, kwargs):
+        return f"[{self.extra['host']}] {msg}", kwargs
+
+
+# Poll the switch entities every 5s so the Art Mode / power switches track the
+# TV as responsively as the SmartThings cloud poll. async_update only reads the
+# media_player's already-published art_mode_status attribute (no extra TV
+# network call in the normal case), so the short interval is cheap. Without
+# this override Home Assistant falls back to its 30s default scan interval,
+# which is what made the Art Mode switch feel sluggish on TVs where IP Control
+# is disabled (no faster push path).
+SCAN_INTERVAL = timedelta(seconds=5)
 
 COMPONENT_MAIN = "main"  # SmartThings component
 
@@ -92,6 +117,7 @@ async def async_setup_entry(
             device_name=device_name,
             session=session,
             device_unique_id=device_unique_id,
+            host=host,
         )
     )
     _LOGGER.debug(
@@ -100,11 +126,14 @@ async def async_setup_entry(
         "yes" if (api_key and device_id) else "no — WebSocket fallback",
     )
 
-    # Check if art_api already exists (created by sensor platform)
+    # Reuse the shared Art API instance if present (created in __init__.py),
+    # otherwise create a fallback one. Either way, decide whether to create the
+    # Art Mode switch from the actual Frame-TV support check below — NOT from
+    # whether the shared instance happens to exist: it is now created for every
+    # TV (Frame or not) before platforms load, so its presence no longer implies
+    # Frame support.
     art_api = hass.data[DOMAIN][entry.entry_id].get(DATA_ART_API)
-
     if art_api is None:
-        # Create the Art API instance if not already created
         art_api = SamsungTVAsyncArt(
             host=host,
             port=port,
@@ -114,41 +143,31 @@ async def async_setup_entry(
             name=f"{WS_PREFIX} {ws_name} Art",
         )
 
-        # Use persisted flag if available, otherwise probe live
-        is_frame_tv_cached = entry.data.get(CONF_IS_FRAME_TV, False)
-        if is_frame_tv_cached:
-            _LOGGER.debug(
-                "Frame TV flag found for %s, skipping live check in switch", host
-            )
-            is_supported = True
-        else:
-            try:
-                async with asyncio.timeout(5):
-                    is_supported = await art_api.supported()
-            except asyncio.TimeoutError:
-                _LOGGER.debug("Timeout checking Frame TV support for %s", host)
-                is_supported = False
-            except Exception as ex:
-                _LOGGER.debug("Frame TV support check failed: %s", ex)
-                is_supported = False
-
-        if not is_supported:
-            _LOGGER.info(
-                "Frame TV art mode not supported on %s - art mode switch not created",
-                host,
-            )
-        else:
-            # Store for later use
-            hass.data[DOMAIN][entry.entry_id][DATA_ART_API] = art_api
-            # Add Art Mode switch
-            entities.append(
-                FrameArtModeSwitch(
-                    hass, entry, art_api, device_name, host, device_unique_id
-                )
-            )
-            _LOGGER.info("Frame Art Mode switch created for %s", device_name)
+    # Use persisted flag if available, otherwise probe live
+    is_frame_tv_cached = entry.data.get(CONF_IS_FRAME_TV, False)
+    if is_frame_tv_cached:
+        _LOGGER.debug("Frame TV flag found for %s, skipping live check in switch", host)
+        is_supported = True
     else:
-        # Art API exists, so Frame TV is supported
+        try:
+            async with asyncio.timeout(5):
+                is_supported = await art_api.supported()
+        except asyncio.TimeoutError:
+            _LOGGER.debug("Timeout checking Frame TV support for %s", host)
+            is_supported = False
+        except Exception as ex:
+            _LOGGER.debug("Frame TV support check failed: %s", ex)
+            is_supported = False
+
+    if not is_supported:
+        _LOGGER.info(
+            "Frame TV art mode not supported on %s - art mode switch not created",
+            host,
+        )
+    else:
+        # Store for later use (no-op when already the shared instance)
+        hass.data[DOMAIN][entry.entry_id][DATA_ART_API] = art_api
+        # Add Art Mode switch
         entities.append(
             FrameArtModeSwitch(
                 hass, entry, art_api, device_name, host, device_unique_id
@@ -184,12 +203,72 @@ class FrameArtModeSwitch(SwitchEntity):
         self._art_api = art_api
         self._device_name = device_name
         self._host = host
+        self._log = _DeviceLoggerAdapter(_LOGGER, {"host": host or device_name})
         self._device_unique_id = device_unique_id
         self._attr_unique_id = f"{entry.entry_id}_art_mode_switch"
         self._attr_is_on = None
         self._available = True
         self._updating = False
         self._media_player_entity_id: str | None = None
+        self._ip_control: SamsungIPControl | None = None
+        self._ip_control_token: str | None = None
+
+    def _get_ip_control(self) -> SamsungIPControl | None:
+        """Return an IP Control client if paired AND enabled, else None.
+
+        Token is read live from entry.data (pairing takes effect with no
+        reload), and the channel must be enabled in the options.
+        """
+        if not self._host:
+            return None
+        token = self._entry.data.get(CONF_IP_CONTROL_TOKEN)
+        if not token or not self._entry.options.get(CONF_ENABLE_IP_CONTROL, True):
+            return None
+        if self._ip_control is None or self._ip_control_token != token:
+            self._ip_control = SamsungIPControl(self._hass, self._host, token=token)
+            self._ip_control_token = token
+        return self._ip_control
+
+    async def _set_artmode(self, turn_on: bool):
+        """Set Art Mode via IP Control (primary), WebSocket as fallback.
+
+        On a healthy Frame, IP Control ``artModeControl`` reliably flips the
+        panel in both directions (confirmed on QE55LS03D: artModeOn -> Ambient,
+        artModeOff -> a real picture mode). It is preferred over the WebSocket
+        art channel, whose ``set_artmode`` returns None/False or "times out but
+        a broadcast confirms" — a false success that doesn't move the panel. On
+        any IP Control failure (not paired, transport, auth) we fall back to the
+        WebSocket so behaviour is never worse than before. The caller verifies
+        the resulting state afterwards.
+
+        Note: this writing path is gated only by ``CONF_ENABLE_IP_CONTROL``
+        (inside ``_get_ip_control``), NOT by ``CONF_IP_CONTROL_ART_MODE``. The
+        latter only disables the *read* path (the ``artModeControl`` getter,
+        which can wedge "on" on some firmwares). Issuing the explicit
+        ``artModeOn``/``artModeOff`` command is reliable even on those TVs, so
+        we keep using it for switching.
+        """
+        client = self._get_ip_control()
+        if client is not None:
+            try:
+                if turn_on:
+                    await client.async_set_art_mode_on()
+                else:
+                    await client.async_set_art_mode_off()
+                self._log.debug(
+                    "Art Mode set to %s via IP Control for %s",
+                    turn_on,
+                    self._device_name,
+                )
+                return True
+            except SamsungIPControlError as ex:
+                self._log.debug(
+                    "IP Control art-mode set failed (%s); falling back to "
+                    "WebSocket for %s",
+                    ex,
+                    self._device_name,
+                )
+        return await self._art_api.set_artmode(turn_on)
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -236,35 +315,38 @@ class FrameArtModeSwitch(SwitchEntity):
         "unknown" means the WebSocket connection is not yet established —
         typically the TV is booting up. Treat it as on so that Art Mode
         activation is not blocked during the startup transient.
+
+        "unavailable" (or no media_player at all) says nothing about the TV
+        itself — e.g. a SmartThings cloud failure crashes the media_player
+        update while the TV keeps working locally. Ask the TV directly over
+        the local REST API instead of assuming it is off.
         """
         entity_id = self._get_media_player_entity_id()
-        if not entity_id:
-            return False
+        state = self._hass.states.get(entity_id) if entity_id else None
 
-        state = self._hass.states.get(entity_id)
-        if state is None:
-            return False
+        if state is None or state.state == "unavailable":
+            try:
+                return await self._art_api.on()
+            except Exception:  # pylint: disable=broad-except
+                return False
 
         # TV is clearly on (watching TV, idle, paused...) or still starting up
-        if state.state not in (STATE_OFF, "unavailable"):
+        if state.state != STATE_OFF:
             return True
 
         # media_player says "off" — but Art Mode may be active
-        if state.state == STATE_OFF:
-            return state.attributes.get("art_mode_status") == "on"
-
-        return False
+        return state.attributes.get("art_mode_status") == "on"
 
     async def _turn_on_tv(self) -> bool:
         """Turn on the TV using media_player service."""
         entity_id = self._get_media_player_entity_id()
         if not entity_id:
-            _LOGGER.warning(
+            self._log.warning(
                 "Could not find media_player entity for %s", self._device_name
             )
             return False
 
-        _LOGGER.info("Turning on TV %s before activating Art Mode", entity_id)
+        self._log.info("Turning on TV %s before activating Art Mode", entity_id)
 
         try:
             await self._hass.services.async_call(
@@ -275,12 +357,12 @@ class FrameArtModeSwitch(SwitchEntity):
             )
             return True
         except Exception as ex:
-            _LOGGER.debug("Failed to turn on TV %s: %s", entity_id, ex)
+            self._log.debug("Failed to turn on TV %s: %s", entity_id, ex)
             return False
 
     async def _wait_for_tv_ready(self, max_wait: int = 15) -> bool:
         """Wait for TV to be ready after turning on."""
-        _LOGGER.debug("Waiting for TV to be ready (max %ds)...", max_wait)
+        self._log.debug("Waiting for TV to be ready (max %ds)...", max_wait)
 
         for i in range(max_wait):
             await asyncio.sleep(1)
@@ -290,19 +372,19 @@ class FrameArtModeSwitch(SwitchEntity):
                 async with asyncio.timeout(3):
                     is_supported = await self._art_api.supported()
                     if is_supported:
-                        _LOGGER.debug("TV ready after %d seconds", i + 1)
+                        self._log.debug("TV ready after %d seconds", i + 1)
                         return True
             except Exception:
                 pass
 
-            _LOGGER.debug("TV not ready yet, waiting... (%d/%d)", i + 1, max_wait)
+            self._log.debug("TV not ready yet, waiting... (%d/%d)", i + 1, max_wait)
 
-        _LOGGER.warning("TV did not become ready within %d seconds", max_wait)
+        self._log.warning("TV did not become ready within %d seconds", max_wait)
         return False
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn Art Mode on."""
-        _LOGGER.debug("Turning Art Mode ON for %s", self._device_name)
+        self._log.debug("Turning Art Mode ON for %s", self._device_name)
 
         # Short-circuit: if already in Art Mode, nothing to do.
         # Avoids useless set_artmode(True) calls that the TV may silently
@@ -311,7 +393,7 @@ class FrameArtModeSwitch(SwitchEntity):
         if entity_id:
             state = self._hass.states.get(entity_id)
             if state and state.attributes.get("art_mode_status") == "on":
-                _LOGGER.debug(
+                self._log.debug(
                     "Art Mode already ON for %s, skipping activation",
                     self._device_name,
                 )
@@ -324,11 +406,11 @@ class FrameArtModeSwitch(SwitchEntity):
         tv_is_on = await self._is_tv_on()
 
         if not tv_is_on:
-            _LOGGER.info("TV is off, turning it on first...")
+            self._log.info("TV is off, turning it on first...")
 
             # Turn on TV
             if not await self._turn_on_tv():
-                _LOGGER.warning(
+                self._log.warning(
                     "Cannot activate Art Mode on %s: TV is not reachable",
                     self._device_name,
                 )
@@ -337,7 +419,7 @@ class FrameArtModeSwitch(SwitchEntity):
             # Wait for TV to be ready
             tv_was_off = True
             if not await self._wait_for_tv_ready(max_wait=20):
-                _LOGGER.warning(
+                self._log.warning(
                     "TV may not be fully ready, attempting Art Mode anyway..."
                 )
 
@@ -345,7 +427,9 @@ class FrameArtModeSwitch(SwitchEntity):
             # supported() returns True quickly (WebSocket reachable) but
             # set_artmode() may still fail for several seconds while the Art
             # subsystem initialises. 8s covers cold-boot scenarios reliably.
-            _LOGGER.debug("Waiting 8s for Art subsystem to stabilize after power-on...")
+            self._log.debug(
+                "Waiting 8s for Art subsystem to stabilize after power-on..."
+            )
             await asyncio.sleep(8)
         else:
             tv_was_off = False
@@ -358,23 +442,27 @@ class FrameArtModeSwitch(SwitchEntity):
         for attempt in range(max_retries):
             try:
                 async with asyncio.timeout(10):
-                    _LOGGER.debug(
+                    self._log.debug(
                         "Art Mode ON attempt %d/%d for %s",
                         attempt + 1,
                         max_retries,
                         self._device_name,
                     )
-                    result = await self._art_api.set_artmode(True)
+                    result = await self._set_artmode(True)
                     if result:
                         # Set state immediately for responsive UI
                         self._attr_is_on = True
                         self._available = True
                         self.async_write_ha_state()
-                        _LOGGER.info("Art Mode turned ON for %s", self._device_name)
+                        self._log.info("Art Mode turned ON for %s", self._device_name)
 
-                        # Wait for TV to confirm, then refresh state
+                        # Wait for TV to confirm, then refresh state.
+                        # async_update() only mutates attributes — publish
+                        # the refreshed state so the UI is corrected if the
+                        # TV ended up differing from the optimistic write.
                         await asyncio.sleep(2)
                         await self.async_update()
+                        self.async_write_ha_state()
                         return  # Success, exit
                     else:
                         # set_artmode returned None/False — this can happen when
@@ -382,7 +470,7 @@ class FrameArtModeSwitch(SwitchEntity):
                         # the TV is already in Art Mode (no-op, no response).
                         # Before retrying, check actual state: if Art Mode is
                         # already on, we're done.
-                        _LOGGER.debug(
+                        self._log.debug(
                             "Art Mode set_artmode returned None/False on attempt %d,"
                             " checking actual state...",
                             attempt + 1,
@@ -390,7 +478,7 @@ class FrameArtModeSwitch(SwitchEntity):
                         try:
                             actual = await self._art_api.get_artmode()
                             if actual == "on":
-                                _LOGGER.info(
+                                self._log.info(
                                     "Art Mode is already ON for %s"
                                     " (confirmed by get_artmode)",
                                     self._device_name,
@@ -403,17 +491,17 @@ class FrameArtModeSwitch(SwitchEntity):
                             pass
 
                         if attempt < max_retries - 1:
-                            _LOGGER.debug("Retrying in %d seconds...", retry_delay)
+                            self._log.debug("Retrying in %d seconds...", retry_delay)
                             await asyncio.sleep(retry_delay)
                             retry_delay *= 2  # Exponential backoff
 
             except asyncio.TimeoutError:
-                _LOGGER.debug("Timeout on attempt %d/%d", attempt + 1, max_retries)
+                self._log.debug("Timeout on attempt %d/%d", attempt + 1, max_retries)
                 if attempt < max_retries - 1:
                     await asyncio.sleep(retry_delay)
                     retry_delay *= 2
             except Exception as ex:
-                _LOGGER.debug(
+                self._log.debug(
                     "Error on attempt %d/%d: %s", attempt + 1, max_retries, ex
                 )
                 if attempt < max_retries - 1:
@@ -421,7 +509,7 @@ class FrameArtModeSwitch(SwitchEntity):
                     retry_delay *= 2
 
         # All retries failed
-        _LOGGER.warning(
+        self._log.warning(
             "Failed to turn Art Mode ON for %s after %d attempts",
             self._device_name,
             max_retries,
@@ -430,13 +518,13 @@ class FrameArtModeSwitch(SwitchEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn Art Mode off (switch to normal TV mode)."""
-        _LOGGER.debug("Turning Art Mode OFF for %s", self._device_name)
+        self._log.debug("Turning Art Mode OFF for %s", self._device_name)
 
         # Check if TV is on
         tv_is_on = await self._is_tv_on()
 
         if not tv_is_on:
-            _LOGGER.debug("TV is already off, Art Mode is already off")
+            self._log.debug("TV is already off, Art Mode is already off")
             self._attr_is_on = False
             self.async_write_ha_state()
             return
@@ -447,41 +535,45 @@ class FrameArtModeSwitch(SwitchEntity):
         for attempt in range(max_retries):
             try:
                 async with asyncio.timeout(10):
-                    _LOGGER.debug(
+                    self._log.debug(
                         "Art Mode OFF attempt %d/%d for %s",
                         attempt + 1,
                         max_retries,
                         self._device_name,
                     )
-                    result = await self._art_api.set_artmode(False)
+                    result = await self._set_artmode(False)
                     if result:
                         # Set state immediately for responsive UI
                         self._attr_is_on = False
                         self._available = True
                         self.async_write_ha_state()
-                        _LOGGER.info("Art Mode turned OFF for %s", self._device_name)
+                        self._log.info("Art Mode turned OFF for %s", self._device_name)
 
-                        # Wait for TV to confirm, then refresh state
+                        # Wait for TV to confirm, then refresh state.
+                        # async_update() only mutates attributes — publish
+                        # the refreshed state so the UI is corrected if the
+                        # TV ended up differing from the optimistic write.
                         await asyncio.sleep(2)
                         await self.async_update()
+                        self.async_write_ha_state()
                         return  # Success, exit
                     else:
-                        _LOGGER.debug(
+                        self._log.debug(
                             "Art Mode set_artmode(False) returned None/False on attempt %d",
                             attempt + 1,
                         )
                         if attempt < max_retries - 1:
-                            _LOGGER.debug("Retrying in %d seconds...", retry_delay)
+                            self._log.debug("Retrying in %d seconds...", retry_delay)
                             await asyncio.sleep(retry_delay)
                             retry_delay *= 2
 
             except asyncio.TimeoutError:
-                _LOGGER.debug("Timeout on attempt %d/%d", attempt + 1, max_retries)
+                self._log.debug("Timeout on attempt %d/%d", attempt + 1, max_retries)
                 if attempt < max_retries - 1:
                     await asyncio.sleep(retry_delay)
                     retry_delay *= 2
             except Exception as ex:
-                _LOGGER.debug(
+                self._log.debug(
                     "Error on attempt %d/%d: %s", attempt + 1, max_retries, ex
                 )
                 if attempt < max_retries - 1:
@@ -489,7 +581,7 @@ class FrameArtModeSwitch(SwitchEntity):
                     retry_delay *= 2
 
         # All retries failed
-        _LOGGER.warning(
+        self._log.warning(
             "Failed to turn Art Mode OFF for %s after %d attempts",
             self._device_name,
             max_retries,
@@ -508,25 +600,42 @@ class FrameArtModeSwitch(SwitchEntity):
 
             if not tv_is_on:
                 # TV is off, Art Mode must be off too
-                _LOGGER.debug("TV is off, setting Art Mode to off")
+                self._log.debug("TV is off, setting Art Mode to off")
                 self._attr_is_on = False
                 self._available = True
                 return
 
-            # TV is on, get actual Art Mode status
-            async with asyncio.timeout(8):
-                art_mode = await self._art_api.get_artmode()
-                if art_mode is not None:
-                    self._attr_is_on = art_mode == "on"
-                    self._available = True
-                    _LOGGER.debug("Art Mode state updated: %s", self._attr_is_on)
-                else:
-                    _LOGGER.debug("Could not get Art Mode state")
+            # TV is on — mirror the canonical Art Mode status from the
+            # media_player. Its art_mode_status attribute is the integration's
+            # authoritative value (IP Control getTVStates.pictureMode, power-
+            # gated). The WebSocket get_artmode() poll cannot be trusted on
+            # 2024+ Frames: it returns "on" even while a real HDMI input is
+            # displayed (the TV's internal art flag is stuck), which is what
+            # pinned this switch on. Only fall back to the WS read if the
+            # media_player attribute is not yet available (e.g. at startup).
+            entity_id = self._get_media_player_entity_id()
+            mp_state = self._hass.states.get(entity_id) if entity_id else None
+            if mp_state is not None and "art_mode_status" in mp_state.attributes:
+                self._attr_is_on = mp_state.attributes.get("art_mode_status") == "on"
+                self._available = True
+                self._log.debug("Art Mode state updated: %s", self._attr_is_on)
+            else:
+                async with asyncio.timeout(8):
+                    art_mode = await self._art_api.get_artmode()
+                    if art_mode is not None:
+                        self._attr_is_on = art_mode == "on"
+                        self._available = True
+                        self._log.debug(
+                            "Art Mode state updated (WS fallback): %s",
+                            self._attr_is_on,
+                        )
+                    else:
+                        self._log.debug("Could not get Art Mode state")
         except asyncio.TimeoutError:
-            _LOGGER.debug("Timeout updating Art Mode state")
+            self._log.debug("Timeout updating Art Mode state")
             # Don't mark as unavailable on timeout - TV might be off
         except Exception as ex:
-            _LOGGER.debug("Error updating Art Mode state: %s", ex)
+            self._log.debug("Error updating Art Mode state: %s", ex)
         finally:
             self._updating = False
 
@@ -561,12 +670,20 @@ class FrameArtModeSwitch(SwitchEntity):
         art_status = new_state.attributes.get("art_mode_status")
         if art_status == "on":
             self._attr_is_on = True
-        elif new_state.state in (STATE_OFF, "unavailable"):
+        elif art_status == "off":
+            # Mirror the media_player's authoritative art_mode_status directly,
+            # including when the TV is ON but no longer in Art Mode (e.g. an app
+            # was just launched). Without this the switch kept its previous
+            # "on" value and lingered until its own poll.
             self._attr_is_on = False
-        elif new_state.state == "unknown":
-            # TV is booting up — WebSocket not yet established.
+        elif new_state.state == STATE_OFF:
+            self._attr_is_on = False
+        elif new_state.state in ("unknown", "unavailable"):
+            # "unknown": TV is booting up — WebSocket not yet established.
+            # "unavailable": the media_player update failed (e.g. SmartThings
+            # cloud error) — that says nothing about the TV itself.
             # Schedule a deferred re-check so the switch reflects the actual
-            # Art Mode state once the TV is fully ready, without blocking here.
+            # Art Mode state (asking the TV directly), without guessing here.
             self._hass.async_create_background_task(
                 self._deferred_state_refresh(delay=8),
                 f"art_mode_switch_deferred_refresh_{self._entry.entry_id}",
@@ -602,6 +719,7 @@ class SamsungTVPowerSwitch(SwitchEntity):
         device_name: str,
         session,
         device_unique_id: str,
+        host: str | None = None,
     ) -> None:
         """Initialize the power switch."""
         self.hass = hass
@@ -610,11 +728,87 @@ class SamsungTVPowerSwitch(SwitchEntity):
         self._session = session
         self._device_name = device_name
         self._device_unique_id = device_unique_id
+        self._host = host
+        self._log = _DeviceLoggerAdapter(_LOGGER, {"host": host or device_name})
         self._attr_unique_id = f"{entry.entry_id}_power"
         self._media_player_entity_id: str | None = None
-        # Optimistic override — set temporarily by turn_on/turn_off for
-        # instant UI feedback, cleared on next media_player state change.
+        # Optimistic override — set by turn_on/turn_off so the UI flips
+        # immediately. Holds until the media_player reaches the matching state
+        # (or the safety timeout fires). Replaces the previous "clear on first
+        # state change" behaviour, which caused the switch to flicker during
+        # the multi-second wake-up window after a WOL fallback.
         self._optimistic_state: bool | None = None
+        self._optimistic_cancel: callable | None = None
+        # IP Control client (lazy) and the token it was built with, so we can
+        # rebuild it transparently if the token changes (e.g. after re-pairing).
+        self._ip_control: SamsungIPControl | None = None
+        self._ip_control_token: str | None = None
+
+    # -- optimistic state machine -------------------------------------------
+
+    OPTIMISTIC_TIMEOUT = 30.0  # seconds — safety fallback if media_player never
+    # catches up (network issue, TV unresponsive, …)
+
+    def _set_optimistic(self, target: bool) -> None:
+        """Set the optimistic state and schedule a safety timeout.
+
+        Cancels any previous pending timeout so back-to-back actions don't leak
+        callbacks. The state is cleared either when media_player reaches the
+        matching value (handled in _handle_media_player_state_change) or when
+        the safety timeout fires.
+        """
+        self._cancel_optimistic_timeout()
+        self._optimistic_state = target
+        self._optimistic_cancel = async_call_later(
+            self.hass, self.OPTIMISTIC_TIMEOUT, self._optimistic_safety_clear
+        )
+        self.async_write_ha_state()
+
+    def _cancel_optimistic_timeout(self) -> None:
+        if self._optimistic_cancel is not None:
+            self._optimistic_cancel()
+            self._optimistic_cancel = None
+
+    @callback
+    def _optimistic_safety_clear(self, _now=None) -> None:
+        """Drop the optimistic state if media_player never caught up."""
+        self._optimistic_cancel = None
+        if self._optimistic_state is not None:
+            self._log.debug(
+                "Power switch: optimistic state timed out — falling back to "
+                "media_player state"
+            )
+            self._optimistic_state = None
+            self.async_write_ha_state()
+
+    @staticmethod
+    def _state_to_is_on(state) -> bool | None:
+        """Mirror the is_on logic on an arbitrary state object."""
+        if state is None:
+            return None
+        if state.state not in (STATE_OFF, "unavailable", "unknown"):
+            return True
+        if state.state == STATE_OFF:
+            return state.attributes.get("art_mode_status") == "on"
+        return None
+
+    def _get_ip_control(self) -> SamsungIPControl | None:
+        """Return an IP Control client if paired AND enabled, else None.
+
+        The token is read live from entry.data so that pairing (done via the
+        options flow) takes effect immediately, with no reload required. The
+        channel must also be enabled in the options, consistent with every
+        other IP Control consumer (media_player, art mode switch, button).
+        """
+        if not self._host:
+            return None
+        token = self._entry.data.get(CONF_IP_CONTROL_TOKEN)
+        if not token or not self._entry.options.get(CONF_ENABLE_IP_CONTROL, True):
+            return None
+        if self._ip_control is None or self._ip_control_token != token:
+            self._ip_control = SamsungIPControl(self.hass, self._host, token=token)
+            self._ip_control_token = token
+        return self._ip_control
 
     async def _get_st_client(self):
         """Get SmartThings client with current (possibly refreshed) token."""
@@ -631,7 +825,7 @@ class SamsungTVPowerSwitch(SwitchEntity):
                 if oauth_token and isinstance(oauth_token, dict):
                     api_key = oauth_token.get("access_token")
         if not api_key:
-            _LOGGER.warning("Power switch: no SmartThings API key available")
+            self._log.warning("Power switch: no SmartThings API key available")
             return None
         st_client = SmartThings(session=self._session)
         st_client.authenticate(api_key)
@@ -711,17 +905,44 @@ class SamsungTVPowerSwitch(SwitchEntity):
         return "mdi:power" if self.is_on else "mdi:power-off"
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the TV on — delegates to media_player.turn_on."""
+        """Turn the TV on.
+
+        Strategy:
+        - IP Control paired → powerOn via JSON-RPC (explicit, future-proof if
+          Samsung disables the WebSocket ports). Falls back on failure.
+        - Otherwise (or on failure) → media_player.turn_on, which uses WOL /
+          WebSocket as today.
+        """
+        self._set_optimistic(True)
+
+        ip_control = self._get_ip_control()
+        if ip_control is not None:
+            try:
+                await ip_control.async_power_on()
+                self._log.debug("Power switch: TV turned on via IP Control")
+                self.async_write_ha_state()
+                return
+            except SamsungIPControlAuthError as ex:
+                self._log.warning(
+                    "Power switch: IP Control token rejected (%s) — re-pair via "
+                    "the integration options; falling back to media_player",
+                    ex,
+                )
+            except SamsungIPControlError as ex:
+                self._log.debug(
+                    "Power switch: IP Control turn_on failed (%s), "
+                    "falling back to media_player",
+                    ex,
+                )
+
         entity_id = self._get_media_player_entity_id()
         if not entity_id:
-            _LOGGER.warning(
+            self._log.warning(
                 "Power switch: media_player entity not found for %s", self._device_name
             )
             return
 
-        _LOGGER.debug("Power switch: delegating turn_on to %s", entity_id)
-        self._optimistic_state = True
-        self.async_write_ha_state()
+        self._log.debug("Power switch: delegating turn_on to %s", entity_id)
         await self.hass.services.async_call(
             "media_player",
             "turn_on",
@@ -734,11 +955,15 @@ class SamsungTVPowerSwitch(SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the TV off.
 
-        Strategy:
+        Priority:
         - SmartThings configured → Command.OFF (hardware-level, works regardless
           of TV state including Art Mode).
-        - No SmartThings → media_player.turn_off, which handles Art Mode natively
-          by sending KEY_POWER over WebSocket when artmode_status is On.
+        - IP Control paired → powerOff via JSON-RPC (explicit, works from Art
+          Mode, no cloud, future-proof if Samsung disables the WebSocket ports).
+        - Otherwise → media_player.turn_off (KEY_POWER over WebSocket). Note that
+          on Frame TVs this only toggles between viewing and Art Mode rather than
+          issuing a true power-off — which is exactly why the paths above are
+          preferred when available.
         """
         if self._device_id:
             # SmartThings path — bypasses HA state entirely
@@ -751,25 +976,45 @@ class SamsungTVPowerSwitch(SwitchEntity):
                         Command.OFF,
                         COMPONENT_MAIN,
                     )
-                    self._attr_is_on = False
-                    self.async_write_ha_state()
-                    _LOGGER.debug("Power switch: TV turned off via SmartThings")
+                    self._set_optimistic(False)
+                    self._log.debug("Power switch: TV turned off via SmartThings")
                     return
                 else:
-                    _LOGGER.warning(
-                        "Power switch: SmartThings client unavailable, falling back to WebSocket"
+                    self._log.warning(
+                        "Power switch: SmartThings client unavailable, falling back"
                     )
             except Exception as ex:
-                _LOGGER.warning(
-                    "Power switch: SmartThings turn_off failed (%s), falling back to WebSocket",
+                self._log.warning(
+                    "Power switch: SmartThings turn_off failed (%s), falling back",
                     ex,
                 )
 
-        # WebSocket fallback (or SmartThings failed) —
+        # IP Control path — explicit power-off, works from Art Mode.
+        ip_control = self._get_ip_control()
+        if ip_control is not None:
+            try:
+                await ip_control.async_power_off()
+                self._set_optimistic(False)
+                self._log.debug("Power switch: TV turned off via IP Control")
+                return
+            except SamsungIPControlAuthError as ex:
+                self._log.warning(
+                    "Power switch: IP Control token rejected (%s) — re-pair via "
+                    "the integration options; falling back to WebSocket",
+                    ex,
+                )
+            except SamsungIPControlError as ex:
+                self._log.debug(
+                    "Power switch: IP Control turn_off failed (%s), "
+                    "falling back to WebSocket",
+                    ex,
+                )
+
+        # WebSocket fallback —
         # media_player._turn_off() handles Art Mode via KEY_POWER natively
         entity_id = self._get_media_player_entity_id()
         if not entity_id:
-            _LOGGER.error(
+            self._log.error(
                 "Power switch: no media_player entity found for %s", self._device_name
             )
             return
@@ -780,21 +1025,43 @@ class SamsungTVPowerSwitch(SwitchEntity):
                 {"entity_id": entity_id},
                 blocking=True,
             )
-            self._attr_is_on = False
-            self.async_write_ha_state()
-            _LOGGER.debug("Power switch: TV turned off via media_player (WebSocket)")
+            self._set_optimistic(False)
+            self._log.debug("Power switch: TV turned off via media_player (WebSocket)")
         except Exception as ex:
-            _LOGGER.error("Power switch: WebSocket turn_off failed: %s", ex)
+            self._log.error("Power switch: WebSocket turn_off failed: %s", ex)
 
     @callback
     def _handle_media_player_state_change(self, event) -> None:
-        """React to media_player state changes and push update immediately."""
-        # Clear optimistic override — real state is now available.
-        self._optimistic_state = None
+        """React to media_player state changes and push update immediately.
+
+        The optimistic state is only cleared once media_player actually reaches
+        the value we asked for. This prevents the switch from flickering
+        through intermediate states (e.g. "off" -> "unavailable" -> "off" ->
+        "on") while a WOL wake-up is in progress.
+        """
+        if self._optimistic_state is not None:
+            new_state = event.data.get("new_state") if event.data else None
+            actual = self._state_to_is_on(new_state)
+            if actual is not None and actual == self._optimistic_state:
+                self._cancel_optimistic_timeout()
+                self._optimistic_state = None
         self.async_write_ha_state()
 
+    async def async_will_remove_from_hass(self) -> None:
+        """Clean up the optimistic timeout when the entity goes away."""
+        self._cancel_optimistic_timeout()
+
     async def async_added_to_hass(self) -> None:
-        """Subscribe to media_player state changes when added to HA."""
+        """Subscribe to media_player state changes when added to HA.
+
+        Also publishes the current state right away: async_track_state_change_event
+        only delivers *future* changes, so without an initial read the switch
+        would keep whatever state it computed before media_player finished
+        starting up — and only correct itself on the next media_player change
+        (which is why a manual power on/off was needed to resync after a
+        restart).
+        """
+        await super().async_added_to_hass()
         entity_id = self._get_media_player_entity_id()
         if entity_id:
             self.async_on_remove(
@@ -804,3 +1071,5 @@ class SamsungTVPowerSwitch(SwitchEntity):
                     self._handle_media_player_state_change,
                 )
             )
+        # Publish the real state now instead of waiting for the first change.
+        self.async_write_ha_state()

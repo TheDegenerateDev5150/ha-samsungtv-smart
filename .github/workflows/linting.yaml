@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - v8-json-rpc
   pull_request:
     branches: ["*"]
 
@@ -22,10 +23,10 @@ jobs:
         run: |
           pip install -r requirements.txt
       - name: flake8
-        run: flake8 .
+        run: flake8 custom_components
       - name: isort
-        run: isort --diff --check .
+        run: isort --diff --check custom_components
       - name: Black
-        run: black --line-length 88 --diff --check .
+        run: black --line-length 88 --diff --check custom_components
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true

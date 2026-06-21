@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from typing import Any
 
 from homeassistant.const import (
@@ -30,9 +31,9 @@ class SamsungTVEntity(Entity):
         self._mac = config.get(CONF_MAC)
         self._attr_unique_id = config.get(CONF_ID, entry_id)
 
-        model = config.get(CONF_DEVICE_MODEL, "Samsung TV")
+        model = html.unescape(config.get(CONF_DEVICE_MODEL, "Samsung TV"))
         if dev_name := config.get(CONF_DEVICE_NAME):
-            model = f"{model} ({dev_name})"
+            model = f"{model} ({html.unescape(dev_name)})"
 
         self._attr_device_info = DeviceInfo(
             manufacturer="Samsung Electronics",
