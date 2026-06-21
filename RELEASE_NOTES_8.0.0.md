@@ -155,5 +155,14 @@ A round of stabilization fixes on top of the three-channel rework:
 
 ---
 
+## Thanks
+
+Thanks to [@PrestonMcAfee](https://github.com/PrestonMcAfee) and
+[@potatosalad](https://github.com/potatosalad) for testing this release
+extensively across multiple TV generations and reporting the bugs that drove
+most of the reliability fixes above.
+
+---
+
 *These notes were assembled from the 8.0.0 codebase. If any 7.1.x point-release
 change is missing, add it under the relevant section.*
