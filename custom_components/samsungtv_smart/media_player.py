@@ -576,6 +576,12 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         self._ws.register_auth_error_callback(auth_error_callback)
         self._ws.register_auth_recovered_callback(auth_recovered_callback)
 
+        def ws_port_changed_callback(port):
+            """Persist the remote channel's self-healed port (8001<->8002)."""
+            run_callback_threadsafe(self.hass.loop, self._persist_art_port, port)
+
+        self._ws.register_port_changed_callback(ws_port_changed_callback)
+
         # rest api initialization
         self._rest_api = SamsungTVAsyncRest(
             host=self._host,

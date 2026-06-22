@@ -377,6 +377,13 @@ class SamsungTVWS:
         self._auth_recovered_callback = None
         self._consecutive_new_tokens = 0
         self._auth_blocked = False
+        # Port self-heal for the remote channel. A TokenAuthSupport TV that ends
+        # up configured on the unencrypted 8001 channel rejects every connect
+        # with ms.channel.unauthorized and never shows an on-screen prompt — the
+        # prompt + token flow only exists on the secure 8002 channel. Before
+        # pausing reconnection for good we flip 8001 -> 8002 once and retry.
+        self._port_changed_callback = None
+        self._tried_alt_port = False
 
     @property
     def auth_blocked(self) -> bool:
@@ -447,6 +454,39 @@ class SamsungTVWS:
         """Register a callback fired when a connection authorizes cleanly again."""
         self._auth_recovered_callback = func
 
+    def register_port_changed_callback(self, func):
+        """Register a callback fired when the WS port self-heals (8001<->8002).
+
+        Receives the new port so the caller can persist it to the config entry,
+        so the next restart connects on the working port directly.
+        """
+        self._port_changed_callback = func
+
+    def _try_alternate_port(self) -> bool:
+        """Flip the remote channel from the 8001 to the 8002 port once.
+
+        Returns True if the port was switched (caller should retry instead of
+        tripping the auth guard). A TokenAuth TV stuck on the unencrypted 8001
+        channel rejects every connect with no on-screen prompt; the secure 8002
+        channel is where the prompt + token actually happen. We only flip from
+        8001 -> 8002 and only once per session: on a genuine 2024 model (whose
+        8002 is filtered) the 8002 attempt simply fails and the guard trips as
+        before, just one port-flip later — no ping-pong.
+        """
+        if self.port != 8001 or self._tried_alt_port:
+            return False
+        self._log.warning(
+            "TV %s rejected the unencrypted 8001 remote channel repeatedly "
+            "(no on-screen prompt) — switching to the secure 8002 channel",
+            self.host,
+        )
+        self.port = 8002
+        self._tried_alt_port = True
+        self._consecutive_new_tokens = 0
+        if self._port_changed_callback is not None:
+            self._port_changed_callback(8002)
+        return True
+
     def register_status_callback(self, func):
         """Register callback function used on status change."""
         self._status_callback = func
@@ -465,6 +505,11 @@ class SamsungTVWS:
             not self._auth_blocked
             and self._consecutive_new_tokens >= MAX_CONSECUTIVE_NEW_TOKENS
         ):
+            # Before giving up, a TV stuck on the unencrypted 8001 channel may
+            # just need the secure 8002 channel (where the prompt + token live).
+            # Flip once and let the reconnect retry there instead of pausing.
+            if self._try_alternate_port():
+                return
             self._auth_blocked = True
             self._log.warning(
                 "TV %s repeatedly rejected the connection (%s) — pausing "
