@@ -45,6 +45,22 @@
   (SmartThings lags ~30-45s, so it is best-effort; IP Control remains the
   instant, authoritative path.)
 
+## Art channel WebSocket — zombie-socket recovery
+
+- **Heartbeat / dead-connection detection**: the Art-channel WebSocket now opens
+  with an aiohttp `heartbeat` (20s). aiohttp sends periodic PINGs and tears the
+  socket down when no PONG comes back, so a "zombie" connection — one the TV
+  dropped without a clean TCP close (e.g. an abrupt power-off) — is now detected
+  and recycled automatically instead of staying half-open forever. Previously
+  such a socket only reconnected on the next user-triggered art request.
+- **Stale `art_mode` invalidation on disconnect**: when the receive loop exits
+  unexpectedly, the cached `art_mode` is reset to `None` (instead of keeping its
+  last, usually `"on"`, value). `art_mode_status` then falls through to the
+  independent power sources (IP Control / SmartThings / REST PowerState) while
+  the channel is down, and the real value is restored from the first event after
+  reconnect. This is the root-cause fix behind the power-off false positive the
+  power-only guards already mitigate.
+
 ## Reliability & observability
 
 - **Per-TV "slow update" warning**: when a poll cycle takes longer than the
