@@ -22,6 +22,13 @@
   values are not settable over IP Control on consumer Frames — and share a
   single coordinator (two JSON-RPC calls per poll for all 12). Gated behind IP
   Control being paired and enabled; paused while the TV is off.
+- **Mute and relative volume via IP Control**: `async_mute_volume`,
+  `async_volume_up` and `async_volume_down` now try IP Control's
+  `muteControl` / `volumeUpDnControl` first (when paired and enabled) and
+  fall back to the WebSocket `KEY_MUTE`/`KEY_VOLUP`/`KEY_VOLDOWN` remote keys
+  on any IP Control error. `volumeUpDnControl` is relative-only on Frame
+  2024/2025 (no absolute level over IP Control — `directVolumeControl` is not
+  implemented on consumer Frames), matching the WS keys it replaces.
 - **Power-off false-positive fix** (Art Mode / Power switches stuck "on"): when
   IP Control is paired and enabled, a **safe power-only guard** now reads
   `powerControl` on every refresh — even when the *Enable IP Control Art Mode*

@@ -2555,7 +2555,8 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         """Volume up the media player."""
         if self._state != MediaPlayerState.ON:
             return
-        await self.async_send_command("KEY_VOLUP")
+        if not await self._async_ip_control_volume_step(up=True):
+            await self.async_send_command("KEY_VOLUP")
         if self.volume_level is not None:
             self._attr_volume_level = min(1.0, self.volume_level + 0.01)
 
@@ -2563,9 +2564,34 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         """Volume down media player."""
         if self._state != MediaPlayerState.ON:
             return
-        await self.async_send_command("KEY_VOLDOWN")
+        if not await self._async_ip_control_volume_step(up=False):
+            await self.async_send_command("KEY_VOLDOWN")
         if self.volume_level is not None:
             self._attr_volume_level = max(0.0, self.volume_level - 0.01)
+
+    async def _async_ip_control_volume_step(self, *, up: bool) -> bool:
+        """Step volume via IP Control's ``volumeUpDnControl``, if paired.
+
+        Returns ``True`` on success so the caller skips the WebSocket
+        ``KEY_VOLUP``/``KEY_VOLDOWN`` fallback. ``volumeUpDnControl`` is
+        relative-only (no absolute level over IP Control on Frame 2024/2025),
+        matching the WS keys it replaces.
+        """
+        client = self._get_ip_control_client()
+        if client is None:
+            return False
+        try:
+            if up:
+                await client.async_volume_up()
+            else:
+                await client.async_volume_down()
+            return True
+        except SamsungIPControlError as ex:
+            self._log.debug(
+                "IP Control volume step failed (%s); falling back to WebSocket",
+                ex,
+            )
+            return False
 
     async def async_mute_volume(self, mute):
         """Send mute command."""
@@ -2573,7 +2599,18 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             return
         if self.is_volume_muted is not None and mute == self.is_volume_muted:
             return
-        await self.async_send_command("KEY_MUTE")
+        client = self._get_ip_control_client()
+        sent_via_ip_control = False
+        if client is not None:
+            try:
+                await client.async_set_mute(mute)
+                sent_via_ip_control = True
+            except SamsungIPControlError as ex:
+                self._log.debug(
+                    "IP Control mute failed (%s); falling back to WebSocket", ex
+                )
+        if not sent_via_ip_control:
+            await self.async_send_command("KEY_MUTE")
         if self.is_volume_muted is not None:
             self._attr_is_volume_muted = mute
 
