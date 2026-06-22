@@ -66,6 +66,21 @@
   (SmartThings lags ~30-45s, so it is best-effort; IP Control remains the
   instant, authoritative path.)
 
+## Legacy remote WebSocket — automatic 8001 → 8002 port self-heal
+
+- **TokenAuth TVs stuck on the unencrypted 8001 channel now recover on their
+  own**: a Frame configured (often historically) on port 8001 rejects every
+  remote-control connect with `ms.channel.unauthorized` **and never shows the
+  on-screen authorization prompt** — because the prompt + token flow only
+  exists on the secure `wss://…:8002` channel. The integration would just keep
+  retrying 8001 forever and pause with a "local connection not authorized"
+  notification that re-pairing/restarting couldn't fix (the SmartThings/OAuth
+  re-auth is unrelated to this local channel). Now, right before pausing
+  reconnection, the remote channel **flips 8001 → 8002 once** and retries there
+  (SSL + token), and persists the working port to the config entry. On a
+  genuine 2024 model whose 8002 is firmware-filtered, the 8002 attempt simply
+  fails and the existing guard trips one flip later — no port ping-pong.
+
 ## Stale "connection not authorized" notification fix
 
 - **Notifications are now dismissed on setup/reload**: the "Samsung TV — local
