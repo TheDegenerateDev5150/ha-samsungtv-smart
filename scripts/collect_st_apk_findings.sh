@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-# Collect decompiled SmartThings APK files relevant to MobileBFF / IP Control / remote
-# protocol research, copying matches into a single output directory for review.
+# Collect decompiled SmartThings APK files relevant to MobileBFF / IP Control /
+# remote protocol research, copying matches into a single output directory.
+#
+# Unlike the first version this:
+#   - does NOT filter by file extension (searches every file),
+#   - reports a per-pattern hit count so you can spot noisy patterns
+#     (e.g. bare "1516" matches random number sequences everywhere),
+#   - copies the union of all matches, preserving relative paths.
 #
 # Usage: ./collect_st_apk_findings.sh <decompiled_source_dir> <output_dir>
 
-set -euo pipefail
+set -uo pipefail
 
 SRC_DIR="${1:-}"
 OUT_DIR="${2:-}"
@@ -21,6 +27,8 @@ fi
 
 mkdir -p "$OUT_DIR"
 
+# High-signal patterns. Kept specific on purpose: ":1516" not bare "1516",
+# "appdata/mobilebff" not bare numbers, to avoid coincidental matches.
 PATTERNS=(
   "mobilebff"
   "ms\.channel\.emit"
@@ -29,33 +37,46 @@ PATTERNS=(
   "samsung\.remote\.control"
   "ms\.remote\.control"
   "remoteKeyControl"
-  "jsonrpc"
   "createAccessToken"
   "artModeControl"
   "powerControl"
+  "getTVStates"
+  "getVideoStates"
   "api/v2/channels"
   ":1516"
   ":8001"
   ":8002"
+  "jsonrpc"
 )
 
-# Build a single extended regex from all patterns (OR'd together).
-REGEX=$(IFS='|'; echo "${PATTERNS[*]}")
-
-echo "Searching '$SRC_DIR' for pattern: $REGEX"
-echo "Copying matches into: $OUT_DIR"
+echo "Source : $SRC_DIR"
+echo "Output : $OUT_DIR"
 echo
+echo "Per-pattern hit counts (number of files matching each):"
+printf '%-30s %s\n' "PATTERN" "FILES"
+printf '%-30s %s\n' "-------" "-----"
+for p in "${PATTERNS[@]}"; do
+  n=$(grep -rlI -i -E -- "$p" "$SRC_DIR" 2>/dev/null | wc -l)
+  printf '%-30s %s\n' "$p" "$n"
+done
+echo
+
+# Build a combined regex and copy the union of all matching files.
+REGEX=$(IFS='|'; echo "${PATTERNS[*]}")
 
 COUNT=0
 while IFS= read -r -d '' file; do
-  # Preserve the relative path under OUT_DIR so duplicate filenames don't collide.
   rel_path="${file#"$SRC_DIR"/}"
   dest="$OUT_DIR/$rel_path"
   mkdir -p "$(dirname "$dest")"
   cp -p "$file" "$dest"
   echo "copied: $rel_path"
   COUNT=$((COUNT + 1))
-done < <(grep -rlZ -i -E "$REGEX" "$SRC_DIR" --include="*.java" --include="*.kt" --include="*.smali" --include="*.xml" --include="*.json" 2>/dev/null || true)
+done < <(grep -rlIZ -i -E -- "$REGEX" "$SRC_DIR" 2>/dev/null)
 
 echo
 echo "Done. $COUNT file(s) copied to $OUT_DIR"
+echo
+echo "Tip: if a pattern above shows a suspiciously high count (e.g. a bare"
+echo "number), it is probably noise. Inspect the real hits with, for example:"
+echo "  grep -rn -i 'mobilebff' \"$OUT_DIR\""
