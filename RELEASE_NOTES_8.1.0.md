@@ -15,6 +15,35 @@
   falls back between **8001 and 8002 at runtime** on a connection failure,
   persisting the working port — the same self-heal already in place for the
   Art channel (8.0.0) now also covers the REST/device-info path.
+- **Read-only state sensors** (`getTVStates` / `getVideoStates`): 12 new
+  diagnostic sensors expose the TV's current input source, picture mode, sound
+  mode, picture size, speaker select, mute and volume, plus the picture levels
+  (contrast, brightness, sharpness, color, tint). They are read-only — these
+  values are not settable over IP Control on consumer Frames — and share a
+  single coordinator (two JSON-RPC calls per poll for all 12). Gated behind IP
+  Control being paired and enabled; paused while the TV is off.
+- **Power-off false-positive fix** (Art Mode / Power switches stuck "on"): when
+  IP Control is paired and enabled, a **safe power-only guard** now reads
+  `powerControl` on every refresh — even when the *Enable IP Control Art Mode*
+  option is off (the default). If the TV reports `powerOff`, `art_mode_status`
+  is forced off, overriding a frozen Art-channel WebSocket that kept reporting
+  `art='on'` after the TV was switched off. This never calls the firmware-risky
+  `artModeControl` method, so it is safe regardless of the Art Mode option.
+
+## Art Mode status — accuracy fixes
+
+- **Switches now use the authoritative Art Mode logic**: the `art_mode_status`
+  attribute (read by the Power and Frame Art switches) previously re-implemented
+  a reduced version of the detection that **ignored the IP Control cache and
+  the SmartThings power signal** — so a stale Art-channel WebSocket could pin
+  both switches "on" after the TV was powered off. It now delegates to the same
+  single source of truth as the media title and the `is_on` property.
+- **SmartThings cloud power-off fallback** (for TVs without IP Control): when
+  SmartThings reports the TV switched off, `art_mode_status` is forced off. The
+  Frame's `switch` capability reports `on` while displaying art and `off` only
+  when truly powered off, so this safely overrides a frozen art WebSocket.
+  (SmartThings lags ~30-45s, so it is best-effort; IP Control remains the
+  instant, authoritative path.)
 
 ## Reliability & observability
 
