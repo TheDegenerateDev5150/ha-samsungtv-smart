@@ -642,6 +642,8 @@ Frame Art API based on [xchwarze/samsung-tv-ws-api](https://github.com/xchwarze/
 
 WebSocket library: [websocket-client](https://github.com/websocket-client/websocket-client) / [Xchwarze](https://github.com/Xchwarze).
 
+Special thanks to [@PrestonMcAfee](https://github.com/PrestonMcAfee) and [@potatosalad](https://github.com/potatosalad) for extensive real-world testing across multiple TV generations and detailed bug reports — many of the 8.0.0 reliability fixes exist because of their feedback.
+
 ---
 
 *Licensed under the GNU Lesser General Public License v2.1.*

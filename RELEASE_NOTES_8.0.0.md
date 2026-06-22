@@ -1,8 +1,9 @@
 # Release notes — 8.0.0 (since 7.1.x)
 
-> **Status: beta.** 8.0.0 is a major rework of the SmartThings/Frame handling.
-> It is distributed as `8.0.0bNN` pre-releases until validated on more TV
-> generations. Back up your config before upgrading from the 7.1.x line.
+> **Status: stable.** 8.0.0 is a major rework of the SmartThings/Frame handling,
+> validated through an extensive `8.0.0bNN` pre-release cycle across multiple
+> TV generations (2020–2025 Frame models). Back up your config before
+> upgrading from the 7.1.x line.
 
 8.0.0 turns the Frame integration into a **three-channel** design — SmartThings
 (cloud), the local WebSocket, and the new **IP Control** channel (JSON-RPC) —
@@ -139,18 +140,27 @@ A round of stabilization fixes on top of the three-channel rework:
 
 ## Known limitations / not yet validated
 
-- IP Control **power/reboot** is confirmed on **Frame 2024/2025**. Older
-  generations (Tizen 5.5 / 6.0) are **not yet validated** — protocol differences
-  possible.
+- IP Control **power/reboot** is confirmed on **Frame 2020 through 2025**
+  generations during the beta cycle.
 - IP Control **Art Mode** (the *Enable IP Control Art Mode* option) is **not
   safe on all firmwares**: it can wedge or break Art Mode entirely and may need
   a factory reset to recover (seen on QE55LS03D fw 2123). It stays **off by
   default** — see the warning above.
 - The reboot/IP-Control recovery of an unresponsive ("zombie") Art WebSocket is
   implemented but **not yet confirmed empirically** in that exact state.
-- The runtime **Art channel port fallback** (8001↔8002) is implemented but not
-  yet confirmed on a TV that actually drops its configured port.
+- The runtime **Art channel port fallback** (8001↔8002) is now confirmed
+  working in the field (a TV pinned to 8001 with the firmware only answering on
+  8002 recovered automatically).
 - The three power-on-method labels are currently English-only in all locales.
+
+---
+
+## Thanks
+
+Thanks to [@PrestonMcAfee](https://github.com/PrestonMcAfee) and
+[@potatosalad](https://github.com/potatosalad) for testing this release
+extensively across multiple TV generations and reporting the bugs that drove
+most of the reliability fixes above.
 
 ---
 

@@ -2246,10 +2246,28 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         # art WebSocket disconnects and stops delivering events, so the cached
         # value keeps reporting whatever was true just before power-off (often
         # "on", because Art Mode is the last state of a Frame TV before
-        # standby). Levels 1 and 2 both guard against that.
-        art_mode_on = self._art_mode_is_on()
-        if art_mode_on is not None:
-            data[ATTR_ART_MODE_STATUS] = STATE_ON if art_mode_on else STATE_OFF
+        # standby). That stale "on" then leaks via art_mode_status into the
+        # Power switch and the Frame Art Mode switch (both treat
+        # media_player.state="off" + art_mode_status="on" as "TV physically on
+        # in Art Mode"), and both end up wrongly showing ON after a power-off.
+        # device_info's PowerState is polled every ~15s and reliably reports
+        # "standby" when the TV is truly off — use it as an authoritative
+        # override.
+        art_api = (
+            self.hass.data.get(DOMAIN, {}).get(self._entry_id, {}).get(DATA_ART_API)
+        )
+        device_power_state = self._get_device_spec("PowerState")
+        if device_power_state == "standby":
+            # TV is powered off — art mode cannot be active regardless of
+            # what art_api may have cached.
+            data[ATTR_ART_MODE_STATUS] = STATE_OFF
+        elif art_api is not None and art_api.art_mode is not None:
+            data.update(
+                {ATTR_ART_MODE_STATUS: STATE_ON if art_api.art_mode else STATE_OFF}
+            )
+        elif self._ws.artmode_status != ArtModeStatus.Unsupported:
+            status_on = self._ws.artmode_status == ArtModeStatus.On
+            data.update({ATTR_ART_MODE_STATUS: STATE_ON if status_on else STATE_OFF})
         if self._st:
             picture_mode = self._st.picture_mode
             picture_mode_list = self._st.picture_mode_list
