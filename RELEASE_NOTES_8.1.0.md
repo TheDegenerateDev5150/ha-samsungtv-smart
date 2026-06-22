@@ -37,6 +37,20 @@
   `art='on'` after the TV was switched off. This never calls the firmware-risky
   `artModeControl` method, so it is safe regardless of the Art Mode option.
 
+## Art Mode switch — slow refresh after toggle fix
+
+- **Switch no longer snaps back ~25s after toggling Art Mode**: the IP Control
+  `artModeControl` command itself is fast (~100ms), but right after an explicit
+  toggle the switch called its own `async_update()`, which read the
+  media_player's `art_mode_status` *before* it had caught up (5s poll + Art
+  WebSocket propagation, observed up to ~40s on a 2024 Frame). That stale
+  pre-toggle value overwrote the fresh optimistic state, so the switch flipped
+  back and only recovered on the next media_player cycle. The post-toggle
+  self-refresh is removed and an **optimistic-hold guard** now keeps the value
+  you just set for up to 45s, ignoring only *contradicting* stale readings — a
+  matching reading clears the hold immediately. Applies to both the switch's own
+  poll and the media_player state-change listener.
+
 ## Art Mode status — accuracy fixes
 
 - **Switches now use the authoritative Art Mode logic**: the `art_mode_status`
