@@ -92,6 +92,7 @@ from .const import (
     __min_ha_version__,
 )
 from .logo import CUSTOM_IMAGE_BASE_URL, STATIC_IMAGE_BASE_URL
+from .token_notify import METHOD_IP_CONTROL, METHOD_LOCAL, clear_token_problem
 
 # workaroud for failing import native domain when custom integration is present
 try:
@@ -1011,6 +1012,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # migrate options to new format if required
     _migrate_options_format(hass, entry)
+
+    # Dismiss any stale "local connection not authorized" / "IP Control
+    # token problem" notifications left over from a previous session. Both
+    # are only re-raised on a fresh auth rejection, so clearing them here
+    # is safe even on a clean reload — they will be re-created if the
+    # problem genuinely still exists, instead of staying stuck forever when
+    # the TV was simply offline and never produced the one clean reconnect
+    # that would otherwise dismiss them.
+    clear_token_problem(hass, entry.entry_id, METHOD_LOCAL)
+    clear_token_problem(hass, entry.entry_id, METHOD_IP_CONTROL)
 
     # setup entry
     if DOMAIN not in hass.data:

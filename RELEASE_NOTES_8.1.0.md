@@ -52,6 +52,20 @@
   (SmartThings lags ~30-45s, so it is best-effort; IP Control remains the
   instant, authoritative path.)
 
+## Stale "connection not authorized" notification fix
+
+- **Notifications are now dismissed on setup/reload**: the "Samsung TV — local
+  connection not authorized" and IP Control token-problem persistent
+  notifications were previously cleared *only* by a clean WebSocket
+  reconnect (or a successful IP Control call). If the TV stayed offline or
+  unreachable after the guard tripped, neither re-pairing nor a Home
+  Assistant restart could ever produce that one clean event, so the
+  notification stayed stuck forever even after the underlying problem was
+  fixed. Both notifications are now also proactively dismissed every time
+  the config entry is set up (covers HA restart, integration reload, and
+  Reconfigure → Authentication/IP Control, which all reload the entry) —
+  they are safely re-created if the rejection genuinely still occurs.
+
 ## Legacy remote WebSocket — unauthorized reconnect loop fix
 
 - **`ms.channel.unauthorized` now trips the auth-blocked guard**: the legacy
