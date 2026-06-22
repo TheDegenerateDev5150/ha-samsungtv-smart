@@ -451,6 +451,30 @@ class SamsungTVWS:
         """Register callback function used on status change."""
         self._status_callback = func
 
+    def _bump_auth_failure(self, reason: str) -> None:
+        """Count one more rejected-connection event and trip the auth guard.
+
+        Shared by every code path that signals a rejected token (new-token
+        issuance on ``ms.channel.connect``, ``ms.error`` "No Authorized", and
+        the bare ``ms.channel.unauthorized`` event) so they all feed the same
+        ``MAX_CONSECUTIVE_NEW_TOKENS`` threshold instead of each needing its
+        own counter.
+        """
+        self._consecutive_new_tokens += 1
+        if (
+            not self._auth_blocked
+            and self._consecutive_new_tokens >= MAX_CONSECUTIVE_NEW_TOKENS
+        ):
+            self._auth_blocked = True
+            self._log.warning(
+                "TV %s repeatedly rejected the connection (%s) — pausing "
+                "remote reconnection; re-pair required",
+                self.host,
+                reason,
+            )
+            if self._auth_error_callback is not None:
+                self._auth_error_callback()
+
     def unregister_status_callback(self):
         """Unregister callback function used on status change."""
         self._status_callback = None
@@ -676,20 +700,7 @@ class SamsungTVWS:
             if token:
                 self._set_token(token)
             if token_changed:
-                self._consecutive_new_tokens += 1
-                if (
-                    not self._auth_blocked
-                    and self._consecutive_new_tokens >= MAX_CONSECUTIVE_NEW_TOKENS
-                ):
-                    self._auth_blocked = True
-                    self._log.warning(
-                        "TV %s issued %d new tokens in a row — pausing remote "
-                        "reconnection to stop re-prompting; re-pair required",
-                        self.host,
-                        self._consecutive_new_tokens,
-                    )
-                    if self._auth_error_callback is not None:
-                        self._auth_error_callback()
+                self._bump_auth_failure("new token issued")
             else:
                 # Connected with no token, or the same token we already had =>
                 # the stored token was accepted. Always signal recovery
@@ -709,19 +720,14 @@ class SamsungTVWS:
             self._log.debug("Message remote: error %s", data)
             if "authoriz" in str(data.get("message", "")).lower():
                 # "No Authorized": the TV refused this connection's token.
-                self._consecutive_new_tokens += 1
-                if (
-                    not self._auth_blocked
-                    and self._consecutive_new_tokens >= MAX_CONSECUTIVE_NEW_TOKENS
-                ):
-                    self._auth_blocked = True
-                    self._log.warning(
-                        "TV %s repeatedly returned 'No Authorized' — pausing "
-                        "remote reconnection; re-pair required",
-                        self.host,
-                    )
-                    if self._auth_error_callback is not None:
-                        self._auth_error_callback()
+                self._bump_auth_failure("'No Authorized' (ms.error)")
+        elif event == "ms.channel.unauthorized":
+            # Some firmwares reject the connection with this bare event
+            # instead of ms.channel.connect (new token) or ms.error
+            # ("No Authorized") — neither of which fires on this path, so
+            # without this branch the reconnect loop hammered the TV every
+            # ~1s forever instead of ever tripping the auth-blocked guard.
+            self._bump_auth_failure("ms.channel.unauthorized")
         elif event == "ed.installedApp.get":
             self._log.debug("Message remote: received installedApp")
             self._handle_installed_app(response)

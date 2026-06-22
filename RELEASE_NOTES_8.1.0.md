@@ -52,6 +52,18 @@
   (SmartThings lags ~30-45s, so it is best-effort; IP Control remains the
   instant, authoritative path.)
 
+## Legacy remote WebSocket — unauthorized reconnect loop fix
+
+- **`ms.channel.unauthorized` now trips the auth-blocked guard**: the legacy
+  remote-control WebSocket already paused reconnection after 5 consecutive
+  rejected tokens (`ms.channel.connect` with a changed token, or `ms.error`
+  "No Authorized") to avoid hammering the TV and re-arming the on-screen
+  pairing prompt forever. The bare `ms.channel.unauthorized` event some
+  firmwares send instead was never handled, so on those TVs the reconnect
+  loop ran unthrottled (observed once a second, indefinitely) and every
+  remote command sent over that channel failed silently. It now feeds the
+  same guard as the other two rejection paths.
+
 ## Art channel WebSocket — zombie-socket recovery
 
 - **Heartbeat / dead-connection detection**: the Art-channel WebSocket now opens
