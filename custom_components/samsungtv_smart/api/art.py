@@ -44,6 +44,14 @@ D2D_SERVICE_MESSAGE_EVENT = "d2d_service_message"
 MS_CHANNEL_CONNECT_EVENT = "ms.channel.connect"
 MS_CHANNEL_READY_EVENT = "ms.channel.ready"
 
+# aiohttp WebSocket heartbeat (seconds): aiohttp sends a PING this often and,
+# if no PONG comes back in time, raises ServerTimeoutError on the receive loop.
+# That is what kills a "zombie" socket — one the TV dropped without a TCP FIN
+# (e.g. an abrupt power-off) so it still looks open but delivers nothing and
+# would otherwise never reconnect. Kept above the 15s art coordinator poll so a
+# genuinely live-but-quiet channel is not torn down unnecessarily.
+ART_WS_HEARTBEAT = 20
+
 
 def _get_ssl_context() -> ssl.SSLContext:
     """Get SSL context for secure connections without blocking calls."""
@@ -382,6 +390,7 @@ class SamsungTVAsyncArt:
                 self._ws_url,
                 timeout=aiohttp.ClientTimeout(total=self._timeout),
                 ssl=ssl_context,
+                heartbeat=ART_WS_HEARTBEAT,
             )
 
             # Wait for connection events
@@ -524,12 +533,22 @@ class SamsungTVAsyncArt:
         finally:
             if not cancelled:
                 # Receive loop is exiting on its own (TV standby, network
-                # drop, transport closed) and nobody else will clean up.
-                # Drop stale references so the next _send_art_request
-                # triggers a fresh open().
+                # drop, transport closed, or a missed heartbeat PONG on a
+                # zombie socket) and nobody else will clean up. Drop stale
+                # references so the next _send_art_request triggers a fresh
+                # open().
                 self._connected = False
                 self._ws = None
                 self._recv_task = None
+                # Invalidate the cached art_mode: the channel that keeps it
+                # live is gone, so the last value (typically "on", since Art
+                # Mode is a Frame's last state before power-off) is now stale
+                # and must not keep being reported. Resetting to None makes
+                # _art_mode_is_on() fall through to the independent power
+                # sources (IP Control / SmartThings / REST PowerState) instead
+                # of pinning a false "on". A reconnect restores the real value
+                # from the first event received.
+                self.art_mode = None
                 # Fail in-flight pending requests immediately rather than
                 # letting their callers block on the per-request timeout;
                 # the response will never arrive on this dead channel.
