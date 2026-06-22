@@ -22,6 +22,13 @@
   values are not settable over IP Control on consumer Frames — and share a
   single coordinator (two JSON-RPC calls per poll for all 12). Gated behind IP
   Control being paired and enabled; paused while the TV is off.
+- **Mute and relative volume via IP Control**: `async_mute_volume`,
+  `async_volume_up` and `async_volume_down` now try IP Control's
+  `muteControl` / `volumeUpDnControl` first (when paired and enabled) and
+  fall back to the WebSocket `KEY_MUTE`/`KEY_VOLUP`/`KEY_VOLDOWN` remote keys
+  on any IP Control error. `volumeUpDnControl` is relative-only on Frame
+  2024/2025 (no absolute level over IP Control — `directVolumeControl` is not
+  implemented on consumer Frames), matching the WS keys it replaces.
 - **Power-off false-positive fix** (Art Mode / Power switches stuck "on"): when
   IP Control is paired and enabled, a **safe power-only guard** now reads
   `powerControl` on every refresh — even when the *Enable IP Control Art Mode*
@@ -44,6 +51,18 @@
   when truly powered off, so this safely overrides a frozen art WebSocket.
   (SmartThings lags ~30-45s, so it is best-effort; IP Control remains the
   instant, authoritative path.)
+
+## Legacy remote WebSocket — unauthorized reconnect loop fix
+
+- **`ms.channel.unauthorized` now trips the auth-blocked guard**: the legacy
+  remote-control WebSocket already paused reconnection after 5 consecutive
+  rejected tokens (`ms.channel.connect` with a changed token, or `ms.error`
+  "No Authorized") to avoid hammering the TV and re-arming the on-screen
+  pairing prompt forever. The bare `ms.channel.unauthorized` event some
+  firmwares send instead was never handled, so on those TVs the reconnect
+  loop ran unthrottled (observed once a second, indefinitely) and every
+  remote command sent over that channel failed silently. It now feeds the
+  same guard as the other two rejection paths.
 
 ## Art channel WebSocket — zombie-socket recovery
 

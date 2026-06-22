@@ -288,6 +288,43 @@ class SamsungIPControl:
             raise SamsungIPControlError(f"unexpected colorTone response: {result!r}")
         return response_value
 
+    async def async_get_mute(self) -> bool:
+        """Return whether the TV is currently muted."""
+        result = await self._async_request("muteControl")
+        value = result.get("mute")
+        if value not in ("muteOn", "muteOff"):
+            raise SamsungIPControlError(f"unexpected mute response: {result!r}")
+        return value == "muteOn"
+
+    async def async_set_mute(self, mute: bool) -> bool:
+        """Set and return whether the TV is muted.
+
+        ``muteControl`` is the only mute setter that works via IP Control on
+        a Frame 2024/2025 — the matching field in ``getTVStates`` is
+        read-only.
+        """
+        target = "muteOn" if mute else "muteOff"
+        result = await self._async_request("muteControl", {"mute": target})
+        value = result.get("mute", target)
+        if value not in ("muteOn", "muteOff"):
+            raise SamsungIPControlError(f"unexpected mute response: {result!r}")
+        return value == "muteOn"
+
+    async def async_volume_up(self) -> None:
+        """Step the volume up by one (relative — no absolute level over IP Control).
+
+        ``volumeUpDnControl`` is the only volume setter that works via IP
+        Control on a Frame 2024/2025 — ``directVolumeControl`` (absolute
+        volume) returns ``-32601 "Method not found"``. There is no getter:
+        the call is fire-and-forget, matching the WebSocket ``KEY_VOLUP``
+        semantics it replaces.
+        """
+        await self._async_request("volumeUpDnControl", {"control": "volumeUp"})
+
+    async def async_volume_down(self) -> None:
+        """Step the volume down by one. See :meth:`async_volume_up`."""
+        await self._async_request("volumeUpDnControl", {"control": "volumeDn"})
+
     async def async_get_device_information(self) -> dict[str, str]:
         """Return the TV's model, firmware version and serial number."""
         result = await self._async_request("getDeviceInformation")
