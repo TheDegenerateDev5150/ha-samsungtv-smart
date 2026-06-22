@@ -1051,6 +1051,17 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         cache independent of the REST device-info ``PowerState``, which 2024+
         Frame models report as 'standby' WHILE actively displaying art.
 
+        Two operating modes depending on the ``CONF_IP_CONTROL_ART_MODE``
+        option (off by default for firmware safety):
+        - Option ON → full read: powerControl + artModeControl, caching the
+          real art state (True/False).
+        - Option OFF → SAFE power-only guard: only powerControl is read. When
+          it reports 'powerOff' the cache is pinned to ``False`` (the TV is off,
+          so art_mode_status must be off, overriding a frozen art-channel
+          WebSocket that keeps reporting 'on'); when it reports 'powerOn' the
+          cache is cleared to ``None`` so the other sources decide. This never
+          touches the firmware-risky artModeControl method.
+
         Failure handling:
         - No paired client (no token) → cache cleared to ``None``; the
           attribute falls through to the other (existing) sources.
@@ -1063,34 +1074,50 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
           so a TV that stays unreachable cannot pin a stale value forever.
         """
         client = self._get_ip_control_client()
-        if client is None or not self._get_option(CONF_IP_CONTROL_ART_MODE, False):
-            if client is None:
-                # Disambiguate the two reasons the client is unavailable so the
-                # cause is obvious in the logs (unpaired vs. disabled in options).
-                entry = self.hass.config_entries.async_get_entry(self._entry_id)
-                has_token = bool(entry and entry.data.get(CONF_IP_CONTROL_TOKEN))
-                if not has_token:
-                    reason = "not paired (no CONF_IP_CONTROL_TOKEN in entry.data)"
-                else:
-                    reason = "IP Control disabled in options (CONF_ENABLE_IP_CONTROL)"
-                self._log.debug(
-                    "IP Control art-mode refresh for %s: %s — skipping",
-                    self._host,
-                    reason,
-                )
+        if client is None:
+            # Un-paired, or the IP Control channel was disabled in options.
+            # Disambiguate the two reasons in the logs, drop any cached value
+            # and fall through to the other art-mode sources.
+            entry = self.hass.config_entries.async_get_entry(self._entry_id)
+            has_token = bool(entry and entry.data.get(CONF_IP_CONTROL_TOKEN))
+            if not has_token:
+                reason = "not paired (no CONF_IP_CONTROL_TOKEN in entry.data)"
+            else:
+                reason = "IP Control disabled in options (CONF_ENABLE_IP_CONTROL)"
+            self._log.debug(
+                "IP Control art-mode refresh for %s: %s — skipping",
+                self._host,
+                reason,
+            )
             self._ip_art_mode_failures = 0
             if self._ip_art_mode is not None:
                 self._ip_art_mode = None
                 self.async_write_ha_state()
             return
+        # Whether the user opted into the (firmware-risky) Art Mode reads via
+        # artModeControl. Even when this is OFF we still run a SAFE power-only
+        # guard below: powerControl is a harmless getter (the same one already
+        # used for the Power switch), so reading it lets us force art_mode off
+        # whenever the TV is genuinely powered off — without ever touching
+        # artModeControl. This fixes the stale-WebSocket false positive where a
+        # frozen art channel keeps reporting art='on' after the TV is off
+        # (observed on the default config, where CONF_IP_CONTROL_ART_MODE is
+        # off and nothing independently verified the WebSocket signal).
+        art_mode_enabled = self._get_option(CONF_IP_CONTROL_ART_MODE, False)
         try:
             power = await client.async_get_power_state()
             if power == "powerOff":
                 # TV is really off — art cannot be displayed. Don't query
                 # artModeControl: it would answer with the last mode.
                 value = False
-            else:
+            elif art_mode_enabled:
                 value = await client.async_get_art_mode()
+            else:
+                # Power-only guard: TV is on but the user hasn't enabled the
+                # art-mode reads, so we can't safely tell art from a real
+                # input. Defer to the other (WebSocket / SmartThings) sources
+                # by clearing the cache rather than pinning a value.
+                value = None
         except SamsungIPControlAuthError as ex:
             self._log.warning(
                 "IP Control art-mode read for %s: token rejected (%s) — "

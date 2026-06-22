@@ -22,6 +22,13 @@
   values are not settable over IP Control on consumer Frames — and share a
   single coordinator (two JSON-RPC calls per poll for all 12). Gated behind IP
   Control being paired and enabled; paused while the TV is off.
+- **Power-off false-positive fix** (Art Mode / Power switches stuck "on"): when
+  IP Control is paired and enabled, a **safe power-only guard** now reads
+  `powerControl` on every refresh — even when the *Enable IP Control Art Mode*
+  option is off (the default). If the TV reports `powerOff`, `art_mode_status`
+  is forced off, overriding a frozen Art-channel WebSocket that kept reporting
+  `art='on'` after the TV was switched off. This never calls the firmware-risky
+  `artModeControl` method, so it is safe regardless of the Art Mode option.
 
 ## Reliability & observability
 
