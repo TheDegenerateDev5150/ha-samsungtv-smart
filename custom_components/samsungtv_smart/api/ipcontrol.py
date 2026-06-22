@@ -302,6 +302,28 @@ class SamsungIPControl:
             "serialNumber": str(result.get("serialNumber", "")),
         }
 
+    async def async_get_tv_states(self) -> dict[str, Any]:
+        """Return the TV's general state snapshot (read-only).
+
+        ``getTVStates`` reports, on a Frame 2024/2025:
+        ``speakerSelect, volume, mute, pictureSize, pictureMode, soundMode,
+        inputSource``. These are all read-only over IP Control on consumer
+        Frames (the matching setters return ``-32601 "Method not found"``), so
+        this is exposed only as diagnostic sensors. Setting these values must
+        go through SmartThings / the WebSocket.
+        """
+        return await self._async_request("getTVStates")
+
+    async def async_get_video_states(self) -> dict[str, Any]:
+        """Return the TV's picture-level snapshot (read-only).
+
+        ``getVideoStates`` reports ``contrast, sharpness, brightness, color,
+        tint`` on a Frame 2024/2025. As with :meth:`async_get_tv_states`, these
+        are read-only over IP Control on consumer Frames; only ``backlight`` is
+        settable (see :meth:`async_set_backlight`).
+        """
+        return await self._async_request("getVideoStates")
+
     # -- transport -----------------------------------------------------------
 
     async def _async_request(

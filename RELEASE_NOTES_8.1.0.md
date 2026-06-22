@@ -15,6 +15,13 @@
   falls back between **8001 and 8002 at runtime** on a connection failure,
   persisting the working port — the same self-heal already in place for the
   Art channel (8.0.0) now also covers the REST/device-info path.
+- **Read-only state sensors** (`getTVStates` / `getVideoStates`): 12 new
+  diagnostic sensors expose the TV's current input source, picture mode, sound
+  mode, picture size, speaker select, mute and volume, plus the picture levels
+  (contrast, brightness, sharpness, color, tint). They are read-only — these
+  values are not settable over IP Control on consumer Frames — and share a
+  single coordinator (two JSON-RPC calls per poll for all 12). Gated behind IP
+  Control being paired and enabled; paused while the TV is off.
 
 ## Reliability & observability
 

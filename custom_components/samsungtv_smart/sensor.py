@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import timedelta
 import logging
 import time
@@ -13,6 +14,7 @@ from pysmartthings import Attribute, Capability
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
+    SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
@@ -23,6 +25,7 @@ from homeassistant.const import (
     CONF_PORT,
     CONF_TOKEN,
     LIGHT_LUX,
+    EntityCategory,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -36,9 +39,16 @@ from homeassistant.helpers.update_coordinator import (
 
 from . import async_get_samsungtv_api_key
 from .api.art import SamsungTVAsyncArt, _DeviceLoggerAdapter
+from .api.ipcontrol import (
+    SamsungIPControl,
+    SamsungIPControlAuthError,
+    SamsungIPControlError,
+)
 from .const import (
     CONF_API_KEY,
     CONF_DEVICE_ID,
+    CONF_ENABLE_IP_CONTROL,
+    CONF_IP_CONTROL_TOKEN,
     CONF_IS_FRAME_TV,
     CONF_OAUTH_TOKEN,
     CONF_SLIDESHOW_API,
@@ -49,8 +59,131 @@ from .const import (
     DOMAIN,
     WS_PREFIX,
 )
+from .token_notify import METHOD_IP_CONTROL, clear_token_problem, notify_token_problem
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _ip_control_active(entry: ConfigEntry) -> bool:
+    """True when IP Control is paired AND enabled in the options."""
+    return bool(entry.data.get(CONF_IP_CONTROL_TOKEN)) and entry.options.get(
+        CONF_ENABLE_IP_CONTROL, True
+    )
+
+
+# Update interval for the read-only IP Control state sensors. Picture/sound
+# settings change slowly, so a relaxed cadence keeps JSON-RPC traffic light.
+IP_CONTROL_STATE_SCAN_INTERVAL = timedelta(seconds=30)
+
+
+@dataclass(frozen=True, kw_only=True)
+class SamsungIPControlSensorDescription(SensorEntityDescription):
+    """Describes an IP Control read-only state sensor.
+
+    ``source`` selects which JSON-RPC snapshot the value is read from:
+    ``"tv"`` for ``getTVStates`` or ``"video"`` for ``getVideoStates``.
+    """
+
+    source: str = "tv"
+
+
+# getTVStates / getVideoStates are READ-ONLY on consumer Frame TVs (the matching
+# setters return -32601 "Method not found"), so these are diagnostic sensors
+# only — setting these values must go through SmartThings / the WebSocket.
+IP_CONTROL_STATE_SENSORS: tuple[SamsungIPControlSensorDescription, ...] = (
+    # getTVStates
+    SamsungIPControlSensorDescription(
+        key="inputSource",
+        source="tv",
+        name="Input Source",
+        icon="mdi:import",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="pictureMode",
+        source="tv",
+        name="Picture Mode",
+        icon="mdi:image-multiple-outline",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="soundMode",
+        source="tv",
+        name="Sound Mode",
+        icon="mdi:music-note",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="pictureSize",
+        source="tv",
+        name="Picture Size",
+        icon="mdi:aspect-ratio",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="speakerSelect",
+        source="tv",
+        name="Speaker Select",
+        icon="mdi:speaker",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="mute",
+        source="tv",
+        name="Mute",
+        icon="mdi:volume-mute",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="volume",
+        source="tv",
+        name="Volume",
+        icon="mdi:volume-high",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    # getVideoStates
+    SamsungIPControlSensorDescription(
+        key="contrast",
+        source="video",
+        name="Contrast",
+        icon="mdi:contrast-box",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="brightness",
+        source="video",
+        name="Brightness",
+        icon="mdi:brightness-6",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="sharpness",
+        source="video",
+        name="Sharpness",
+        icon="mdi:blur",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="color",
+        source="video",
+        name="Color",
+        icon="mdi:palette",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="tint",
+        source="video",
+        name="Tint",
+        icon="mdi:invert-colors",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+)
 
 # Update interval for the Frame Art sensor (reduced for faster manual updates)
 SCAN_INTERVAL = timedelta(seconds=15)
@@ -308,6 +441,27 @@ async def async_setup_entry(
                 )
         except Exception as ex:
             _LOGGER.warning("Could not setup SmartThings sensors: %s", ex)
+
+    # Read-only IP Control state sensors (getTVStates / getVideoStates).
+    # Gated behind IP Control being paired AND enabled, sharing a single
+    # coordinator so each poll issues just two JSON-RPC calls for all 12.
+    if _ip_control_active(entry):
+        state_coordinator = IPControlStateCoordinator(hass, entry, host)
+        entities.extend(
+            IPControlStateSensor(
+                state_coordinator, entry, description, device_name, device_unique_id
+            )
+            for description in IP_CONTROL_STATE_SENSORS
+        )
+        hass.async_create_background_task(
+            state_coordinator.async_request_refresh(),
+            f"ip_control_state_initial_refresh_{entry.entry_id}",
+        )
+        _LOGGER.debug(
+            "IP Control state sensors created for %s (%d entities)",
+            device_name,
+            len(IP_CONTROL_STATE_SENSORS),
+        )
 
     if entities:
         async_add_entities(entities)
@@ -1742,3 +1896,121 @@ class SmartThingsBrightnessIntensitySensor(SensorEntity):
                 )
         except Exception as ex:
             _LOGGER.warning("Error updating brightness intensity sensor: %s", ex)
+
+
+class IPControlStateCoordinator(DataUpdateCoordinator):
+    """Polls getTVStates + getVideoStates over IP Control for the state sensors.
+
+    A single coordinator feeds all 12 read-only sensors, so each cycle issues
+    only two JSON-RPC calls (plus a cheap power-state check) regardless of how
+    many sensors are enabled. The TV is skipped while it is powered off, both
+    to avoid pointless traffic and because the picture-state getters return
+    stale values in standby.
+    """
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        host: str,
+    ) -> None:
+        """Initialize the IP Control state coordinator."""
+        self._log = _DeviceLoggerAdapter(_LOGGER, {"host": host})
+        super().__init__(
+            hass,
+            self._log,
+            name=f"IP Control state {entry.title}",
+            update_interval=IP_CONTROL_STATE_SCAN_INTERVAL,
+        )
+        self._entry = entry
+        self._host = host
+        self._ip_control: SamsungIPControl | None = None
+        self._ip_control_token: str | None = None
+
+    def _device_title(self) -> str:
+        entry = self.hass.config_entries.async_get_entry(self._entry.entry_id)
+        return entry.title if entry else (self._host or "this Samsung TV")
+
+    def _get_ip_control(self) -> SamsungIPControl | None:
+        """Return a live IP Control client if paired AND enabled."""
+        entry = self.hass.config_entries.async_get_entry(self._entry.entry_id)
+        if entry is None or not _ip_control_active(entry):
+            self._ip_control = None
+            self._ip_control_token = None
+            return None
+        token = entry.data.get(CONF_IP_CONTROL_TOKEN)
+        if self._ip_control is None or self._ip_control_token != token:
+            self._ip_control = SamsungIPControl(self.hass, self._host, token=token)
+            self._ip_control_token = token
+        return self._ip_control
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        """Fetch the TV and video state snapshots over IP Control."""
+        client = self._get_ip_control()
+        if client is None:
+            raise UpdateFailed("IP Control is not paired or is disabled")
+
+        try:
+            # Skip the snapshots while the TV is off: the getters would return
+            # stale values, and this avoids needless traffic to a sleeping TV.
+            if await client.async_get_power_state() == "powerOff":
+                raise UpdateFailed("TV is powered off")
+
+            tv_states = await client.async_get_tv_states()
+            video_states = await client.async_get_video_states()
+        except SamsungIPControlAuthError as ex:
+            notify_token_problem(
+                self.hass,
+                self._entry.entry_id,
+                METHOD_IP_CONTROL,
+                self._device_title(),
+            )
+            raise UpdateFailed(f"IP Control token rejected: {ex}") from ex
+        except SamsungIPControlError as ex:
+            raise UpdateFailed(f"IP Control state read failed: {ex}") from ex
+
+        clear_token_problem(self.hass, self._entry.entry_id, METHOD_IP_CONTROL)
+        return {"tv": tv_states, "video": video_states}
+
+
+class IPControlStateSensor(CoordinatorEntity, SensorEntity):
+    """Read-only sensor for one getTVStates / getVideoStates field."""
+
+    entity_description: SamsungIPControlSensorDescription
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: IPControlStateCoordinator,
+        entry: ConfigEntry,
+        description: SamsungIPControlSensorDescription,
+        device_name: str,
+        device_unique_id: str,
+    ) -> None:
+        """Initialize the IP Control state sensor."""
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._entry_id = entry.entry_id
+        self._device_name = device_name
+        self._device_unique_id = device_unique_id
+        self._attr_unique_id = f"{device_unique_id}_ip_control_{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device_unique_id)},
+            name=device_name,
+        )
+
+    @property
+    def native_value(self) -> Any | None:
+        """Return the value for this field from the coordinator snapshot."""
+        if not self.coordinator.data:
+            return None
+        snapshot = self.coordinator.data.get(self.entity_description.source, {})
+        return snapshot.get(self.entity_description.key)
+
+    @property
+    def available(self) -> bool:
+        """Available only while IP Control is active and the last poll worked."""
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        return bool(
+            entry and _ip_control_active(entry) and self.coordinator.last_update_success
+        )
