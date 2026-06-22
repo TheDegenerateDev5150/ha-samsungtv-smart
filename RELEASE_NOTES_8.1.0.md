@@ -30,6 +30,21 @@
   `art='on'` after the TV was switched off. This never calls the firmware-risky
   `artModeControl` method, so it is safe regardless of the Art Mode option.
 
+## Art Mode status — accuracy fixes
+
+- **Switches now use the authoritative Art Mode logic**: the `art_mode_status`
+  attribute (read by the Power and Frame Art switches) previously re-implemented
+  a reduced version of the detection that **ignored the IP Control cache and
+  the SmartThings power signal** — so a stale Art-channel WebSocket could pin
+  both switches "on" after the TV was powered off. It now delegates to the same
+  single source of truth as the media title and the `is_on` property.
+- **SmartThings cloud power-off fallback** (for TVs without IP Control): when
+  SmartThings reports the TV switched off, `art_mode_status` is forced off. The
+  Frame's `switch` capability reports `on` while displaying art and `off` only
+  when truly powered off, so this safely overrides a frozen art WebSocket.
+  (SmartThings lags ~30-45s, so it is best-effort; IP Control remains the
+  instant, authoritative path.)
+
 ## Reliability & observability
 
 - **Per-TV "slow update" warning**: when a poll cycle takes longer than the

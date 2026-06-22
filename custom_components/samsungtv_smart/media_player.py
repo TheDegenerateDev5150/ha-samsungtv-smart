@@ -2225,6 +2225,16 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             return self._ip_art_mode
         if self._get_device_spec("PowerState") == "standby":
             return False
+        # Cloud power-off fallback for TVs without IP Control. SmartThings
+        # reports the switch capability as 'on' while the Frame is in Art Mode
+        # and 'off' only when it is truly powered off, so STATE_OFF means the
+        # panel is off and a stale art-channel WebSocket (which can latch 'on'
+        # after a cloud/remote power-off it never witnessed) must not be
+        # trusted. Trade-off: SmartThings lags ~30-45s, so powering straight on
+        # into Art Mode may briefly read 'off' until the cloud catches up — far
+        # better than a permanently stuck 'on'.
+        if self._st is not None and self._st.state == STStatus.STATE_OFF:
+            return False
         art_api = (
             self.hass.data.get(DOMAIN, {}).get(self._entry_id, {}).get(DATA_ART_API)
         )
@@ -2243,58 +2253,19 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         """Return the optional state attributes."""
         data = {ATTR_IP_ADDRESS: self._host}
 
-        # Determine Art Mode status for state attributes.
-        #
-        # Priority order:
-        #  1. IP Control cache (Phase 2) — authoritative combined read
-        #     (powerControl + artModeControl) refreshed every
-        #     IP_ART_MODE_REFRESH_INTERVAL when the user has paired this TV
-        #     via the options flow. It MUST win over the device-info
-        #     PowerState check below: 2024+ Frame models (e.g. QE55LS03DA)
-        #     report PowerState='standby' over REST WHILE actively displaying
-        #     art, so trusting 'standby' first forces art_mode_status to
-        #     'off' whenever Art Mode is on. The cache is safe against the
-        #     opposite mistake because _refresh_ip_art_mode reads the IP
-        #     Control power state first and stores False when the TV reports
-        #     'powerOff'.
-        #  2. device_info PowerState='standby' (Phase 1) — for unpaired TVs,
-        #     definitive when the device-info REST poll reports the TV as
-        #     fully off.
-        #  3. async Art API (art.py) — preferred when active. Once
-        #     disable_art_thread() is called, _ws.artmode_status is frozen at
-        #     its last value and is no longer updated when Art Mode changes.
-        #     art_api.art_mode is kept live by WebSocket events
-        #     (artmode_status, art_mode_changed) received on the async art
-        #     channel.
-        #  4. _ws.artmode_status — fallback for the period before art_api has
-        #     received its first event (e.g. right after HA startup).
-        #
-        # IMPORTANT: art_api.art_mode goes STALE when the TV powers off — the
-        # art WebSocket disconnects and stops delivering events, so the cached
-        # value keeps reporting whatever was true just before power-off (often
-        # "on", because Art Mode is the last state of a Frame TV before
-        # standby). That stale "on" then leaks via art_mode_status into the
-        # Power switch and the Frame Art Mode switch (both treat
-        # media_player.state="off" + art_mode_status="on" as "TV physically on
-        # in Art Mode"), and both end up wrongly showing ON after a power-off.
-        # device_info's PowerState is polled every ~15s and reliably reports
-        # "standby" when the TV is truly off — use it as an authoritative
-        # override.
-        art_api = (
-            self.hass.data.get(DOMAIN, {}).get(self._entry_id, {}).get(DATA_ART_API)
-        )
-        device_power_state = self._get_device_spec("PowerState")
-        if device_power_state == "standby":
-            # TV is powered off — art mode cannot be active regardless of
-            # what art_api may have cached.
-            data[ATTR_ART_MODE_STATUS] = STATE_OFF
-        elif art_api is not None and art_api.art_mode is not None:
-            data.update(
-                {ATTR_ART_MODE_STATUS: STATE_ON if art_api.art_mode else STATE_OFF}
-            )
-        elif self._ws.artmode_status != ArtModeStatus.Unsupported:
-            status_on = self._ws.artmode_status == ArtModeStatus.On
-            data.update({ATTR_ART_MODE_STATUS: STATE_ON if status_on else STATE_OFF})
+        # Art Mode status: delegate to _art_mode_is_on(), the single source of
+        # truth (it layers IP Control cache → REST PowerState='standby' →
+        # SmartThings switch=off → async Art API → WS artmode_status →
+        # SmartThings-reports-art, with the running-app guard on top). This MUST
+        # be the same logic the media title and the is_on property use, so the
+        # Power / Frame Art switches that mirror this attribute stay consistent
+        # with everything else. Previously this block re-implemented a subset
+        # that ignored the IP Control cache and the SmartThings power signal,
+        # which let a stale art WebSocket pin the switches "on" after the TV was
+        # powered off.
+        art_status = self._art_mode_is_on()
+        if art_status is not None:
+            data[ATTR_ART_MODE_STATUS] = STATE_ON if art_status else STATE_OFF
         if self._st:
             picture_mode = self._st.picture_mode
             picture_mode_list = self._st.picture_mode_list
