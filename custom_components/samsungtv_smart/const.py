@@ -36,6 +36,7 @@ __min_ha_version__ = f"{MIN_HA_MAJ_VER}.{MIN_HA_MIN_VER}.0"
 DATA_CFG = "cfg"
 DATA_CFG_YAML = "cfg_yaml"
 DATA_OPTIONS = "options"
+DATA_ENTRY_DATA = "entry_data"  # Snapshot of entry.data to detect data changes
 DATA_ART_API = "art_api"  # Shared Frame Art API instance
 CONF_IS_FRAME_TV = "is_frame_tv"  # Persisted flag: TV confirmed as Frame TV
 # V7: persisted capability flags for the dedicated brightness / colour-temp

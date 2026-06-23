@@ -766,7 +766,9 @@ class SamsungTVSmartOAuth2FlowHandler(
             if user_input.get("pair_now"):
                 return await self.async_step_reconfigure_ip_pair()
 
-            await self.hass.config_entries.async_reload(entry.entry_id)
+            # The options update above triggers the entry's update listener,
+            # which schedules a reload when a structural option changed — so we
+            # must not also reload here (combining the two is deprecated in HA).
             return self.async_abort(reason="reconfigure_successful")
 
         schema: dict = {vol.Optional("pair_now", default=False): bool}
@@ -838,7 +840,10 @@ class SamsungTVSmartOAuth2FlowHandler(
                         data_updates[CONF_IP_CONTROL_FW_VERSION] = device_info[
                             "FWVersion"
                         ]
-                    return self.async_update_reload_and_abort(
+                    # Update the entry data only; the update listener schedules
+                    # the reload (combining in-flow reload with an update
+                    # listener is deprecated in HA).
+                    return self.async_update_and_abort(
                         entry,
                         data_updates=data_updates,
                         reason="ip_control_pair_successful",
@@ -889,7 +894,8 @@ class SamsungTVSmartOAuth2FlowHandler(
                 "auth_implementation": DOMAIN,
             },
         )
-        await self.hass.config_entries.async_reload(self._reauth_entry.entry_id)
+        # The data update above triggers the update listener, which schedules
+        # the reload — reloading here too is deprecated in HA.
         return self.async_abort(reason="reauth_successful")
 
     # =========================================================================
@@ -915,7 +921,7 @@ class SamsungTVSmartOAuth2FlowHandler(
             unique_id = mac or self._host
 
         await self.async_set_unique_id(unique_id)
-        self._abort_if_unique_id_configured()
+        self._abort_if_unique_id_configured(reload_on_update=False)
 
         return self._save_entry()
 
@@ -940,9 +946,9 @@ class SamsungTVSmartOAuth2FlowHandler(
             if CONF_ST_ENTRY_UNIQUE_ID in entry.data or self._st_entry_unique_id:
                 updates[CONF_ST_ENTRY_UNIQUE_ID] = self._st_entry_unique_id
 
-        return self.async_update_reload_and_abort(
-            entry, data_updates=updates, reload_even_if_entry_is_unchanged=False
-        )
+        # Update the entry data only; the update listener schedules the reload
+        # (combining an in-flow reload with an update listener is deprecated).
+        return self.async_update_and_abort(entry, data_updates=updates)
 
     @callback
     def _save_entry(self) -> ConfigFlowResult:
