@@ -18,7 +18,7 @@ Protocol notes (confirmed on Frame 2024 / 2025):
     (Settings -> Connections -> Network -> Expert Settings).
   * Older Samsung TVs (Tizen <= 5.5, ~2020 Frames) negotiate a weak DH group
     that OpenSSL's default security level rejects ("dh key too small"). The
-    client detects this and transparently retries with @SECLEVEL=1.
+    client detects this and transparently retries with @SECLEVEL=0.
 
 The blocking HTTP work runs in the executor so the event loop is never blocked.
 The SSL context is also built lazily inside the executor — `create_default_context`
@@ -106,7 +106,7 @@ class SamsungIPControl:
         self._ctx: ssl.SSLContext | None = None
         # Older TVs (Tizen <= 5.5, ~2020 Frames) negotiate a weak DH group and
         # are rejected by OpenSSL's default security level. When that happens
-        # we retry once with @SECLEVEL=1 and remember it for subsequent calls.
+        # we retry once with @SECLEVEL=0 and remember it for subsequent calls.
         self._tls_legacy = False
         # Consecutive (artModeControl says on / pictureMode says not-art)
         # disagreements, for the desync guard in async_get_art_mode.
@@ -392,7 +392,12 @@ class SamsungIPControl:
         ctx.verify_mode = ssl.CERT_NONE
         if legacy:
             try:
-                ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+                # SECLEVEL=0 (not 1): some ~2020 Frames negotiate a DH group
+                # smaller than 1024 bits, which SECLEVEL=1 still rejects with
+                # "dh key too small". These are local, self-signed panels we
+                # already talk to with CERT_NONE, so dropping to SECLEVEL=0 (the
+                # most permissive) is safe and strictly looser than SECLEVEL=1.
+                ctx.set_ciphers("DEFAULT@SECLEVEL=0")
             except ssl.SSLError as ex:
                 _LOGGER.warning(
                     "Could not lower TLS security level for %s: %s", self._host, ex
@@ -408,7 +413,7 @@ class SamsungIPControl:
     ) -> dict[str, Any]:
         """Blocking JSON-RPC request — runs in the executor.
 
-        Retries once with @SECLEVEL=1 on a "dh key too small" SSL error so the
+        Retries once with @SECLEVEL=0 on a "dh key too small" SSL error so the
         client transparently handles older Samsung TVs.
         """
         body: dict[str, Any] = {
