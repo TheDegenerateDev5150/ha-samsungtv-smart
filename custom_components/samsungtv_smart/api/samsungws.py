@@ -335,6 +335,11 @@ class SamsungTVWS:
         self._power_on_artmode = False
 
         self._installed_app = {}
+        # App ids the TV answered "404 Not found" for: not installed, so we stop
+        # re-querying them every scan (otherwise a single missing app in the
+        # configured app_list is polled forever — observed 1900+ times in one
+        # session). Cleared whenever the TV reports a fresh installed-app list.
+        self._app_not_found: set[str] = set()
         self._running_apps: dict[str, datetime] = {}
         self._running_app: str | None = None
         self._running_app_changed: bool | None = None
@@ -801,6 +806,9 @@ class SamsungTVWS:
             app = App(app_id, app_info["name"], app_info["app_type"])
             installed_app[app_id] = app
         self._installed_app = installed_app
+        # Fresh authoritative list from the TV — re-evaluate previously
+        # not-found apps (one may have been installed since).
+        self._app_not_found.clear()
 
     def _client_control_thread(self):
         """Start the client control WS thread used to manage running apps."""
@@ -904,20 +912,24 @@ class SamsungTVWS:
             return
         error_code = response.get("error", {}).get("code", 0)
         if error_code == 404:  # Not found error
-            if self._installed_app:
-                if app_id not in self._installed_app:
-                    self._log.error("App ID %s not found", app_id)
-                return
-            # app_type = self._app_type.get(app_id)
-            # if app_type is None:
-            #     self._log.info(
-            #         "App ID %s with type DEEP_LINK not found, set as NATIVE_LAUNCH",
-            #         app_id,
-            #     )
-            #     self._app_type[app_id] = 4
+            # Remember this app is not installed so we stop polling it every
+            # scan. Without this a single missing app in the configured
+            # app_list is queried on every cycle forever (TVs that never report
+            # an installed-app list, e.g. some 2020 Frames, hit this hard).
+            if app_id not in self._app_not_found:
+                self._app_not_found.add(app_id)
+                self._log.debug(
+                    "App ID %s not found on TV — skipping it until next "
+                    "installed-app refresh",
+                    app_id,
+                )
 
     def _get_app_status(self, app_id, app_type):
         """Send a message to control WS channel to get the app status."""
+        if app_id in self._app_not_found:
+            # Already known not installed — don't re-query (and don't log).
+            return
+
         self._log.debug("Get app status: AppID: %s, AppType: %s", app_id, app_type)
 
         if not (self._ws_control and self._is_control_connected):

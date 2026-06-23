@@ -7,6 +7,20 @@
 
 ## IP Control
 
+- **Older Frames (~2020) TLS handshake fix (`dh key too small`)**: some 2020
+  Frames negotiate a Diffie-Hellman group smaller than 1024 bits on the IP
+  Control port (1516), which OpenSSL rejected even after the existing
+  `@SECLEVEL=1` retry — so *all* IP Control on those TVs (power, device info,
+  art-mode read) failed with `[SSL: DH_KEY_TOO_SMALL]`. The legacy-TLS retry now
+  drops to `@SECLEVEL=0`. These are local, self-signed panels already contacted
+  with `CERT_NONE`, so this is safe and strictly looser than the previous level.
+- **Stop re-querying not-installed apps**: an app present in the configured
+  app/source list but not installed on the TV returned `404 Not found` on every
+  scan — on TVs that never report an installed-app list (e.g. some 2020 Frames)
+  this meant the same missing app was polled forever (1900+ times in one logged
+  session). Such app ids are now remembered and skipped until the TV reports a
+  fresh installed-app list.
+
 - **Daily device-info refresh**: TV model and firmware version (learned via
   IP Control's `getDeviceInformation`) are now refreshed automatically every
   24h instead of only once at pairing time, so an OTA firmware upgrade is
