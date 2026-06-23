@@ -58,6 +58,8 @@ from .const import (
     CONF_AUTH_METHOD,
     CONF_CHANNEL_LIST,
     CONF_DEVICE_NAME,
+    CONF_ENABLE_IP_CONTROL,
+    CONF_IP_CONTROL_ART_MODE,
     CONF_LOAD_ALL_APPS,
     CONF_OAUTH_TOKEN,
     CONF_SCAN_APP_HTTP,
@@ -75,6 +77,7 @@ from .const import (
     DATA_ART_API,
     DATA_CFG,
     DATA_CFG_YAML,
+    DATA_ENTRY_DATA,
     DATA_OPTIONS,
     DEFAULT_PORT,
     DEFAULT_SOURCE_LIST,
@@ -1039,6 +1042,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = {
         DATA_CFG: config,
         DATA_OPTIONS: entry.options.copy(),
+        # Snapshot used by the update listener to tell an options-only change
+        # (applied live) from one that needs a reload (connection/auth data, or
+        # a structural option that adds/removes platforms). Cheap to compare.
+        DATA_ENTRY_DATA: _reload_fingerprint(entry),
     }
     if add_conf:
         hass.data[DOMAIN][entry.entry_id][DATA_CFG_YAML] = add_conf
@@ -1093,7 +1100,35 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
             hass.data.pop(DOMAIN)
 
 
+# Options whose change adds/removes platforms or clients and therefore needs a
+# full reload (everything else is applied live via SIGNAL_CONFIG_ENTITY).
+_RELOAD_OPTIONS = (CONF_ENABLE_IP_CONTROL, CONF_IP_CONTROL_ART_MODE)
+
+
+def _reload_fingerprint(entry: ConfigEntry) -> tuple:
+    """Snapshot the parts of an entry whose change requires a reload."""
+    return (
+        dict(entry.data),
+        tuple(entry.options.get(key) for key in _RELOAD_OPTIONS),
+    )
+
+
 async def _update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Update when config_entry options update."""
-    hass.data[DOMAIN][entry.entry_id][DATA_OPTIONS] = entry.options.copy()
+    """React to a config entry change.
+
+    Most options (scan interval, app/source lists, ...) are applied live via the
+    dispatcher signal — no costly full reload. Connection/auth *data* changes
+    (host, port, token, API key) and structural options (IP Control enable /
+    Art Mode) need the platforms or clients re-created, so those, and only
+    those, schedule a reload. The reload is always scheduled from this listener
+    (never from the config/options flow) per Home Assistant's deprecation of
+    combining an update listener with in-flow reload methods.
+    """
+    store = hass.data[DOMAIN][entry.entry_id]
+    store[DATA_OPTIONS] = entry.options.copy()
     async_dispatcher_send(hass, SIGNAL_CONFIG_ENTITY)
+
+    fingerprint = _reload_fingerprint(entry)
+    if store.get(DATA_ENTRY_DATA) != fingerprint:
+        store[DATA_ENTRY_DATA] = fingerprint
+        hass.config_entries.async_schedule_reload(entry.entry_id)

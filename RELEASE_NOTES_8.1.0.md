@@ -107,6 +107,19 @@
   remote command sent over that channel failed silently. It now feeds the
   same guard as the other two rejection paths.
 
+## Home Assistant compatibility — config-entry reload deprecation
+
+- **No more "has an update listener and should use it for scheduling a reload"
+  warning**: HA deprecated (2026.6, hard error in 2026.12) combining a config
+  entry update listener with reload methods called *inside* the config flow.
+  The integration did both. Reloads are now scheduled exclusively from the
+  update listener: it still applies most option changes live (scan interval,
+  app/source lists) via the dispatcher signal — no full reload — and schedules
+  a reload only when connection/auth **data** (host, port, token, API key) or a
+  structural option (IP Control enable / Art Mode) actually changes. The
+  in-flow `async_reload` / `async_update_reload_and_abort` calls were replaced
+  accordingly (`async_update_and_abort`, `reload_on_update=False`).
+
 ## Art channel WebSocket — zombie-socket recovery
 
 - **Heartbeat / dead-connection detection**: the Art-channel WebSocket now opens
