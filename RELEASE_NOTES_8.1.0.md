@@ -174,6 +174,27 @@
   in-flow `async_reload` / `async_update_reload_and_abort` calls were replaced
   accordingly (`async_update_and_abort`, `reload_on_update=False`).
 
+## Art Mode — thumbnails for Art Store content
+
+- **Stop hammering uncached Art Store (SAM-S\*) thumbnails**: the Frame only
+  keeps a thumbnail in its local cache once the content has actually been
+  materialized (displayed, favorited, downloaded). For Art Store items that
+  aren't cached yet, `get_thumbnail` returns `SYSTEM_FAIL` / 0 bytes because
+  there is genuinely nothing to serve — a structural condition, not a transient
+  transport error. The integration previously treated it as transient: 3
+  retries, an error placeholder, and a 5-minute global backoff, repeated every
+  poll, spamming the log for content that could never resolve until the TV
+  cached it. Art Store content is now fetched on a single attempt and, on
+  failure, left quietly (no placeholder, no backoff) with a calm debug line.
+  Personal photos (MY_F\*) keep the multi-attempt retry, since their failures
+  really are transient.
+- **Refresh on new content**: the Art channel now also listens for the TV's
+  `image_added` / `image_of_list_added` broadcasts (it already handled
+  `image_selected`, `favorite_changed`, etc.). These fire when the TV
+  materializes new content locally — exactly when a previously-uncached Art
+  Store thumbnail becomes fetchable — so the skipped thumbnail is retried as
+  soon as it can actually succeed, instead of waiting for the next poll.
+
 ## Art channel WebSocket — zombie-socket recovery
 
 - **Heartbeat / dead-connection detection**: the Art-channel WebSocket now opens

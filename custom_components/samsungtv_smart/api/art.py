@@ -634,9 +634,15 @@ class SamsungTVAsyncArt:
             "slideshow_changed",
             "favorite_changed",
             "rotation_changed",
+            "image_added",
+            "image_of_list_added",
         ):
             # Confirmed broadcasts (WEBSOCKET_DECOMPILED.md) for changes the
             # Frame Art sensor otherwise only learns about on its next poll.
+            # image_added / image_of_list_added fire when the TV materializes
+            # new content locally — that is when an Art Store (SAM-S*)
+            # thumbnail finally becomes fetchable, so refreshing here retries
+            # the thumbnail that was skipped while the content was uncached.
             self._fire_art_content_event()
 
         # Check for error
