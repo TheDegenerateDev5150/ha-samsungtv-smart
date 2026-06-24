@@ -13,7 +13,9 @@ from homeassistant.components.media_player.const import (
 )
 from homeassistant.components.media_player.const import DOMAIN as MP_DOMAIN
 from homeassistant.components.media_player.const import SERVICE_PLAY_MEDIA
-from homeassistant.components.remote import ATTR_NUM_REPEATS, RemoteEntity
+from homeassistant.components.remote import ATTR_NUM_REPEATS
+from homeassistant.components.remote import DOMAIN as REMOTE_DOMAIN
+from homeassistant.components.remote import RemoteEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_SERVICE,
@@ -51,7 +53,13 @@ async def async_setup_entry(
         for tv_entity in tv_entries:
             if tv_entity.domain == MP_DOMAIN:
                 mp_entity_id = tv_entity.entity_id
-                break
+            elif tv_entity.domain == REMOTE_DOMAIN:
+                # A remote entity already exists for this entry. This callback is
+                # scheduled via async_call_later and is not cancelled on unload,
+                # so a rapid reload can fire a stale pending callback on top of
+                # the new setup's — adding a second remote with the same unique
+                # id ("does not generate unique IDs ... ignoring"). Skip it.
+                return
 
         if mp_entity_id is None:
             return

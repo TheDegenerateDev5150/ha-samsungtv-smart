@@ -75,6 +75,12 @@ CONF_LOAD_ALL_APPS = "load_all_apps"
 CONF_LOGO_OPTION = "logo_option"
 CONF_PING_PORT = "ping_port"
 CONF_POWER_ON_METHOD = "power_on_method"
+# REST/HTTP port, learned independently of CONF_PORT (the WS/token + Art port).
+# Some older Frames (~2020) serve the REST API on 8001 while the secure token
+# WebSocket + Art channel live on 8002, so a single shared port made the two
+# self-heal mechanisms fight forever (8001 <-> 8002 ping-pong). Falls back to
+# CONF_PORT when unset (existing installs / TVs where one port serves both).
+CONF_REST_PORT = "rest_port"
 CONF_SHOW_CHANNEL_NR = "show_channel_number"
 CONF_SOURCE_LIST = "source_list"
 CONF_SYNC_TURN_OFF = "sync_turn_off"

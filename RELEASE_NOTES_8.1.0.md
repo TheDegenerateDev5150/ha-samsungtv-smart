@@ -7,6 +7,24 @@
 
 ## IP Control
 
+- **REST / WebSocket port no longer fight on split-port TVs (~2020 Frames)**:
+  some 2020 Frames serve the REST/HTTP API on **8001** while the secure token
+  WebSocket + Art channel live on **8002**. All three channels persisted their
+  self-healed port to a single shared config value, so the REST self-heal (which
+  learned 8001) and the remote-channel self-heal (which needs 8002) kept
+  overwriting each other — on every reload the remote channel re-ran its
+  `8001 → 8002` flip and REST re-flipped it back, an endless ping-pong (visible
+  as repeated *"switching to the secure 8002 channel"* / *"succeeded on 8001 --
+  switching to it"* warnings). REST now learns and persists its **own** port
+  (`rest_port`), decoupled from the WS/Art port, so each channel keeps the port
+  that works for it. Also fixes a nonsensical *"Art API: Port changed from 8002
+  to 8002"* log line.
+- **Duplicate `remote.<tv>` entity on rapid reload**: the remote entity is added
+  via a 5s-delayed callback that wasn't cancelled on unload, so reloading the
+  integration within ~5s fired a stale pending callback on top of the new
+  setup's — registering a second remote with the same unique id (*"Platform
+  samsungtv_smart does not generate unique IDs ... ignoring remote.<tv>"*). The
+  setup now skips adding a remote when one already exists for the entry.
 - **Older Frames (~2020) TLS handshake fix (`dh key too small`)**: some 2020
   Frames negotiate a Diffie-Hellman group smaller than 1024 bits on the IP
   Control port (1516), which OpenSSL rejected even after the existing

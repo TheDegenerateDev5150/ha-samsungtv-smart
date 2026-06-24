@@ -111,6 +111,7 @@ from .const import (
     CONF_OAUTH_TOKEN,
     CONF_PING_PORT,
     CONF_POWER_ON_METHOD,
+    CONF_REST_PORT,
     CONF_SHOW_CHANNEL_NR,
     CONF_SLIDESHOW_API,
     CONF_SOURCE_LIST,
@@ -587,9 +588,14 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             host=self._host,
             session=session,
             timeout=DEFAULT_TIMEOUT,
-            port=config.get(CONF_PORT, DEFAULT_PORT),
+            # REST keeps its own learned port, decoupled from CONF_PORT (the
+            # WS/token + Art port). On ~2020 Frames REST answers on 8001 while
+            # the secure WS/Art channel is on 8002 — sharing one port made the
+            # two self-heals overwrite each other forever. Falls back to
+            # CONF_PORT for existing installs / single-port TVs.
+            port=config.get(CONF_REST_PORT) or config.get(CONF_PORT, DEFAULT_PORT),
         )
-        self._rest_api.register_port_callback(self._persist_art_port)
+        self._rest_api.register_port_callback(self._persist_rest_port)
 
         # Frame Art API - use shared instance if available, otherwise create new one
         shared_art_api = entry_data.get(DATA_ART_API) if entry_data else None
@@ -876,6 +882,21 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             return
         self.hass.config_entries.async_update_entry(
             entry, data={**entry.data, CONF_PORT: port}
+        )
+
+    def _persist_rest_port(self, port: int) -> None:
+        """Persist the REST API's runtime port fallback to entry.data.
+
+        Stored under CONF_REST_PORT, separate from CONF_PORT, so the REST
+        self-heal (8001 <-> 8002) does not overwrite the WS/token + Art port.
+        On ~2020 Frames the two channels legitimately need different ports;
+        sharing one value made each self-heal undo the other's on every reload.
+        """
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None or entry.data.get(CONF_REST_PORT) == port:
+            return
+        self.hass.config_entries.async_update_entry(
+            entry, data={**entry.data, CONF_REST_PORT: port}
         )
 
     async def _do_oauth_refresh(self) -> bool:
