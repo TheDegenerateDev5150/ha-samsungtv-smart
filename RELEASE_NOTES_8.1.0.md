@@ -197,6 +197,14 @@
   (`[192.168.x.y] Update took X.Xs, longer than the Xs scan interval`)
   instead of relying solely on Home Assistant's core scheduler warning, which
   cannot identify which TV/entity is responsible in a multi-TV setup.
+- **Art-app error codes are now decoded in the logs**: the Art channel's
+  `{"event": "error", "error_code": N}` replies (e.g. on a failed thumbnail
+  download) used to log only the bare numeric code, which is meaningless
+  without cross-referencing the decompiled firmware notes. Debug logs now show
+  the decoded name alongside it (e.g. `SYSTEM_FAIL (-1)`, `NOT_SUPPORTED_API
+  (-9)`, `INSUFFICIENT_SPACE (-11)`), making it possible to tell a generic
+  TV-side failure apart from e.g. a full thumbnail cache or an unsupported
+  request on a given firmware.
 
 ---
 

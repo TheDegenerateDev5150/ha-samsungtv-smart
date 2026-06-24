@@ -52,6 +52,37 @@ MS_CHANNEL_READY_EVENT = "ms.channel.ready"
 # genuinely live-but-quiet channel is not torn down unnecessarily.
 ART_WS_HEARTBEAT = 20
 
+# Art-app error codes returned in {"event": "error", "error_code": N} replies,
+# per the decompiled firmware (notes/QN55LS03FAFXZA/ART_MODE_DECOMPILED.md).
+# Logged alongside the raw code so e.g. a thumbnail failure reads as
+# "SYSTEM_FAIL (-1)" instead of a bare, otherwise meaningless "-1".
+ART_ERROR_CODES = {
+    -14: "INSUFFICIENT_SYSTEM_SPACE",
+    -13: "PREVIEW_NOT_STARTED",
+    -12: "CHECKOUT_IN_PROGRESS",
+    -11: "INSUFFICIENT_SPACE",
+    -10: "TEMPORARILY_UNAVAILABLE",
+    -9: "NOT_SUPPORTED_API",
+    -8: "SSO_REQUIRED",
+    -7: "INVALID_PARAMETER",
+    -6: "REQUEST_PARSE_FAIL",
+    -5: "DB_ERROR",
+    -4: "FILE_NOT_FOUND",
+    -3: "NO_MEMORY",
+    -2: "NO_PERMISSION",
+    -1: "SYSTEM_FAIL",
+    0: "NO_ERROR",
+}
+
+
+def _describe_art_error(error_code: Any) -> str:
+    """Format an art-app error_code with its known name, if any."""
+    try:
+        name = ART_ERROR_CODES.get(int(error_code))
+    except (TypeError, ValueError):
+        name = None
+    return f"{name} ({error_code})" if name else str(error_code)
+
 
 def _get_ssl_context() -> ssl.SSLContext:
     """Get SSL context for secure connections without blocking calls."""
@@ -611,7 +642,7 @@ class SamsungTVAsyncArt:
         # Check for error
         if sub_event == "error":
             error_code = data.get("error_code", "unknown")
-            self._log.debug("Art API: Error event: %s", error_code)
+            self._log.debug("Art API: Error event: %s", _describe_art_error(error_code))
 
         # Resolve pending requests
         request_id = data.get("request_id", data.get("id"))
@@ -818,7 +849,7 @@ class SamsungTVAsyncArt:
         if data.get("event") == "error":
             self._log.debug(
                 "Art API: get_thumbnail_list returned error: %s",
-                data.get("error_code"),
+                _describe_art_error(data.get("error_code")),
             )
             return {}
 
@@ -991,7 +1022,10 @@ class SamsungTVAsyncArt:
 
         # Check for error
         if data.get("event") == "error":
-            self._log.debug("Art API: get_thumbnail error: %s", data.get("error_code"))
+            self._log.debug(
+                "Art API: get_thumbnail error: %s",
+                _describe_art_error(data.get("error_code")),
+            )
             return None
 
         try:
@@ -1080,7 +1114,7 @@ class SamsungTVAsyncArt:
             self._log.debug(
                 "Art API: get_thumbnail_list error for %s: %s",
                 content_id,
-                data.get("error_code"),
+                _describe_art_error(data.get("error_code")),
             )
             return None
 
