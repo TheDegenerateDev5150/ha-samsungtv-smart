@@ -221,6 +221,16 @@
   event alone meant the retry never fired; the integration now arms a short
   retry cooldown after an uncached Art Store miss and picks the thumbnail up
   within ~30s of the TV caching it, without re-fetching on every poll.
+- **No more flashing the wrong artwork during matte/select operations**: the
+  Frame occasionally returns a spurious one-off `content_id` from
+  `get_current_artwork` during matte changes (observed: a single poll reporting
+  an unrelated id such as `SAM-F0222` while another artwork is actually on
+  screen, corrected on the very next poll). The integration used to expose that
+  reading immediately — briefly showing the wrong artwork in HA and triggering a
+  wasted thumbnail fetch. A changed `content_id` is now **debounced**: it must be
+  seen on two consecutive polls before it is exposed, so a single bad reading is
+  ignored. Legitimate changes still appear promptly (polls are sub-second to a
+  few seconds apart during art activity).
 
 ## Art channel WebSocket — zombie-socket recovery
 

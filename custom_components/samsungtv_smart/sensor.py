@@ -511,6 +511,14 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         # every single poll.
         self._store_retry_content_id: str | None = None
         self._store_retry_at: float | None = None
+        # Debounce for transient content_id glitches: the TV occasionally
+        # reports a spurious one-off content_id from get_current_artwork during
+        # matte/select operations (a single poll returning an unrelated id,
+        # corrected on the next poll). _confirmed_content_id is the trusted
+        # value currently exposed in HA; _pending_content_id is a changed id
+        # seen only once, held until a second consecutive poll confirms it.
+        self._confirmed_content_id: str | None = None
+        self._pending_content_id: str | None = None
         # Enabled by default - thumbnails are fetched for current artwork
         self._thumbnail_fetch_enabled = True
         self._thumbnail_failures = 0
@@ -607,12 +615,26 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 async with asyncio.timeout(8):
                     current = await self._art_api.get_current()
                     if current:
-                        content_id = current.get("content_id")
-                        data["current_artwork"] = {
-                            "content_id": content_id,
-                            "category_id": current.get("category_id"),
-                            "matte_id": current.get("matte_id"),
-                        }
+                        raw_content_id = current.get("content_id")
+                        content_id = self._confirm_content_id(raw_content_id)
+                        if content_id is not None and content_id == raw_content_id:
+                            # Trusted reading: expose it.
+                            data["current_artwork"] = {
+                                "content_id": content_id,
+                                "category_id": current.get("category_id"),
+                                "matte_id": current.get("matte_id"),
+                            }
+                        else:
+                            # Unconfirmed/transient reading: keep the previously
+                            # exposed artwork (already copied into data above) and
+                            # don't let this id drive thumbnail logic this cycle.
+                            if raw_content_id is not None:
+                                self._log.debug(
+                                    "Frame Art: ignoring unconfirmed content_id "
+                                    "%s this cycle",
+                                    raw_content_id,
+                                )
+                            content_id = None
             except asyncio.TimeoutError:
                 self._log.debug("Timeout getting current artwork")
             except Exception as ex:
@@ -914,6 +936,48 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             self._current_thumbnail_content_id == content_id
             and self._has_current_thumbnail()
         )
+
+    def _confirm_content_id(self, raw_content_id: str | None) -> str | None:
+        """Debounce transient content_id glitches from the TV.
+
+        The Frame occasionally reports a spurious one-off content_id from
+        get_current_artwork during matte/select operations (observed: a single
+        poll returning an unrelated id such as SAM-F0222 while a different
+        artwork is actually displayed, corrected on the very next poll). Require
+        a *changed* id to be seen on two consecutive polls before trusting it,
+        so one bad reading never flashes in HA or triggers a wasted thumbnail
+        fetch.
+
+        Returns the trusted content_id. It equals ``raw_content_id`` only when
+        the reading is accepted; otherwise it returns the previously trusted id
+        (or None) so callers can tell an accepted reading from a held one.
+        """
+        if raw_content_id is None:
+            # Failed/empty poll: don't disturb the trusted value or pending state.
+            return None
+        if raw_content_id == self._confirmed_content_id:
+            # Steady state: clear any half-seen pending change.
+            self._pending_content_id = None
+            return raw_content_id
+        if self._confirmed_content_id is None:
+            # First reading after startup: nothing to protect, trust immediately.
+            self._confirmed_content_id = raw_content_id
+            self._pending_content_id = None
+            return raw_content_id
+        if raw_content_id == self._pending_content_id:
+            # Same new id seen twice in a row: it's real now.
+            self._confirmed_content_id = raw_content_id
+            self._pending_content_id = None
+            return raw_content_id
+        # First sighting of a new id: hold it tentatively, keep the trusted one.
+        self._log.debug(
+            "Frame Art: content_id %s seen once (current trusted: %s); waiting "
+            "for confirmation before exposing it",
+            raw_content_id,
+            self._confirmed_content_id,
+        )
+        self._pending_content_id = raw_content_id
+        return self._confirmed_content_id
 
     def _create_error_placeholder(self) -> bytes:
         """Create a generic download error placeholder image.
