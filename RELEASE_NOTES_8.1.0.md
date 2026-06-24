@@ -90,6 +90,13 @@
   `brightness_sensor_setting`). Note: the Frame's general *Sleep Timer*
   (System → Time, disabled in Art Mode) is **not** exposed by any channel — the
   motion-based auto-off in Art Mode is the **Motion Timer** select.
+- **Clearer log when a model has no motion/brightness sensor**: when the TV
+  reports none of `motion_sensitivity` / `motion_timer` /
+  `brightness_sensor_setting`, the integration now logs this at `INFO` (instead
+  of `debug`), stating explicitly that those three controls are intentionally
+  not created because the model has no such sensor. Expected on Frames without
+  the motion/ambient-light sensor (e.g. some 2020/2021 models) — it is not an
+  error.
 
 ## Art Mode switch — slow refresh after toggle fix
 

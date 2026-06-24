@@ -397,8 +397,14 @@ async def _load_motion_options(
                     [e._setting_name for e in entities],
                 )
             else:
-                _LOGGER.debug(
-                    "TV %s does not report Art Mode motion settings, skipping",
+                _LOGGER.info(
+                    "TV %s did not report any Art Mode motion/brightness sensor "
+                    "settings (motion_sensitivity, motion_timer, "
+                    "brightness_sensor_setting) — this model has no such sensor, "
+                    "so the Motion Sensitivity, Motion Timer and Brightness "
+                    "Sensor controls are intentionally not created. This is "
+                    "expected on Frames without the motion/ambient-light sensor "
+                    "(e.g. some 2020/2021 models); it is not an error.",
                     device_name,
                 )
             return
