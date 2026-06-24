@@ -516,12 +516,31 @@ class SamsungTVWS:
             if self._try_alternate_port():
                 return
             self._auth_blocked = True
-            self._log.warning(
-                "TV %s repeatedly rejected the connection (%s) — pausing "
-                "remote reconnection; re-pair required",
-                self.host,
-                reason,
-            )
+            if self.port == 8002 and self._tried_alt_port:
+                # We already flipped 8001 -> 8002 and the secure channel is
+                # ALSO rejecting. Per the decompiled msf-server
+                # (notes/QN55LS03FAFXZA/PORTS.md), some firmwares fail to bring
+                # up the 8002 TLS vhost at all ("can't create vhost for '8002'
+                # port") — observed on ~2020 Frames — so neither the plain 8001
+                # nor the secure 8002 channel can complete the token handshake.
+                # Surface that explicitly instead of a generic "re-pair", which
+                # won't help when the TV simply has no working secure channel.
+                self._log.warning(
+                    "TV %s rejected both the 8001 and the secure 8002 remote "
+                    "channels (%s) — this TV may not expose a working TLS "
+                    "(8002) channel (firmware failed to create the vhost, seen "
+                    "on some 2020 Frames); remote control over this channel "
+                    "cannot authorize. Pausing remote reconnection.",
+                    self.host,
+                    reason,
+                )
+            else:
+                self._log.warning(
+                    "TV %s repeatedly rejected the connection (%s) — pausing "
+                    "remote reconnection; re-pair required",
+                    self.host,
+                    reason,
+                )
             if self._auth_error_callback is not None:
                 self._auth_error_callback()
 

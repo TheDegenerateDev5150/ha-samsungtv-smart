@@ -134,6 +134,15 @@
   (SSL + token), and persists the working port to the config entry. On a
   genuine 2024 model whose 8002 is firmware-filtered, the 8002 attempt simply
   fails and the existing guard trips one flip later — no port ping-pong.
+- **Clearer log when a TV has no working secure 8002 channel**: when the remote
+  channel has already flipped 8001 → 8002 and the secure channel *also* keeps
+  rejecting, the integration now says so explicitly instead of logging a
+  generic "re-pair required". Per the decompiled TV server
+  (`notes/QN55LS03FAFXZA/PORTS.md`), some firmwares fail to bring up the 8002
+  TLS vhost at all (`can't create vhost for '8002' port`, observed on some 2020
+  Frames), so neither 8001 nor 8002 can complete the token handshake — and a
+  re-pair can't fix what is a TV-side limitation. The new message names that
+  case directly to save debugging time.
 
 ## Stale "connection not authorized" notification fix
 
