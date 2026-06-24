@@ -336,6 +336,9 @@ async def _load_motion_options(
                     "motion_sensitivity"
                 )
                 timer_item = await art_api.get_artmode_settings("motion_timer")
+                brightness_sensor_item = await art_api.get_artmode_settings(
+                    "brightness_sensor_setting"
+                )
 
             entities = []
 
@@ -364,6 +367,25 @@ async def _load_motion_options(
                         device_unique_id,
                         options,
                         timer_item.get("value"),
+                    )
+                )
+
+            # Brightness sensor is on/off; the TV reports a value but no
+            # valid_values, so the option list is fixed (the only accepted
+            # values per the firmware).
+            if (
+                isinstance(brightness_sensor_item, dict)
+                and brightness_sensor_item.get("value") is not None
+            ):
+                entities.append(
+                    SamsungTVArtBrightnessSensorSelect(
+                        hass,
+                        entry,
+                        art_api,
+                        device_name,
+                        device_unique_id,
+                        ["off", "on"],
+                        str(brightness_sensor_item.get("value")),
                     )
                 )
 
@@ -816,6 +838,25 @@ class SamsungTVArtMotionTimerSelect(SamsungTVArtMotionSelectBase):
 
     async def _async_set(self, option: str) -> None:
         await self._art_api.set_motion_timer(option)
+
+
+class SamsungTVArtBrightnessSensorSelect(SamsungTVArtMotionSelectBase):
+    """Select entity for the Art Mode ambient brightness sensor (on/off).
+
+    The TV reports this setting's current value but no valid_values, so the
+    options are fixed to off/on (per the firmware, the only accepted values).
+    """
+
+    _attr_icon = "mdi:brightness-auto"
+    _setting_name = "brightness_sensor_setting"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._attr_unique_id = f"{self._device_unique_id}_art_brightness_sensor"
+        self._attr_name = "Brightness Sensor"
+
+    async def _async_set(self, option: str) -> None:
+        await self._art_api.set_brightness_sensor_setting(option)
 
 
 # ══════════════════════════════════════════════════════════════════════════

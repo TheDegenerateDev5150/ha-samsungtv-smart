@@ -1503,6 +1503,22 @@ class SamsungTVAsyncArt:
             self._invalidate_artmode_settings_cache()
         return data is not None
 
+    async def set_brightness_sensor_setting(self, value: str) -> bool:
+        """Enable/disable the Art Mode ambient brightness sensor.
+
+        Accepts ``"on"`` / ``"off"`` (per the decompiled firmware, calls
+        ScreenManagerSetBrightnessSensorEnableValue). Only supported on Frame
+        models that report `get_artmode_settings("brightness_sensor_setting")`.
+        No dedicated get request exists; read the current value back via
+        get_artmode_settings.
+        """
+        data = await self._send_art_request(
+            {"request": "set_brightness_sensor_setting", "value": value}
+        )
+        if data is not None:
+            self._invalidate_artmode_settings_cache()
+        return data is not None
+
     async def get_auto_rotation_status(self) -> dict | None:
         """Get auto rotation settings."""
         return await self._send_art_request({"request": "get_auto_rotation_status"})
