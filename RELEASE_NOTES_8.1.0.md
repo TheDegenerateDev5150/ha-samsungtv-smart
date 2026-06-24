@@ -7,6 +7,16 @@
 
 ## IP Control
 
+- **No more `ERROR ... TV is powered off` log noise from the state sensors**:
+  the read-only IP Control state coordinator (`getTVStates`/`getVideoStates`)
+  already skipped polling while the TV is off, but it did so by raising
+  `UpdateFailed("TV is powered off")`. Home Assistant logs the first failure of
+  each streak at `ERROR`, so every off→on transition produced a fresh
+  `ERROR ... Error fetching IP Control state ... TV is powered off` line. A
+  powered-off TV is an expected, recurring condition — not a failure — so the
+  coordinator now returns a `powered_off` snapshot instead of raising. The state
+  sensors still go *unavailable* while the TV is off (via that flag), but no
+  ERROR is logged.
 - **REST / WebSocket port no longer fight on split-port TVs (~2020 Frames)**:
   some 2020 Frames serve the REST/HTTP API on **8001** while the secure token
   WebSocket + Art channel live on **8002**. All three channels persisted their

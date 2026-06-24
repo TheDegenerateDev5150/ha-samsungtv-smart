@@ -1953,8 +1953,17 @@ class IPControlStateCoordinator(DataUpdateCoordinator):
         try:
             # Skip the snapshots while the TV is off: the getters would return
             # stale values, and this avoids needless traffic to a sleeping TV.
+            # A powered-off TV is an expected, recurring condition — NOT an
+            # update failure — so do not raise UpdateFailed here. Doing so makes
+            # HA log an ERROR on the first cycle of every off streak (i.e. once
+            # per off->on transition), spamming the log. Instead return a
+            # "powered_off" snapshot and let the sensors report unavailable via
+            # that flag, keeping last_update_success True (no ERROR).
             if await client.async_get_power_state() == "powerOff":
-                raise UpdateFailed("TV is powered off")
+                self._log.debug(
+                    "IP Control state: TV is powered off, skipping state poll"
+                )
+                return {"tv": {}, "video": {}, "powered_off": True}
 
             tv_states = await client.async_get_tv_states()
             video_states = await client.async_get_video_states()
@@ -1970,7 +1979,7 @@ class IPControlStateCoordinator(DataUpdateCoordinator):
             raise UpdateFailed(f"IP Control state read failed: {ex}") from ex
 
         clear_token_problem(self.hass, self._entry.entry_id, METHOD_IP_CONTROL)
-        return {"tv": tv_states, "video": video_states}
+        return {"tv": tv_states, "video": video_states, "powered_off": False}
 
 
 class IPControlStateSensor(CoordinatorEntity, SensorEntity):
@@ -2009,8 +2018,17 @@ class IPControlStateSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def available(self) -> bool:
-        """Available only while IP Control is active and the last poll worked."""
+        """Available only while IP Control is active and the TV is on.
+
+        A powered-off TV is reported through the coordinator data (not as an
+        update failure), so honor that flag here to mark the sensor
+        unavailable while the TV is off without logging an ERROR each cycle.
+        """
         entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        data = self.coordinator.data or {}
         return bool(
-            entry and _ip_control_active(entry) and self.coordinator.last_update_success
+            entry
+            and _ip_control_active(entry)
+            and self.coordinator.last_update_success
+            and not data.get("powered_off")
         )
