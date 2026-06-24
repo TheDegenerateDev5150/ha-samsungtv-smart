@@ -210,6 +210,17 @@
   materializes new content locally — exactly when a previously-uncached Art
   Store thumbnail becomes fetchable — so the skipped thumbnail is retried as
   soon as it can actually succeed, instead of waiting for the next poll.
+- **Art Store thumbnail no longer takes minutes to appear**: two fixes that
+  together caused a freshly favorited/displayed Art Store image to keep showing
+  the *previous* artwork's thumbnail for several minutes (until the displayed
+  artwork happened to change). First, the "do we already have this thumbnail?"
+  check is now **content-aware** — a leftover `current.jpg` from an earlier
+  artwork no longer masquerades as the current content's thumbnail and
+  suppresses the fetch. Second, favoriting Art Store content does **not** emit
+  an `image_added` broadcast (only personal uploads do), so relying on that
+  event alone meant the retry never fired; the integration now arms a short
+  retry cooldown after an uncached Art Store miss and picks the thumbnail up
+  within ~30s of the TV caching it, without re-fetching on every poll.
 
 ## Art channel WebSocket — zombie-socket recovery
 
