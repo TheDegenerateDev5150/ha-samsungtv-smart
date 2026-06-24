@@ -69,6 +69,18 @@
   `art='on'` after the TV was switched off. This never calls the firmware-risky
   `artModeControl` method, so it is safe regardless of the Art Mode option.
 
+## Art Mode — settings entities
+
+- **New "Brightness Sensor" select** (Frame models that report it): the Art Mode
+  ambient brightness sensor (on/off) is now exposed as a select alongside the
+  existing **Motion Sensitivity** and **Motion Timer** selects, all read/write
+  over the Art channel. Created only when the TV reports the setting. This rounds
+  out the Art Mode settings the TV exposes via `get_artmode_settings`
+  (`brightness`, `color_temperature`, `motion_sensitivity`, `motion_timer`,
+  `brightness_sensor_setting`). Note: the Frame's general *Sleep Timer*
+  (System → Time, disabled in Art Mode) is **not** exposed by any channel — the
+  motion-based auto-off in Art Mode is the **Motion Timer** select.
+
 ## Art Mode switch — slow refresh after toggle fix
 
 - **Switch no longer snaps back ~25s after toggling Art Mode**: the IP Control
