@@ -75,6 +75,13 @@ def _ip_control_active(entry: ConfigEntry) -> bool:
 # settings change slowly, so a relaxed cadence keeps JSON-RPC traffic light.
 IP_CONTROL_STATE_SCAN_INTERVAL = timedelta(seconds=30)
 
+# How long to wait before re-fetching the thumbnail of an Art Store (SAM-*)
+# artwork the TV has not cached locally yet. The TV materializes the thumbnail
+# a little while after the content is displayed/favorited; this bounded retry
+# recovers within seconds of that happening without hammering the art channel
+# on every poll.
+STORE_THUMBNAIL_RETRY_INTERVAL = 30  # seconds
+
 
 @dataclass(frozen=True, kw_only=True)
 class SamsungIPControlSensorDescription(SensorEntityDescription):
@@ -492,6 +499,18 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         self._entry = entry
         self._hass = hass
         self._last_content_id: str | None = None
+        # content_id that the saved current.jpg actually represents. Tracked
+        # separately from "does current.jpg exist on disk" so a stale file from
+        # a previous artwork cannot masquerade as the current content's
+        # thumbnail (which used to block re-fetching for minutes — see
+        # _has_thumbnail_for).
+        self._current_thumbnail_content_id: str | None = None
+        # Art Store (SAM-*) content the TV has not cached yet: remember which
+        # content_id is pending and the earliest time to retry, so we recover
+        # within seconds of the TV materializing it without re-fetching on
+        # every single poll.
+        self._store_retry_content_id: str | None = None
+        self._store_retry_at: float | None = None
         # Enabled by default - thumbnails are fetched for current artwork
         self._thumbnail_fetch_enabled = True
         self._thumbnail_failures = 0
@@ -627,19 +646,32 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                         "Frame Art: Thumbnail auto-fetch disabled, skipping %s",
                         content_id,
                     )
-            elif (
+            # Re-fetch when the content changed OR we don't actually hold this
+            # content's thumbnail. The check is content-aware (not just "does
+            # current.jpg exist"): a stale file from a previous artwork must not
+            # block fetching the current one. For Art Store content the TV has
+            # not cached yet, a short cooldown throttles the retry so we recover
+            # within seconds of it becoming available without polling-hammering.
+            need_thumbnail = (
+                content_id != self._last_content_id
+                or not self._has_thumbnail_for(content_id)
+            )
+            store_retry_waiting = (
+                self._store_retry_content_id == content_id
+                and self._store_retry_at is not None
+                and time.time() < self._store_retry_at
+            )
+            if (
                 content_id
                 and not thumbnail_in_backoff
-                and (
-                    content_id != self._last_content_id
-                    or not self._has_current_thumbnail()
-                )
+                and need_thumbnail
+                and not store_retry_waiting
             ):
                 self._log.info(
                     "Frame Art: Triggering thumbnail fetch for %s (changed: %s, has_thumbnail: %s)",
                     content_id,
                     content_id != self._last_content_id,
-                    self._has_current_thumbnail(),
+                    self._has_thumbnail_for(content_id),
                 )
                 # Schedule thumbnail fetch as background task (non-blocking)
                 self._hass.async_create_background_task(
@@ -653,11 +685,18 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                     self._thumbnail_backoff_until - time.time(),
                     content_id,
                 )
+            elif content_id and store_retry_waiting:
+                self._log.debug(
+                    "Frame Art: Art Store thumbnail %s not cached yet, next "
+                    "retry in %.0fs",
+                    content_id,
+                    self._store_retry_at - time.time(),
+                )
             elif content_id:
                 self._log.debug(
                     "Frame Art: Skipping thumbnail fetch - same content_id %s, has_thumbnail: %s",
                     content_id,
-                    self._has_current_thumbnail(),
+                    self._has_thumbnail_for(content_id),
                 )
 
             # If we have a saved thumbnail, use it
@@ -855,6 +894,26 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             "www", "frame_art", self._entry.entry_id, "current.jpg"
         )
         return os.path.isfile(www_path)
+
+    def _clear_store_retry(self, content_id: str) -> None:
+        """Clear the Art Store retry cooldown once ``content_id`` is resolved."""
+        if self._store_retry_content_id == content_id:
+            self._store_retry_content_id = None
+            self._store_retry_at = None
+
+    def _has_thumbnail_for(self, content_id: str) -> bool:
+        """Whether current.jpg exists AND actually represents ``content_id``.
+
+        ``_has_current_thumbnail`` only checks the file on disk, so a leftover
+        current.jpg from a previously displayed artwork would otherwise look
+        like a valid thumbnail for the new content and suppress the fetch. Gate
+        on the tracked content_id so we keep (re)fetching until we genuinely
+        hold this artwork's thumbnail.
+        """
+        return (
+            self._current_thumbnail_content_id == content_id
+            and self._has_current_thumbnail()
+        )
 
     def _create_error_placeholder(self) -> bytes:
         """Create a generic download error placeholder image.
@@ -1152,6 +1211,8 @@ class FrameArtCoordinator(DataUpdateCoordinator):
 
             self._log.info("Frame Art: Successfully saved thumbnail for %s", content_id)
             self._thumbnail_failures = 0
+            self._current_thumbnail_content_id = content_id
+            self._clear_store_retry(content_id)
             self.async_set_updated_data(self.data)
             return
 
@@ -1167,17 +1228,24 @@ class FrameArtCoordinator(DataUpdateCoordinator):
 
         # Art Store content the TV hasn't materialized yet: the failure is
         # structural (no local thumbnail exists), not a transport problem.
-        # Log it calmly and leave it — do NOT write an error placeholder or
-        # trip the global backoff. The next image_added / image_selected
-        # broadcast for this content will retrigger the fetch once the TV has
-        # actually cached it.
+        # Log it calmly and leave the current image — do NOT write an error
+        # placeholder or trip the global backoff. The TV caches the thumbnail a
+        # little while after the content is displayed/favorited; favoriting Art
+        # Store content does NOT emit an image_added broadcast (only personal
+        # uploads do), so we cannot rely on an event to retrigger the fetch.
+        # Instead arm a short retry cooldown so the next poll after it elapses
+        # re-attempts and picks the thumbnail up within seconds of it becoming
+        # available, rather than stalling until the artwork happens to change.
         if is_store_content:
+            self._store_retry_content_id = content_id
+            self._store_retry_at = time.time() + STORE_THUMBNAIL_RETRY_INTERVAL
             self._log.debug(
                 "Frame Art: No thumbnail for Art Store content %s yet "
                 "(last error: %s) — the TV only caches it once it has been "
-                "displayed/favorited. Leaving current image unchanged.",
+                "displayed/favorited. Will retry in %ds.",
                 content_id,
                 last_error,
+                STORE_THUMBNAIL_RETRY_INTERVAL,
             )
             return
 
@@ -1267,6 +1335,8 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 subdir,
             )
             self._thumbnail_failures = 0
+            self._current_thumbnail_content_id = content_id
+            self._clear_store_retry(content_id)
             self.async_set_updated_data(self.data)
 
         return promoted
