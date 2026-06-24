@@ -74,6 +74,7 @@ from .const import (
     CONF_OAUTH_TOKEN,
     CONF_PING_PORT,
     CONF_POWER_ON_METHOD,
+    CONF_REST_PORT,
     CONF_SHOW_CHANNEL_NR,
     CONF_SOURCE_LIST,
     CONF_ST_ENTRY_UNIQUE_ID,
@@ -932,6 +933,10 @@ class SamsungTVSmartOAuth2FlowHandler(
         updates = {
             CONF_HOST: self._host,
             CONF_PORT: self._tv_info.ws_port,
+            # Drop any REST port learned for the previous connection so REST
+            # re-learns from the freshly chosen port instead of keeping a stale
+            # value (the TV behind this entry may have changed).
+            CONF_REST_PORT: None,
             # Re-detect Art API get-capabilities after a reconfigure (the TV
             # behind this entry may have changed); None forces a fresh probe.
             CONF_SUPPORTS_GET_BRIGHTNESS: None,

@@ -327,19 +327,24 @@ class SamsungTVAsyncArt:
             if await self._connect_once(self._port):
                 return True
 
+            previous_port = self._port
             alternate_port = 8001 if self._port == 8002 else 8002
             self._log.debug(
                 "Art API: Port %d failed, trying alternate port %d",
-                self._port,
+                previous_port,
                 alternate_port,
             )
+            # _connect_once already sets self._port to the port it succeeds on,
+            # so log previous_port (not self._port) to avoid a nonsensical
+            # "Port changed from N to N" line.
             if await self._connect_once(alternate_port):
-                self._log.warning(
-                    "Art API: Port changed from %d to %d "
-                    "(likely a firmware update filtered the previous port)",
-                    self._port,
-                    alternate_port,
-                )
+                if previous_port != alternate_port:
+                    self._log.warning(
+                        "Art API: Port changed from %d to %d "
+                        "(likely a firmware update filtered the previous port)",
+                        previous_port,
+                        alternate_port,
+                    )
                 self._port = alternate_port
                 self._learn_port(alternate_port)
                 return True
