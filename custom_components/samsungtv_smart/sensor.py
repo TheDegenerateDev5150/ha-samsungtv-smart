@@ -1025,17 +1025,35 @@ class FrameArtCoordinator(DataUpdateCoordinator):
     async def _fetch_and_save_thumbnail(self, content_id: str) -> None:
         """Fetch and save thumbnail in background (non-blocking).
 
-        Uses retry logic to handle transient failures: the Samsung Art API
-        sometimes returns 0 bytes when the TV is busy or the WebSocket is slow.
-        These are NOT DRM failures — thumbnails are never DRM-protected.
+        For personal photos (MY_F*) a 0-byte / failed response is usually a
+        transient transport issue (TV busy, slow WebSocket), so retries help.
+
+        For Art Store content (SAM-S*) it is different: the TV only keeps a
+        thumbnail in its local cache (``data/download_thumbnail_contents/``)
+        once the item has actually been downloaded — i.e. displayed, favorited
+        or otherwise materialized. Until then ``get_thumbnail`` returns
+        ``SYSTEM_FAIL`` / 0 bytes because there is genuinely nothing to serve.
+        That is structural, not transient, so hammering it with retries + an
+        error placeholder + a global backoff (the previous behavior) just
+        spammed the log for content that was never going to resolve until the
+        TV materialized it. Such content is fetched on a single attempt and, on
+        failure, left quietly for the next ``image_added`` / ``image_selected``
+        broadcast to retrigger.
         """
         import os
 
         self._log.info("Frame Art: Starting thumbnail fetch for %s", content_id)
 
-        # Retry logic: up to 3 attempts with progressive delays.
-        max_retries = 3
-        retry_delays = [1, 2, 5]  # seconds
+        # Art Store (SAM-S*) thumbnails only exist once the TV has materialized
+        # the content locally; retrying before that is pointless. Personal
+        # photos can fail transiently, so they keep the multi-attempt retry.
+        is_store_content = content_id.startswith("SAM-S")
+        if is_store_content:
+            max_retries = 1
+            retry_delays: list[int] = []
+        else:
+            max_retries = 3
+            retry_delays = [1, 2, 5]  # seconds
         thumbnail_data = None
         last_error = None
 
@@ -1147,13 +1165,30 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         if await self._restore_current_from_cache(content_id):
             return
 
+        # Art Store content the TV hasn't materialized yet: the failure is
+        # structural (no local thumbnail exists), not a transport problem.
+        # Log it calmly and leave it — do NOT write an error placeholder or
+        # trip the global backoff. The next image_added / image_selected
+        # broadcast for this content will retrigger the fetch once the TV has
+        # actually cached it.
+        if is_store_content:
+            self._log.debug(
+                "Frame Art: No thumbnail for Art Store content %s yet "
+                "(last error: %s) — the TV only caches it once it has been "
+                "displayed/favorited. Leaving current image unchanged.",
+                content_id,
+                last_error,
+            )
+            return
+
         # No cached copy available — save generic error placeholder.
-        # NOT a DRM issue: thumbnails are never DRM-protected.
+        # Personal photos are never DRM-protected; a failure here is a
+        # transient transport issue (TV busy, WebSocket lag).
         self._thumbnail_failures += 1
         self._log.warning(
             "Frame Art: Could not download thumbnail for %s after %d attempts "
             "(last error: %s), and no cached copy was found. "
-            "Transient transport failure, not DRM.",
+            "Transient transport failure.",
             content_id,
             max_retries,
             last_error,
