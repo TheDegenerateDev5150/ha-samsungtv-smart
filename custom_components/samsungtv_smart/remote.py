@@ -13,9 +13,7 @@ from homeassistant.components.media_player.const import (
 )
 from homeassistant.components.media_player.const import DOMAIN as MP_DOMAIN
 from homeassistant.components.media_player.const import SERVICE_PLAY_MEDIA
-from homeassistant.components.remote import ATTR_NUM_REPEATS
-from homeassistant.components.remote import DOMAIN as REMOTE_DOMAIN
-from homeassistant.components.remote import RemoteEntity
+from homeassistant.components.remote import ATTR_NUM_REPEATS, RemoteEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_SERVICE,
@@ -53,13 +51,7 @@ async def async_setup_entry(
         for tv_entity in tv_entries:
             if tv_entity.domain == MP_DOMAIN:
                 mp_entity_id = tv_entity.entity_id
-            elif tv_entity.domain == REMOTE_DOMAIN:
-                # A remote entity already exists for this entry. This callback is
-                # scheduled via async_call_later and is not cancelled on unload,
-                # so a rapid reload can fire a stale pending callback on top of
-                # the new setup's — adding a second remote with the same unique
-                # id ("does not generate unique IDs ... ignoring"). Skip it.
-                return
+                break
 
         if mp_entity_id is None:
             return
@@ -67,8 +59,15 @@ async def async_setup_entry(
         config = hass.data[DOMAIN][entry.entry_id][DATA_CFG]
         async_add_entities([SamsungTVRemote(config, entry.entry_id, mp_entity_id)])
 
-    # we wait for TV media player entity to be created
-    async_call_later(hass, 5, _add_remote_entity)
+    # We wait for the TV media player entity to be created. Cancel this pending
+    # callback on unload — otherwise a rapid reload fires the stale callback
+    # from the previous setup on top of the new one, registering a duplicate
+    # unique id ("does not generate unique IDs ... ignoring"). The entity
+    # registry is NOT a substitute check for this: it persists across full HA
+    # restarts, so probing it here used to make the remote entity silently
+    # never get (re)created after the very first restart.
+    cancel_add_remote_entity = async_call_later(hass, 5, _add_remote_entity)
+    entry.async_on_unload(cancel_add_remote_entity)
 
 
 class SamsungTVRemote(SamsungTVEntity, RemoteEntity):
