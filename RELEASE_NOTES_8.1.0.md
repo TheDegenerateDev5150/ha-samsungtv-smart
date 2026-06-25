@@ -1,5 +1,23 @@
 # Release notes — 8.1.0 (since 8.0.0)
 
+## Diagnostics — easier troubleshooting of automations/scripts referencing a config entry
+
+- **New `config_entry_id` attribute on the media_player entity**: automations
+  or scripts that call `homeassistant.reload_config_entry` (or any other
+  entry_id-keyed service) directly can silently target a stale entry_id after
+  a TV is re-paired, with no obvious link back to the entity from the
+  resulting error. The current entry_id is now exposed as a state attribute,
+  so it can be checked directly from the entity instead of pulling a full
+  diagnostics dump.
+- **Stale `oauth_auth_failed_<entry_id>` Repairs issues no longer outlive their
+  config entry**: this issue is normally cleared automatically once a
+  SmartThings OAuth refresh succeeds again, but that only happens through the
+  entity that raised it. If the entry is removed (e.g. re-paired as a new
+  entry after the old one stopped refreshing), nothing ever clears the old
+  issue again — it just sits in the issue registry indefinitely, surviving
+  even after the user dismisses it in the UI. It's now deleted when its
+  config entry is removed.
+
 ## Art Mode — faster switch/media_player updates when toggling Art Mode
 
 - **`art_set_artmode`/the Art Mode switch could take up to 5s to confirm a

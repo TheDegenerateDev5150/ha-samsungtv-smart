@@ -183,6 +183,7 @@ ART_MODE_MEDIA_TITLE = "Art Mode"
 ATTR_IP_ADDRESS = "ip_address"
 ATTR_PICTURE_MODE = "picture_mode"
 ATTR_PICTURE_MODE_LIST = "picture_mode_list"
+ATTR_CONFIG_ENTRY_ID = "config_entry_id"
 
 CMD_OPEN_BROWSER = "open_browser"
 CMD_RUN_APP = "run_app"
@@ -2278,7 +2279,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
     @property
     def extra_state_attributes(self):
         """Return the optional state attributes."""
-        data = {ATTR_IP_ADDRESS: self._host}
+        # Surfaced mainly for troubleshooting: automations/scripts that
+        # reference a config entry directly (e.g. homeassistant.reload_config_entry)
+        # silently break after a re-pairing changes the entry_id, with no
+        # obvious link back to this entity from the error alone.
+        data = {ATTR_IP_ADDRESS: self._host, ATTR_CONFIG_ENTRY_ID: self._entry_id}
 
         # Art Mode status: delegate to _art_mode_is_on(), the single source of
         # truth (it layers IP Control cache → REST PowerState='standby' →
