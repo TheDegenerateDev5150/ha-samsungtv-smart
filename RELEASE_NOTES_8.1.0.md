@@ -1,5 +1,23 @@
 # Release notes — 8.1.0 (since 8.0.0)
 
+## Remote entity — fix regression where Home/Source/Power/Menu stopped working
+
+- **Remote entity silently stopped being (re)created after a restart**: 8.1.0b15
+  added a guard against a duplicate `remote.<tv>` entity (caused by a rapid
+  reload firing a stale 5s-delayed setup callback on top of the new one) by
+  checking the **entity registry** for an existing `remote` entry before
+  creating one. That check was wrong: the entity registry persists across full
+  Home Assistant restarts, so on the very first normal restart after updating,
+  it always found the previous session's registry entry and bailed out —
+  meaning the remote entity was never actually added again, for any TV, until
+  the integration happened to reload in a way that cleared it. This is what
+  broke the Home/Source/Power/Menu/d-pad commands (which go through the
+  `remote.<tv>` entity) starting at 8.1.0b15. Fixed by properly cancelling the
+  pending 5s callback on unload (`entry.async_on_unload`) instead of probing
+  the persistent registry — the original duplicate-add race is still
+  prevented, but normal restarts now recreate the remote entity correctly
+  every time.
+
 > **Status: pre-release (beta).** 8.1.0 builds on the stable 8.0.0 three-channel
 > rework with IP Control reliability and observability improvements.
 
