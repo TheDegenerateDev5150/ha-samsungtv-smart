@@ -131,6 +131,11 @@ class SamsungTVAsyncArt:
 
         # Async handling
         self._pending_requests: dict[str, asyncio.Future] = {}
+        # set_artmode() waiters: some Frames never echo the matching
+        # request_id, only the art_mode_changed broadcast. Resolved as soon
+        # as that broadcast arrives, instead of always paying the full
+        # request timeout.
+        self._art_mode_broadcast_waiters: list[asyncio.Future] = []
         self._recv_task: asyncio.Task | None = None
         self._connected = False
 
@@ -615,6 +620,10 @@ class SamsungTVAsyncArt:
         elif sub_event == "art_mode_changed":
             self.art_mode = data.get("status") == "on"
             self._fire_art_event()
+            for future in self._art_mode_broadcast_waiters:
+                if not future.done():
+                    future.set_result(None)
+            self._art_mode_broadcast_waiters.clear()
         elif sub_event == "go_to_standby":
             # Ambiguous, not a definitive "art mode off": the panel also
             # fires this when it dims for its own power-save sleep timer
@@ -1262,23 +1271,53 @@ class SamsungTVAsyncArt:
         """Set art mode on or off."""
         if isinstance(mode, bool):
             mode = "on" if mode else "off"
-        data = await self._send_art_request(
-            {
-                "request": "set_artmode_status",
-                "value": mode,
-            }
-        )
-        if data is not None:
-            return True
-        # Fallback for older Frames (e.g. 2020/2021): these confirm the change
-        # by broadcasting an `art_mode_changed` event that carries no
-        # request_id, so it never matches the pending request and the send
-        # above times out even though the TV did switch. The event handler
-        # already updates self.art_mode from that broadcast, so trust it here
-        # rather than reporting a false failure. If the TV genuinely did not
-        # change, self.art_mode won't match the requested state and we still
-        # return False — so the success path is unchanged.
         desired = mode == "on"
+
+        # Some Frames (e.g. 2020/2021) never echo the matching request_id for
+        # set_artmode_status, only the art_mode_changed broadcast — and that
+        # broadcast carries no request_id either, so it can't be awaited via
+        # _send_art_request's normal matching. Race both: whichever confirms
+        # first (the direct response, or the broadcast updating self.art_mode)
+        # wins, instead of always paying the full request timeout.
+        broadcast_future = asyncio.get_event_loop().create_future()
+        self._art_mode_broadcast_waiters.append(broadcast_future)
+        request_task = asyncio.ensure_future(
+            self._send_art_request(
+                {
+                    "request": "set_artmode_status",
+                    "value": mode,
+                }
+            )
+        )
+        try:
+            done, _ = await asyncio.wait(
+                {request_task, broadcast_future},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if request_task in done and request_task.result() is not None:
+                return True
+            if self.art_mode == desired:
+                if broadcast_future in done:
+                    self._log.debug(
+                        "Art API: set_artmode(%s) confirmed early by an "
+                        "art_mode_changed broadcast",
+                        mode,
+                    )
+                return True
+            if request_task not in done:
+                await request_task
+                if request_task.result() is not None:
+                    return True
+        finally:
+            if broadcast_future in self._art_mode_broadcast_waiters:
+                self._art_mode_broadcast_waiters.remove(broadcast_future)
+            if not request_task.done():
+                request_task.cancel()
+
+        # Final fallback: the request timed out and no broadcast arrived in
+        # time either. If the TV's state already matches what we asked for
+        # (e.g. a late broadcast resolved it after our wait above), treat it
+        # as success; otherwise report a genuine failure.
         if self.art_mode == desired:
             self._log.debug(
                 "Art API: set_artmode(%s) timed out, but an art_mode_changed "

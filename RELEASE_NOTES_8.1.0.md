@@ -1,5 +1,17 @@
 # Release notes — 8.1.0 (since 8.0.0)
 
+## Art Mode — faster switch/media_player updates when toggling Art Mode
+
+- **`art_set_artmode`/the Art Mode switch could take up to 5s to confirm a
+  change**: some Frames (e.g. 2020/2021) never echo a matching response to
+  `set_artmode_status` — only an `art_mode_changed` broadcast confirms the
+  change, and that broadcast carries no request id, so it couldn't be matched
+  to the pending request and the call always waited out the full 5s timeout
+  before falling back to checking the broadcast-updated state. The wait now
+  races the direct response against that broadcast and returns as soon as
+  either confirms the requested state, instead of always paying the full
+  timeout.
+
 ## Remote entity — fix regression where Home/Source/Power/Menu stopped working
 
 - **Remote entity silently stopped being (re)created after a restart**: 8.1.0b15
