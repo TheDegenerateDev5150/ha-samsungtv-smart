@@ -577,6 +577,33 @@ Mitigations built into this fork:
 - Active connection cleanup to prevent zombie connections
 - Use the **nightly reload automation** above as a preventive measure.
 
+### Recurring "IP Control state read failed" / "Host is unreachable" errors
+
+If your log shows repeated errors like this, spaced minutes apart, for a TV that is otherwise powered on and working:
+
+```
+Error fetching IP Control state <name> data: IP Control state read failed:
+transport failure talking to <ip>:1516: [Errno 113] Host is unreachable
+Error fetching IP Control state <name> data: IP Control state read failed:
+transport failure talking to <ip>:1516: timed out
+```
+
+These are network-layer errors (the TV briefly becomes unreachable at the IP
+level), not something the integration can retry around — it just means the
+TV's network connection dropped for a moment.
+
+The most common cause is a **DHCP lease renewal hiccup**: even with a DHCP
+reservation, a short or unstable lease can cause brief unreachability when it
+renews. The fix is to **configure a fully static IP on the TV itself**
+instead of relying on a router-side reservation:
+
+- On the TV: **Settings → General → Network → Network Status/Settings → IP Settings → Manual**, and enter the IP, subnet, gateway and DNS yourself.
+
+This removes DHCP renewal from the equation entirely. If the errors persist
+after switching to a static IP, also check the network switch port the TV is
+plugged into (port resets, re-negotiation, rising CRC/error counters point to
+a cabling/port issue rather than the integration).
+
 ### SmartThings features not working
 
 - Verify your API key/token has `Devices` permissions.
