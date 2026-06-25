@@ -41,6 +41,7 @@ from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import STORAGE_DIR
 from homeassistant.helpers.typing import ConfigType
 
@@ -1098,6 +1099,13 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         hass.data[DOMAIN].pop(entry.entry_id, None)
         if not hass.data[DOMAIN]:
             hass.data.pop(DOMAIN)
+    # The entry is gone for good (unlike unload/reload), so any Repairs issue
+    # keyed to its entry_id (e.g. oauth_auth_failed_<entry_id>) can never be
+    # cleared by a future successful refresh on this entry — nothing will ever
+    # call _clear_oauth_issue() for it again. Without this, dismissing the
+    # issue in the UI only hides it; the registry entry itself outlives the
+    # entry it refers to and clutters diagnostics indefinitely.
+    ir.async_delete_issue(hass, DOMAIN, f"oauth_auth_failed_{entry.entry_id}")
 
 
 # Options whose change adds/removes platforms or clients and therefore needs a
