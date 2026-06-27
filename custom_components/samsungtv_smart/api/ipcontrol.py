@@ -84,6 +84,16 @@ class SamsungIPControlModeLockedError(SamsungIPControlError):
     """
 
 
+class SamsungIPControlTransportError(SamsungIPControlError):
+    """Network-layer failure reaching the TV (timeout, host unreachable, etc).
+
+    Distinct from an application-level error: on many Frames (notably the
+    2020/2021 sets) the TV drops off the network entirely when powered off,
+    so a transport failure on the IP Control port is indistinguishable from
+    "the TV is simply off" and should not be treated as a hard error.
+    """
+
+
 class SamsungIPControl:
     """Minimal async client for the Samsung IP Control JSON-RPC interface."""
 
@@ -518,7 +528,7 @@ class SamsungIPControl:
                     f"TLS error talking to {self._host}:{self._port}: {ex}"
                 ) from ex
             except (TimeoutError, OSError) as ex:
-                raise SamsungIPControlError(
+                raise SamsungIPControlTransportError(
                     f"transport failure talking to {self._host}:{self._port}: {ex}"
                 ) from ex
             finally:
