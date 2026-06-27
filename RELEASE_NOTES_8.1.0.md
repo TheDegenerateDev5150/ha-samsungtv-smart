@@ -1,5 +1,20 @@
 # Release notes — 8.1.0 (since 8.0.0)
 
+## IP Control — no more ERROR spam when the TV is simply off
+
+- **Transport-layer failures on the IP Control port are no longer logged as
+  ERROR**: on Frames that drop off the network entirely when powered off
+  (notably the 2020/2021 sets), a state read fails with `Host is unreachable`
+  / `timed out` / `Connection refused` — which is indistinguishable from "the
+  TV is simply off". The state coordinator already returns a quiet
+  `powered_off` snapshot once it knows the TV is off, but when the very probe
+  used to learn that can't reach the TV, the transport failure used to
+  surface as a recurring `ERROR ... IP Control state read failed`. These
+  network-layer failures are now treated like a powered-off snapshot (the
+  state sensors go *unavailable*, logged at DEBUG) instead of an update
+  failure. Genuine application errors (bad picture mode, malformed responses,
+  token rejection) are unaffected and still surface as before.
+
 ## Diagnostics — easier troubleshooting of automations/scripts referencing a config entry
 
 - **New `config_entry_id` attribute on the media_player entity**: automations

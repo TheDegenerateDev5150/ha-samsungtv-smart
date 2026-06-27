@@ -43,6 +43,7 @@ from .api.ipcontrol import (
     SamsungIPControl,
     SamsungIPControlAuthError,
     SamsungIPControlError,
+    SamsungIPControlTransportError,
 )
 from .const import (
     CONF_API_KEY,
@@ -2144,6 +2145,20 @@ class IPControlStateCoordinator(DataUpdateCoordinator):
                 self._device_title(),
             )
             raise UpdateFailed(f"IP Control token rejected: {ex}") from ex
+        except SamsungIPControlTransportError as ex:
+            # A network-layer failure (timeout, host unreachable, connection
+            # refused) is indistinguishable from "the TV is simply off" on the
+            # Frames that drop off the network when powered down — and the
+            # power-state probe above raises this very error when it can't
+            # reach the TV to learn it's off in the first place. Treat it like
+            # a powered-off snapshot (sensors go unavailable, no ERROR) instead
+            # of UpdateFailed, which would log an ERROR on every off streak for
+            # a perfectly normal condition. Genuine application errors still
+            # fall through to the UpdateFailed branch below.
+            self._log.debug(
+                "IP Control state: transport failure (TV likely off): %s", ex
+            )
+            return {"tv": {}, "video": {}, "powered_off": True}
         except SamsungIPControlError as ex:
             raise UpdateFailed(f"IP Control state read failed: {ex}") from ex
 
