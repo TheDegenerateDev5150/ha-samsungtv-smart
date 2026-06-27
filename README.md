@@ -317,7 +317,7 @@ These are called on the `media_player` entity.
 **Sending key commands via `play_media`:**
 
 ```yaml
-service: media_player.play_media
+action: media_player.play_media
 target:
   entity_id: media_player.samsung_tv
 data:
@@ -357,9 +357,10 @@ These services require a Samsung **Frame TV** with Art Mode. They are called on 
 **Select an artwork:**
 
 ```yaml
-service: samsungtv_smart.art_select_image
-data:
+action: samsungtv_smart.art_select_image
+target:
   entity_id: media_player.samsung_frame
+data:
   content_id: SAM-F0206
   show: true
 ```
@@ -367,9 +368,10 @@ data:
 **Upload a local image:**
 
 ```yaml
-service: samsungtv_smart.art_upload
-data:
+action: samsungtv_smart.art_upload
+target:
   entity_id: media_player.samsung_frame
+data:
   file_path: /config/www/my_art.jpg
   matte_id: modern_apricot
   file_type: jpg
@@ -378,9 +380,10 @@ data:
 **Batch download thumbnails:**
 
 ```yaml
-service: samsungtv_smart.art_get_thumbnails_batch
-data:
+action: samsungtv_smart.art_get_thumbnails_batch
+target:
   entity_id: media_player.samsung_frame
+data:
   category_id: MY-C0002
   favorites_only: false
   force_download: false
@@ -389,9 +392,10 @@ data:
 **Configure slideshow:**
 
 ```yaml
-service: samsungtv_smart.art_set_slideshow
-data:
+action: samsungtv_smart.art_set_slideshow
+target:
   entity_id: media_player.samsung_frame
+data:
   duration: 15min
   shuffle: true
   category_id: 2

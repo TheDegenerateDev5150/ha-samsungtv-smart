@@ -1,5 +1,18 @@
 # Release notes — 8.1.0 (since 8.0.0)
 
+## Services — proper entity target (`target:`) instead of an `entity_id` data field
+
+- **All services now declare a `target:` selector** instead of listing
+  `entity_id` as a required data field. The services were already registered
+  as entity services (so targeting worked under the hood), but `services.yaml`
+  modelled `entity_id` as a plain data field — which made Developer Tools
+  insist `entity_id` be passed under `data:` and contradicted the documented
+  `target:` examples. The UI now shows a normal target picker, the modern
+  `action:` + `target:` syntax works as expected, and existing automations
+  that pass `entity_id` under `data:` keep working unchanged.
+- **README service examples updated** to the modern `action:` + `target:`
+  form (ahead of the `service:` → `action:` deprecation).
+
 ## IP Control — no more ERROR spam when the TV is simply off
 
 - **Transport-layer failures on the IP Control port are no longer logged as

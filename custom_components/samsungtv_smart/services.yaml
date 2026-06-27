@@ -1,15 +1,10 @@
 select_picture_mode:
   name: Select Picture Mode
   description: Send to samsung TV the command to change picture mode.
+  target:
+    entity:
+      integration: samsungtv_smart
   fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      example: "media_player.tv"
-      selector:
-        entity:
-          integration: samsungtv_smart
     picture_mode:
       name: Picture Mode
       description: Name of the picture mode to switch to. Possible options
@@ -24,26 +19,17 @@ select_picture_mode:
 art_get_artmode:
   name: Get Art Mode Status
   description: Get the current Art Mode status from Samsung Frame TV.
-  fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
+  target:
+    entity:
+      integration: samsungtv_smart
 
 art_set_artmode:
   name: Set Art Mode Status
   description: Enable or disable Art Mode on Samsung Frame TV.
+  target:
+    entity:
+      integration: samsungtv_smart
   fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
     enabled:
       name: Enabled
       description: True to enable Art Mode, False to disable
@@ -55,14 +41,10 @@ art_set_artmode:
 art_available:
   name: Get Available Artwork
   description: Get list of all available artwork on the Samsung Frame TV.
+  target:
+    entity:
+      integration: samsungtv_smart
   fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
     category_id:
       name: Category ID
       description: Optional category filter (MY-C0002 for My Photos, MY-C0004 for Favorites)
@@ -74,26 +56,17 @@ art_available:
 art_get_current:
   name: Get Current Artwork
   description: Get information about the currently displayed artwork.
-  fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
+  target:
+    entity:
+      integration: samsungtv_smart
 
 art_select_image:
   name: Select Artwork
   description: Select and display a specific piece of artwork.
+  target:
+    entity:
+      integration: samsungtv_smart
   fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
     content_id:
       name: Content ID
       description: The content ID of the artwork (e.g., SAM-F0206, MY-F0001)
@@ -118,14 +91,10 @@ art_select_image:
 art_upload:
   name: Upload Artwork
   description: Upload an image file to the Samsung Frame TV.
+  target:
+    entity:
+      integration: samsungtv_smart
   fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
     file_path:
       name: File Path
       description: Path to the image file to upload
@@ -155,14 +124,10 @@ art_upload:
 art_delete:
   name: Delete Artwork
   description: Delete an uploaded artwork from the TV. Only user-uploaded content (MY-* or MY_*) can be deleted.
+  target:
+    entity:
+      integration: samsungtv_smart
   fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
     content_id:
       name: Content ID
       description: The content ID to delete (must start with MY- or MY_)
@@ -174,14 +139,10 @@ art_delete:
 art_get_thumbnail:
   name: Get Artwork Thumbnail
   description: Download the thumbnail image for a specific piece of artwork. Thumbnails are saved to /config/www/frame_art/ in organized subdirectories (personal/, store/, other/). Skips if file already exists unless Force Download is enabled. Works with all image types including Samsung Art Store.
+  target:
+    entity:
+      integration: samsungtv_smart
   fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
     content_id:
       name: Content ID
       description: The content ID of the artwork (e.g., MY_F0001 for personal photos, SAM-S* for Art Store)
@@ -200,14 +161,10 @@ art_get_thumbnail:
 art_get_thumbnails_batch:
   name: Batch Download Artwork Thumbnails
   description: Download thumbnails for multiple artworks at once. Automatically organizes into /config/www/frame_art/personal/, /store/, /other/. Skips files that already exist (unless Force Download is enabled). All image types supported equally - NO DRM assumptions! Perfect for Lovelace galleries.
+  target:
+    entity:
+      integration: samsungtv_smart
   fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
     category_id:
       name: Category ID
       description: Optional category filter (MY-C0002=My Photos, MY-C0004=Favorites, MY-C0008=All). Leave empty for all artworks.
@@ -240,14 +197,10 @@ art_get_thumbnails_batch:
 art_set_brightness:
   name: Set Art Mode Brightness
   description: Set the brightness level for Art Mode display. Input 0-100 is converted to TV's 1-10 scale.
+  target:
+    entity:
+      integration: samsungtv_smart
   fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
     brightness:
       name: Brightness
       description: Brightness level (0-100, converted to TV's 1-10 scale)
@@ -262,26 +215,17 @@ art_set_brightness:
 art_get_brightness:
   name: Get Art Mode Brightness
   description: Get the current brightness level for Art Mode display. Returns both TV scale (1-10) and UI scale (0-100).
-  fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
+  target:
+    entity:
+      integration: samsungtv_smart
 
 art_set_color_temperature:
   name: Set Art Mode Color Temperature
   description: Set the color temperature for Art Mode display. Range -5 to +5 (negative = warmer, 0 = neutral, positive = cooler).
+  target:
+    entity:
+      integration: samsungtv_smart
   fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
     color_temperature:
       name: Color Temperature
       description: Color temperature value (-5 = warmest, 0 = neutral, +5 = coolest)
@@ -296,26 +240,17 @@ art_set_color_temperature:
 art_get_color_temperature:
   name: Get Art Mode Color Temperature
   description: Get the current color temperature for Art Mode display.
-  fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
+  target:
+    entity:
+      integration: samsungtv_smart
 
 art_change_matte:
   name: Change Artwork Matte
   description: Change the matte/frame style for a piece of artwork.
+  target:
+    entity:
+      integration: samsungtv_smart
   fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
     content_id:
       name: Content ID
       description: The content ID of the artwork
@@ -333,14 +268,10 @@ art_change_matte:
 art_set_photo_filter:
   name: Set Photo Filter
   description: Apply a photo filter effect to artwork.
+  target:
+    entity:
+      integration: samsungtv_smart
   fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
     content_id:
       name: Content ID
       description: The content ID of the artwork
@@ -369,38 +300,24 @@ art_set_photo_filter:
 art_get_photo_filter_list:
   name: Get Photo Filter List
   description: Get list of available photo filters.
-  fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
+  target:
+    entity:
+      integration: samsungtv_smart
 
 art_get_matte_list:
   name: Get Matte List
   description: Get list of available matte styles.
-  fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
+  target:
+    entity:
+      integration: samsungtv_smart
 
 art_set_favourite:
   name: Set Favourite Status
   description: Add or remove artwork from favourites.
+  target:
+    entity:
+      integration: samsungtv_smart
   fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
     content_id:
       name: Content ID
       description: The content ID of the artwork
@@ -421,14 +338,10 @@ art_set_favourite:
 art_set_slideshow:
   name: Set Slideshow
   description: Configure artwork slideshow settings.
+  target:
+    entity:
+      integration: samsungtv_smart
   fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
     duration:
       name: Duration
       description: >-
@@ -478,14 +391,10 @@ art_set_auto_rotation:
     art_set_slideshow — both service names are aliases that target the
     Frame TV's artwork rotation feature; the integration routes the
     request to whichever underlying Samsung API the TV responds to.
+  target:
+    entity:
+      integration: samsungtv_smart
   fields:
-    entity_id:
-      name: Entity Name
-      description: Name of the target entity
-      required: true
-      selector:
-        entity:
-          integration: samsungtv_smart
     duration:
       name: Duration
       description: >-
