@@ -3444,6 +3444,14 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 # Force immediate update 🚀
                 await self._force_art_coordinator_refresh()
 
+                # The TV often needs a while (sometimes minutes) to generate the
+                # thumbnail for a just-uploaded image, so the immediate batch
+                # fetch fails for it ("No data"/"Connection reset") and the
+                # gallery shows a missing thumbnail until a later refresh happens
+                # to pick it up. Retry this specific content_id with backoff in
+                # the background until its thumbnail is available.
+                self.hass.async_create_task(self._retry_new_thumbnail(content_id))
+
                 return {"success": True, "content_id": content_id}
 
             self._log.error("Frame Art: Upload failed - no content_id returned")
@@ -3454,6 +3462,41 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
             self._log.debug("Frame Art: Upload traceback: %s", traceback.format_exc())
             return {"error": str(ex)}
+
+    async def _retry_new_thumbnail(self, content_id: str) -> None:
+        """Fetch a just-uploaded image's thumbnail once the TV has built it.
+
+        Right after an upload the TV hasn't finished generating the thumbnail,
+        so the immediate batch download fails for it. Retry this one content_id
+        with a back-off (well past the TV's typical generation delay), stopping
+        as soon as it's available so the gallery fills in without waiting for an
+        unrelated later refresh.
+        """
+        # ~6.5 min total: covers the multi-minute generation delay seen in logs.
+        retry_delays = [15, 30, 60, 120, 180]
+        for delay in retry_delays:
+            await asyncio.sleep(delay)
+            try:
+                result = await self.async_art_get_thumbnail(content_id)
+            except Exception as ex:  # noqa: BLE001 - best-effort background retry
+                self._log.debug(
+                    "Frame Art: delayed thumbnail retry for %s errored: %s",
+                    content_id,
+                    ex,
+                )
+                continue
+            if result and not result.get("error"):
+                self._log.info(
+                    "Frame Art: thumbnail for %s is now available (delayed retry)",
+                    content_id,
+                )
+                # Nudge the gallery/sensor so it shows the new thumbnail now.
+                await self._force_art_coordinator_refresh()
+                return
+        self._log.debug(
+            "Frame Art: thumbnail for %s still unavailable after delayed retries",
+            content_id,
+        )
 
     async def async_art_delete(self, content_id: str) -> dict:
         """Delete an uploaded piece of artwork."""

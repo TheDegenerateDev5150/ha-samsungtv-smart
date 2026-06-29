@@ -1,5 +1,15 @@
 # Release notes — 8.1.0 (since 8.0.0)
 
+## Art upload — new image's thumbnail no longer stays missing for minutes
+
+- **After uploading an image, its thumbnail is now fetched once the TV has
+  generated it**: the TV can take a while (sometimes minutes) to build the
+  thumbnail for a just-uploaded image, so the immediate batch download failed
+  for it ("No data" / "Connection reset") and the gallery showed a missing
+  thumbnail until an unrelated later refresh happened to pick it up. The upload
+  now retries that specific image's thumbnail in the background with a back-off
+  (up to ~6.5 min) and refreshes the gallery as soon as it lands.
+
 ## Folder Gallery card — new `double_tap_action`
 
 - **The gallery card now supports `double_tap_action`** (HA's standard action
