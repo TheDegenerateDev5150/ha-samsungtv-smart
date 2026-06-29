@@ -5,8 +5,13 @@
 - **The gallery card now supports `double_tap_action`** (HA's standard action
   option), so you can wire e.g. single tap → lightbox preview, double tap →
   display the artwork on the TV, and long press → display too. When a
-  `double_tap_action` is configured, a single tap is delayed briefly (~250 ms)
+  `double_tap_action` is configured, a single tap is delayed briefly (~300 ms)
   to tell the two apart; without it, single taps stay instant.
+- **Double-tap detection now survives gallery re-renders**: the timing state is
+  tracked on the card (keyed by image index) instead of per-element, so a
+  sensor update that re-renders the gallery between the two clicks no longer
+  makes the second click look like a fresh first tap (which opened the lightbox
+  instead of running `double_tap_action`).
 
 ## Folder Gallery card — `hold_action` now works on touch
 
