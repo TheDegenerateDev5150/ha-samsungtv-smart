@@ -32,6 +32,10 @@ class FolderGalleryCard extends HTMLElement {
     this.attachShadow({ mode: 'open' });
     this._images = [];
     this._config = {};
+    // Double-tap detection state (survives gallery re-renders).
+    this._dtIndex = -1;
+    this._dtTime = 0;
+    this._dtTimer = null;
   }
 
   static get properties() {
@@ -567,14 +571,13 @@ class FolderGalleryCard extends HTMLElement {
     // long-press swallows that trailing click.
     const LONG_PRESS_MS = 500;
     const MOVE_TOLERANCE = 10;
-    const DOUBLE_TAP_MS = 250;
+    const DOUBLE_TAP_MS = 300;
     const hasDoubleTap = !!this._config.double_tap_action;
     container.querySelectorAll('.gallery-item').forEach(item => {
       let pressTimer = null;
       let holdFired = false;
       let startX = 0;
       let startY = 0;
-      let clickTimer = null;
 
       const clearTimer = () => {
         if (pressTimer) {
@@ -623,14 +626,28 @@ class FolderGalleryCard extends HTMLElement {
           return;
         }
 
-        if (clickTimer) {
-          clearTimeout(clickTimer);
-          clickTimer = null;
-          this.executeAction(this._images[parseInt(item.dataset.index)],
-                             this._config.double_tap_action);
+        // Double-tap state lives on the instance (keyed by image index), not in
+        // this closure: a sensor update can re-render the gallery between the
+        // two clicks, recreating the element and losing any per-element timer —
+        // which made the second click look like a fresh first click and opened
+        // the lightbox instead of firing double_tap_action.
+        const index = parseInt(item.dataset.index);
+        const now = Date.now();
+        if (this._dtIndex === index && (now - this._dtTime) < DOUBLE_TAP_MS) {
+          if (this._dtTimer) {
+            clearTimeout(this._dtTimer);
+            this._dtTimer = null;
+          }
+          this._dtIndex = -1;
+          this._dtTime = 0;
+          this.executeAction(this._images[index], this._config.double_tap_action);
         } else {
-          clickTimer = setTimeout(() => {
-            clickTimer = null;
+          this._dtIndex = index;
+          this._dtTime = now;
+          if (this._dtTimer) clearTimeout(this._dtTimer);
+          this._dtTimer = setTimeout(() => {
+            this._dtTimer = null;
+            this._dtIndex = -1;
             this.handleClick(e, item);
           }, DOUBLE_TAP_MS);
         }
