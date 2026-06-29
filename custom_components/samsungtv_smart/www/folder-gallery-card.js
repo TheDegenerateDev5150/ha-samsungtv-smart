@@ -59,6 +59,7 @@ class FolderGalleryCard extends HTMLElement {
       action: config.action || null,
       tap_action: config.tap_action || null,
       hold_action: config.hold_action || null,
+      double_tap_action: config.double_tap_action || null,
       sensor: config.sensor || null, // Sensor that provides image list
       image_list: config.image_list || null, // Static list of images
       ...config
@@ -558,10 +559,86 @@ class FolderGalleryCard extends HTMLElement {
       </div>
     `;
 
-    // Add click handlers
+    // Add click + long-press handlers.
+    // Long-press is detected with a pointer timer rather than the `contextmenu`
+    // event: contextmenu doesn't fire reliably on touch / the HA Companion app,
+    // and a `click` always follows the release — which used to open the lightbox
+    // (tap_action) on top of, or instead of, the hold_action. Here a fired
+    // long-press swallows that trailing click.
+    const LONG_PRESS_MS = 500;
+    const MOVE_TOLERANCE = 10;
+    const DOUBLE_TAP_MS = 250;
+    const hasDoubleTap = !!this._config.double_tap_action;
     container.querySelectorAll('.gallery-item').forEach(item => {
-      item.addEventListener('click', (e) => this.handleClick(e, item));
-      item.addEventListener('contextmenu', (e) => this.handleHold(e, item));
+      let pressTimer = null;
+      let holdFired = false;
+      let startX = 0;
+      let startY = 0;
+      let clickTimer = null;
+
+      const clearTimer = () => {
+        if (pressTimer) {
+          clearTimeout(pressTimer);
+          pressTimer = null;
+        }
+      };
+
+      item.addEventListener('pointerdown', (e) => {
+        holdFired = false;
+        startX = e.clientX;
+        startY = e.clientY;
+        clearTimer();
+        pressTimer = setTimeout(() => {
+          holdFired = true;
+          this.handleHold(e, item);
+        }, LONG_PRESS_MS);
+      });
+
+      item.addEventListener('pointermove', (e) => {
+        // Treat a finger/cursor drag as a scroll, not a press.
+        if (Math.abs(e.clientX - startX) > MOVE_TOLERANCE ||
+            Math.abs(e.clientY - startY) > MOVE_TOLERANCE) {
+          clearTimer();
+        }
+      });
+
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach((evt) =>
+        item.addEventListener(evt, clearTimer));
+
+      item.addEventListener('click', (e) => {
+        if (holdFired) {
+          // A long-press already handled this interaction; swallow the click so
+          // tap_action (e.g. lightbox) doesn't also fire on release.
+          e.preventDefault();
+          e.stopPropagation();
+          holdFired = false;
+          return;
+        }
+
+        // Without a double_tap_action, fire the single tap immediately (no
+        // added latency). With one configured, debounce: a second click within
+        // the window is a double tap; otherwise the single tap fires on timeout.
+        if (!hasDoubleTap) {
+          this.handleClick(e, item);
+          return;
+        }
+
+        if (clickTimer) {
+          clearTimeout(clickTimer);
+          clickTimer = null;
+          this.executeAction(this._images[parseInt(item.dataset.index)],
+                             this._config.double_tap_action);
+        } else {
+          clickTimer = setTimeout(() => {
+            clickTimer = null;
+            this.handleClick(e, item);
+          }, DOUBLE_TAP_MS);
+        }
+      });
+
+      // Suppress the native context menu on long-press / right-click so it
+      // doesn't interrupt the hold.
+      item.addEventListener('contextmenu', (e) => e.preventDefault());
     });
   }
 

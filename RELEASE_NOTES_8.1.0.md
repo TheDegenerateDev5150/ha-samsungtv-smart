@@ -1,5 +1,23 @@
 # Release notes — 8.1.0 (since 8.0.0)
 
+## Folder Gallery card — new `double_tap_action`
+
+- **The gallery card now supports `double_tap_action`** (HA's standard action
+  option), so you can wire e.g. single tap → lightbox preview, double tap →
+  display the artwork on the TV, and long press → display too. When a
+  `double_tap_action` is configured, a single tap is delayed briefly (~250 ms)
+  to tell the two apart; without it, single taps stay instant.
+
+## Folder Gallery card — `hold_action` now works on touch
+
+- **Long-press (`hold_action`) is detected reliably and no longer opens the
+  lightbox on release**: the card used to bind the hold to the `contextmenu`
+  event, which doesn't fire consistently on touch / the Companion app, and the
+  trailing `click` then triggered `tap_action` (e.g. the lightbox) anyway. Hold
+  detection now uses a pointer timer (with a small movement tolerance so a
+  scroll isn't mistaken for a press) and swallows the click that follows a
+  fired long-press, so `hold_action` runs on its own.
+
 ## Folder Gallery card — explicit `folder:` as a `/config/www/...` path no longer breaks thumbnails
 
 - **An explicitly-set `folder:` given as a filesystem path** (e.g.

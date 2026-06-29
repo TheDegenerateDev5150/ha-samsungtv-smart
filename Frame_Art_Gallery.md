@@ -242,7 +242,8 @@ action:
 | `border_radius` | string | `8px` | Image border radius |
 | `show_filename` | boolean | `true` | Show filename on hover |
 | `filter` | string | `*` | File filter pattern |
-| `tap_action` | string/object | - | Action on tap |
+| `tap_action` | string/object | - | Action on single tap (e.g. `lightbox`, or a service/perform-action object) |
+| `double_tap_action` | object | - | Action on double tap (e.g. select the artwork directly). When set, a single tap is delayed slightly to detect the double tap. |
 | `hold_action` | object | - | Action on long press |
 | `action` | object | - | Default action (used by lightbox Select button) |
 
@@ -253,6 +254,32 @@ action:
 | `lightbox` | Open image in fullscreen lightbox with smart action buttons |
 | `action` | Execute the configured action directly |
 | `more-info` | Show entity more-info dialog |
+
+### Example: tap = preview, double-tap = select, hold = select
+
+```yaml
+type: custom:folder-gallery-card
+title: Gallery Personal
+folder_sensor: sensor.samsung_hacs_personal
+columns: 4
+aspect_ratio: "1"
+tap_action: lightbox          # single tap → open the preview
+double_tap_action:            # double tap → display the artwork on the TV
+  perform_action: samsungtv_smart.art_select_image
+  target:
+    entity_id: media_player.samsung_hacs
+  data:
+    content_id: "{{content_id}}"
+hold_action:                  # long press → display the artwork on the TV
+  perform_action: samsungtv_smart.art_select_image
+  target:
+    entity_id: media_player.samsung_hacs
+  data:
+    content_id: "{{content_id}}"
+```
+
+> When `double_tap_action` is set, a single tap is held back briefly (~250 ms)
+> to tell the two apart, so `tap_action` fires a touch later than usual.
 
 ### Template Variables
 
