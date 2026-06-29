@@ -137,8 +137,10 @@ so you can point the card straight at them with **no manual configuration**:
 ```yaml
 type: custom:folder-gallery-card
 folder_sensor: sensor.mastertv_store
-folder: /local/frame_art/YOUR_ENTRY_ID/store
 ```
+
+(No `folder:` line needed — see [the note below](#basic-configuration) on what
+`folder:` is actually for.)
 
 **Legacy / optional:** if you prefer the built-in Home Assistant `folder`
 platform (for example to watch a custom directory the integration doesn't
@@ -204,11 +206,23 @@ action:
     content_id: "{{content_id}}"
 ```
 
-> **Note:** with a `folder_sensor` (a `platform: folder` sensor whose `path` is
-> under `/config/www/`), the card derives the `/local/...` URL automatically, so
-> a separate `folder:` line is **not** needed. Only set `folder:` explicitly if
-> your files live somewhere the card can't derive (a path outside
-> `/config/www/`).
+> **What does `folder:` actually do? (usually: nothing you need to set)**
+>
+> The **image list** always comes from the `folder_sensor` / `sensor` (a
+> `platform: folder` sensor) or from `image_list`. A browser can't list a
+> directory from a URL, so `folder:` is *only* the base URL prepended to each
+> filename to build the thumbnail `<img>` src — it never produces the list
+> itself.
+>
+> - **Folder sensor under `/config/www/`** (the normal case): the card derives
+>   the `/local/...` URL automatically from the sensor's `path`, so you **don't
+>   need `folder:` at all**. That's why the examples omit it.
+> - **Set `folder:` only when the card can't derive the URL** — files served
+>   from outside `/config/www/`, or a custom/template sensor whose `file_list`
+>   has bare filenames and no `path`. Give a `/local/...` URL (a
+>   `/config/www/...` path is also accepted and mapped to `/local/...`).
+> - **`folder:` with no sensor and no `image_list` → empty gallery.** On its own
+>   it can't list any files.
 >
 > The action also accepts the modern syntax — `perform_action:` instead of
 > `service:`, or an object-form `tap_action:` — in addition to the legacy
@@ -220,7 +234,7 @@ action:
 |--------|------|---------|-------------|
 | `title` | string | - | Card title |
 | `folder_sensor` | string | - | Folder sensor entity ID |
-| `folder` | string | *(auto)* | Base folder path (e.g., `/local/frame_art/store`). Optional — auto-derived from `folder_sensor`'s `path` when it's under `/config/www/`. Only needed for paths the card can't derive. |
+| `folder` | string | *(auto)* | Base **URL** for thumbnails (e.g., `/local/frame_art/store`). Optional — auto-derived from `folder_sensor`'s `path` when under `/config/www/`. Does **not** provide the image list (a sensor or `image_list` does). A `/config/www/...` value is accepted and mapped to `/local/...`. |
 | `columns` | number | `4` | Number of columns |
 | `image_height` | string | `150px` | Image height (ignored if `aspect_ratio` set) |
 | `aspect_ratio` | string | - | Aspect ratio (e.g., `1`, `16/9`, `3/4`) |
