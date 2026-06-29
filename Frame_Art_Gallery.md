@@ -137,8 +137,10 @@ so you can point the card straight at them with **no manual configuration**:
 ```yaml
 type: custom:folder-gallery-card
 folder_sensor: sensor.mastertv_store
-folder: /local/frame_art/YOUR_ENTRY_ID/store
 ```
+
+(No `folder:` line needed — see [the note below](#basic-configuration) on what
+`folder:` is actually for.)
 
 **Legacy / optional:** if you prefer the built-in Home Assistant `folder`
 platform (for example to watch a custom directory the integration doesn't
@@ -204,15 +206,23 @@ action:
     content_id: "{{content_id}}"
 ```
 
-> **Where do the images come from?** The *list* of images always comes from a
-> `folder_sensor` / `sensor` (a `platform: folder` sensor) or from `image_list`.
-> A browser can't enumerate a directory from a URL, so **`folder:` on its own
-> shows nothing** — it only supplies the base URL the thumbnails are loaded
-> from. With a folder sensor whose `path` is under `/config/www/`, the card
-> derives that `/local/...` URL automatically, so a separate `folder:` line
-> isn't needed. Set `folder:` only to override it; you can give it as a
-> `/local/...` URL or a `/config/www/...` path (both are accepted — the latter
-> is mapped to `/local/...` for you).
+> **What does `folder:` actually do? (usually: nothing you need to set)**
+>
+> The **image list** always comes from the `folder_sensor` / `sensor` (a
+> `platform: folder` sensor) or from `image_list`. A browser can't list a
+> directory from a URL, so `folder:` is *only* the base URL prepended to each
+> filename to build the thumbnail `<img>` src — it never produces the list
+> itself.
+>
+> - **Folder sensor under `/config/www/`** (the normal case): the card derives
+>   the `/local/...` URL automatically from the sensor's `path`, so you **don't
+>   need `folder:` at all**. That's why the examples omit it.
+> - **Set `folder:` only when the card can't derive the URL** — files served
+>   from outside `/config/www/`, or a custom/template sensor whose `file_list`
+>   has bare filenames and no `path`. Give a `/local/...` URL (a
+>   `/config/www/...` path is also accepted and mapped to `/local/...`).
+> - **`folder:` with no sensor and no `image_list` → empty gallery.** On its own
+>   it can't list any files.
 >
 > The action also accepts the modern syntax — `perform_action:` instead of
 > `service:`, or an object-form `tap_action:` — in addition to the legacy

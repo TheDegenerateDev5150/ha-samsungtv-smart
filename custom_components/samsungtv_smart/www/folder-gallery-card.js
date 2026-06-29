@@ -984,23 +984,36 @@ class FolderGalleryCardEditor extends HTMLElement {
           background: var(--card-background-color);
           color: var(--primary-text-color);
         }
+        .form-row .hint {
+          display: block;
+          margin-top: 4px;
+          font-size: 0.8em;
+          font-weight: normal;
+          color: var(--secondary-text-color);
+        }
       </style>
-      
+
       <div class="form-row">
         <label>Title</label>
         <input type="text" id="title" value="${this._config.title || ''}">
       </div>
-      
+
       <div class="form-row">
-        <label>Folder Path</label>
-        <input type="text" id="folder" value="${this._config.folder || ''}" placeholder="/local/images">
-      </div>
-      
-      <div class="form-row">
-        <label>Sensor (provides image list)</label>
+        <label>Sensor (provides the image list)</label>
         <input type="text" id="folder_sensor" value="${this._config.folder_sensor || this._config.sensor || ''}" placeholder="sensor.your_folder_sensor">
+        <span class="hint">Required — a <code>platform: folder</code> sensor (e.g. <code>sensor.&lt;tv&gt;_store</code>). This is what lists the images.</span>
       </div>
-      
+
+      <div class="form-row">
+        <label>Folder Path (optional)</label>
+        <input type="text" id="folder" value="${this._config.folder || ''}" placeholder="auto-detected from the sensor">
+        <span class="hint">${
+          (this._config.folder_sensor || this._config.sensor)
+            ? 'Auto-detected from the sensor — leave empty unless your files are outside <code>/config/www/</code>.'
+            : 'Only the base URL for thumbnails — it does <b>not</b> list images. On its own it shows nothing; set a sensor above.'
+        }</span>
+      </div>
+
       <div class="form-row">
         <label>Columns</label>
         <input type="number" id="columns" value="${this._config.columns || 4}" min="1" max="10">

@@ -12,6 +12,11 @@
   image *list* always comes from a `folder_sensor` / `sensor` or `image_list`.
   `folder:` on its own shows nothing (a browser can't list a directory from a
   URL).
+- **Visual editor is clearer about `folder:`**: the Sensor field now comes first
+  and is labelled as the required source of the image list; the Folder Path
+  field is marked optional with an inline hint explaining it's auto-detected
+  from the sensor (and shows nothing on its own). Saves the common confusion of
+  setting only a folder path and getting an empty gallery.
 
 ## Folder Gallery card — support the modern `perform_action:` syntax
 
