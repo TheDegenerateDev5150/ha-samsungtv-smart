@@ -1,5 +1,17 @@
 # Release notes — 8.1.0 (since 8.0.0)
 
+## Folder Gallery card — support the modern `perform_action:` syntax
+
+- **The gallery card's tap action now accepts the modern action syntax**: it
+  used to only understand the legacy `action: { service: ... }` shape and
+  silently did nothing with the newer `perform_action:` key or an object-form
+  `tap_action:` (e.g. `{action: perform-action, perform_action: ...}`). Both
+  forms now work, alongside the legacy one which keeps working unchanged.
+- **Docs: `folder:` is optional** — when a `folder_sensor` (a `platform: folder`
+  sensor) reports a `path` under `/config/www/`, the card derives the
+  `/local/...` URL automatically, so the separate `folder:` line is redundant.
+  Clarified in the gallery docs and removed from the basic example.
+
 ## Services — proper entity target (`target:`) instead of an `entity_id` data field
 
 - **All services now declare a `target:` selector** instead of listing
