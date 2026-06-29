@@ -3450,9 +3450,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 # gallery shows a missing thumbnail until a later refresh happens
                 # to pick it up. Retry this specific content_id with backoff in
                 # the background until its thumbnail is available.
-                self.hass.async_create_task(
-                    self._retry_new_thumbnail(content_id)
-                )
+                self.hass.async_create_task(self._retry_new_thumbnail(content_id))
 
                 return {"success": True, "content_id": content_id}
 
