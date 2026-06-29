@@ -678,12 +678,33 @@ class FolderGalleryCard extends HTMLElement {
   handleClick(e, item) {
     const index = parseInt(item.dataset.index);
     const imageData = this._images[index];
-    
+
+    // Modern object-form tap_action, e.g.
+    //   tap_action:
+    //     action: perform-action      # (or the legacy call-service)
+    //     perform_action: samsungtv_smart.art_select_image
+    //     target: {...}
+    //     data: {...}
+    // HA's own cards accept this shape; handle it here so the new syntax works
+    // instead of silently doing nothing (the dispatcher used to only read the
+    // legacy `action: { service: ... }` block).
+    const tapAction = this._config.tap_action;
+    if (tapAction && typeof tapAction === 'object') {
+      if (tapAction.action === 'more-info' && this._config.entity) {
+        this.fireEvent('hass-more-info', { entityId: this._config.entity });
+      } else if (tapAction.action === 'none') {
+        // explicitly do nothing
+      } else {
+        this.executeAction(imageData, tapAction);
+      }
+      return;
+    }
+
     // If tap_action is 'lightbox' or not defined with action, show lightbox
-    if (this._config.tap_action === 'lightbox' || 
+    if (this._config.tap_action === 'lightbox' ||
         (!this._config.tap_action && this._config.action)) {
       this.openLightbox(imageData);
-    } 
+    }
     // Direct action on tap
     else if (this._config.tap_action === 'action' || this._config.action) {
       this.executeAction(imageData);
@@ -709,7 +730,9 @@ class FolderGalleryCard extends HTMLElement {
   executeAction(imageData, actionConfig = null) {
     const action = actionConfig || this._config.action;
     if (!action || !this._hass) return;
-    if (!action.service) return;
+    // Accept both the legacy `service:` key and the modern `perform_action:`
+    // key (HA renamed call-service -> perform-action).
+    if (!action.service && !action.perform_action) return;
 
     // Multi-frame upload routing.
     // When the action is an upload, the gallery points at a local photo
@@ -729,9 +752,9 @@ class FolderGalleryCard extends HTMLElement {
   }
 
   _dispatchAction(imageData, action, entityOverride = null) {
-    if (!action || !this._hass || !action.service) return Promise.resolve();
+    const service = action ? (action.service || action.perform_action) : null;
+    if (!action || !this._hass || !service) return Promise.resolve();
 
-    const service = action.service;
     const [domain, serviceName] = service.split('.');
 
     // Build service data with template substitution
@@ -788,7 +811,7 @@ class FolderGalleryCard extends HTMLElement {
   }
 
   _isUploadAction(action) {
-    const svc = (action.service || '').toLowerCase();
+    const svc = (action.service || action.perform_action || '').toLowerCase();
     if (svc.endsWith('art_upload')) return true;
     // Generic heuristic: an upload-style action carries a file_path payload.
     return !!(action.data && Object.prototype.hasOwnProperty.call(action.data, 'file_path'));
