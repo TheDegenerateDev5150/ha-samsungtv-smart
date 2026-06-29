@@ -558,10 +558,64 @@ class FolderGalleryCard extends HTMLElement {
       </div>
     `;
 
-    // Add click handlers
+    // Add click + long-press handlers.
+    // Long-press is detected with a pointer timer rather than the `contextmenu`
+    // event: contextmenu doesn't fire reliably on touch / the HA Companion app,
+    // and a `click` always follows the release — which used to open the lightbox
+    // (tap_action) on top of, or instead of, the hold_action. Here a fired
+    // long-press swallows that trailing click.
+    const LONG_PRESS_MS = 500;
+    const MOVE_TOLERANCE = 10;
     container.querySelectorAll('.gallery-item').forEach(item => {
-      item.addEventListener('click', (e) => this.handleClick(e, item));
-      item.addEventListener('contextmenu', (e) => this.handleHold(e, item));
+      let pressTimer = null;
+      let holdFired = false;
+      let startX = 0;
+      let startY = 0;
+
+      const clearTimer = () => {
+        if (pressTimer) {
+          clearTimeout(pressTimer);
+          pressTimer = null;
+        }
+      };
+
+      item.addEventListener('pointerdown', (e) => {
+        holdFired = false;
+        startX = e.clientX;
+        startY = e.clientY;
+        clearTimer();
+        pressTimer = setTimeout(() => {
+          holdFired = true;
+          this.handleHold(e, item);
+        }, LONG_PRESS_MS);
+      });
+
+      item.addEventListener('pointermove', (e) => {
+        // Treat a finger/cursor drag as a scroll, not a press.
+        if (Math.abs(e.clientX - startX) > MOVE_TOLERANCE ||
+            Math.abs(e.clientY - startY) > MOVE_TOLERANCE) {
+          clearTimer();
+        }
+      });
+
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach((evt) =>
+        item.addEventListener(evt, clearTimer));
+
+      item.addEventListener('click', (e) => {
+        if (holdFired) {
+          // A long-press already handled this interaction; swallow the click so
+          // tap_action (e.g. lightbox) doesn't also fire on release.
+          e.preventDefault();
+          e.stopPropagation();
+          holdFired = false;
+          return;
+        }
+        this.handleClick(e, item);
+      });
+
+      // Suppress the native context menu on long-press / right-click so it
+      // doesn't interrupt the hold.
+      item.addEventListener('contextmenu', (e) => e.preventDefault());
     });
   }
 
