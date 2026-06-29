@@ -608,6 +608,42 @@ after switching to a static IP, also check the network switch port the TV is
 plugged into (port resets, re-negotiation, rising CRC/error counters point to
 a cabling/port issue rather than the integration).
 
+### "Host is unreachable" / connection-failure logs only when the TV is OFF
+
+If the errors above happen **only while a TV is powered off** (and stop once it's
+on), this is expected behaviour for some Frames — **not** a bug or a network
+problem.
+
+Older Frames (notably the **2020 and 2021** models) **drop off the network
+entirely in standby**: their network chip powers down, so they stop answering
+*everything* incoming — ping, IP Control (port 1516) and the Art WebSocket. From
+the integration's side that's indistinguishable from "the TV is simply off", so a
+read failure there just means the TV is off. (2024+ Frames keep their network
+interface alive in standby and still answer a ping, so they don't show this.)
+
+You can confirm which case you have: with the TV off, `ping <tv-ip>` from any
+machine. No reply → that TV goes fully off the network in standby, and the
+off-state log lines are normal.
+
+Recent versions already keep this quiet: while a TV is off, IP Control transport
+failures and Art channel connection failures are logged at **DEBUG** (with at most
+a single INFO line), not ERROR/WARNING — so real problems still stand out.
+
+**"Then how does Home Assistant turn it back on if it's off the network?"** — it
+doesn't *reach* the TV, it *pushes* a wake signal, and neither path needs the TV
+to be reachable:
+
+- **SmartThings (cloud):** even in deep standby the TV keeps an *outbound*
+  connection to Samsung's cloud (an always-on part, separate from the main
+  network stack). The power-on command goes to the SmartThings cloud, which pushes
+  it down that channel.
+- **Wake-on-LAN:** the network card's WoL engine listens for a magic packet at the
+  Ethernet level even while the OS network stack is down; a magic packet expects no
+  reply, so it works on a TV that won't answer a ping.
+
+Set the wake method per TV with the **Power On Method** option (Wake-on-LAN by
+default; SmartThings or IP Control also available).
+
 ### SmartThings features not working
 
 - Verify your API key/token has `Devices` permissions.
