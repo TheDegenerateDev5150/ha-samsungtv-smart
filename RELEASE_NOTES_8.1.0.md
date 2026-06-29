@@ -1,5 +1,15 @@
 # Release notes — 8.1.0 (since 8.0.0)
 
+## Art API — quieter connection-failure logs
+
+- **Art channel connection failures no longer spam `WARNING`**: a TV that's
+  simply off/unreachable trips this on every poll, and the early attempts
+  usually recover on their own. The intermediate attempts (e.g. 1/3, 2/3) are
+  now logged at DEBUG, and a single `INFO` line is emitted only on the last
+  attempt — when the integration actually gives up and backs off — instead of
+  `WARNING`, since an unreachable TV is an expected condition rather than a
+  fault. The backoff detail line is now DEBUG.
+
 ## Art upload — new image's thumbnail no longer stays missing for minutes
 
 - **After uploading an image, its thumbnail is now fetched once the TV has

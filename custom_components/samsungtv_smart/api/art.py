@@ -389,13 +389,20 @@ class SamsungTVAsyncArt:
             # (not once per port), so a temporarily unreachable TV does not
             # reach the backoff threshold twice as fast.
             self._connection_failures += 1
-            self._log.warning(
+            # A TV that's simply off/unreachable trips this on every poll, and
+            # the early attempts usually recover on their own, so keep them at
+            # DEBUG. Surface a single INFO line only on the last attempt — i.e.
+            # when we actually give up and back off — rather than WARNING, since
+            # an unreachable TV is an expected condition, not a fault.
+            reached_max = self._connection_failures >= self._max_connection_failures
+            self._log.log(
+                logging.INFO if reached_max else logging.DEBUG,
                 "Art API: Connection failure %d/%d",
                 self._connection_failures,
                 self._max_connection_failures,
             )
 
-            if self._connection_failures >= self._max_connection_failures:
+            if reached_max:
                 # Exponential backoff: 2, 5, 10, 20, 30 minutes (capped)
                 backoff_minutes = min(
                     2
@@ -403,7 +410,7 @@ class SamsungTVAsyncArt:
                     30,
                 )
                 self._backoff_until = time.time() + (backoff_minutes * 60)
-                self._log.warning(
+                self._log.debug(
                     "Art API: Too many connection failures (%d), entering %d minute backoff period",
                     self._connection_failures,
                     backoff_minutes,
