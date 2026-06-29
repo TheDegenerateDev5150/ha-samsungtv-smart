@@ -204,11 +204,15 @@ action:
     content_id: "{{content_id}}"
 ```
 
-> **Note:** with a `folder_sensor` (a `platform: folder` sensor whose `path` is
-> under `/config/www/`), the card derives the `/local/...` URL automatically, so
-> a separate `folder:` line is **not** needed. Only set `folder:` explicitly if
-> your files live somewhere the card can't derive (a path outside
-> `/config/www/`).
+> **Where do the images come from?** The *list* of images always comes from a
+> `folder_sensor` / `sensor` (a `platform: folder` sensor) or from `image_list`.
+> A browser can't enumerate a directory from a URL, so **`folder:` on its own
+> shows nothing** — it only supplies the base URL the thumbnails are loaded
+> from. With a folder sensor whose `path` is under `/config/www/`, the card
+> derives that `/local/...` URL automatically, so a separate `folder:` line
+> isn't needed. Set `folder:` only to override it; you can give it as a
+> `/local/...` URL or a `/config/www/...` path (both are accepted — the latter
+> is mapped to `/local/...` for you).
 >
 > The action also accepts the modern syntax — `perform_action:` instead of
 > `service:`, or an object-form `tap_action:` — in addition to the legacy
@@ -220,7 +224,7 @@ action:
 |--------|------|---------|-------------|
 | `title` | string | - | Card title |
 | `folder_sensor` | string | - | Folder sensor entity ID |
-| `folder` | string | *(auto)* | Base folder path (e.g., `/local/frame_art/store`). Optional — auto-derived from `folder_sensor`'s `path` when it's under `/config/www/`. Only needed for paths the card can't derive. |
+| `folder` | string | *(auto)* | Base **URL** for thumbnails (e.g., `/local/frame_art/store`). Optional — auto-derived from `folder_sensor`'s `path` when under `/config/www/`. Does **not** provide the image list (a sensor or `image_list` does). A `/config/www/...` value is accepted and mapped to `/local/...`. |
 | `columns` | number | `4` | Number of columns |
 | `image_height` | string | `150px` | Image height (ignored if `aspect_ratio` set) |
 | `aspect_ratio` | string | - | Aspect ratio (e.g., `1`, `16/9`, `3/4`) |

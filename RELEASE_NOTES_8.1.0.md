@@ -1,5 +1,18 @@
 # Release notes — 8.1.0 (since 8.0.0)
 
+## Folder Gallery card — explicit `folder:` as a `/config/www/...` path no longer breaks thumbnails
+
+- **An explicitly-set `folder:` given as a filesystem path** (e.g.
+  `/config/www/media/Photos`) now resolves correctly: the card maps
+  `/config/www/...` → `/local/...` (the URL Home Assistant actually serves),
+  so thumbnails load instead of all showing as broken images. Previously this
+  mapping was only applied to the path auto-derived from a folder sensor, not
+  to a `folder:` typed by the user.
+- **Docs clarified**: `folder:` only supplies the base URL for thumbnails — the
+  image *list* always comes from a `folder_sensor` / `sensor` or `image_list`.
+  `folder:` on its own shows nothing (a browser can't list a directory from a
+  URL).
+
 ## Folder Gallery card — support the modern `perform_action:` syntax
 
 - **The gallery card's tap action now accepts the modern action syntax**: it

@@ -113,6 +113,13 @@ class FolderGalleryCard extends HTMLElement {
     // If neither yields a usable URL, `folder` stays empty and per-image
     // fallbacks may apply below (image_list with absolute URLs, etc.).
     let folder = (this._config.folder || '').replace(/\/+$/, '');
+    // An explicitly-set folder may be given as a filesystem path
+    // (/config/www/...) rather than the browser URL (/local/...). HA serves
+    // /config/www/ at /local/, so map it — otherwise the <img> src points at a
+    // path the browser can't fetch and every thumbnail breaks.
+    if (folder.startsWith('/config/www/')) {
+      folder = folder.replace(/^\/config\/www\//, '/local/');
+    }
     if (!folder) {
       const sensorEntity = this._config.folder_sensor || this._config.sensor;
       if (sensorEntity) {
