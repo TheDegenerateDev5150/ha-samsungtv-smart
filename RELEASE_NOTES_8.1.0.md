@@ -1,5 +1,17 @@
 # Release notes — 8.1.0 (since 8.0.0)
 
+## Fixes — reload crash + clearer logs
+
+- **`KeyError: 'options'` crash during reload/reconfigure**: the IP art-mode
+  refresh timer (and other `_get_option` callers) accessed `DATA_OPTIONS`
+  unconditionally, which raised `KeyError: 'options'` while `hass.data` was
+  being repopulated mid-reload — surfacing as repeated
+  `Error doing job: Task exception was never retrieved`. `_get_option` now
+  falls back to the default when options aren't present yet.
+- **Auth-token log lines now name the TV**: the `Using OAuth access token` /
+  SmartThings token debug (and the "no valid token" warning) now include the
+  config entry title, so multi-TV setups can tell which TV the line is about.
+
 ## New — Power & Energy consumption sensors (SmartThings)
 
 - **Power (W) and Energy (kWh) sensors** are now created for TVs that report the

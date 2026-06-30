@@ -1410,7 +1410,15 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         """Get option from entity configuration."""
         if not self._entry_data:
             return default
-        option = self._entry_data[DATA_OPTIONS].get(param)
+        # DATA_OPTIONS can be transiently absent from _entry_data during a
+        # reload/reconfigure (hass.data is repopulated step by step). Accessing
+        # it unconditionally raised `KeyError: 'options'` and crashed callers
+        # like the IP art-mode refresh timer ("Task exception was never
+        # retrieved"). Fall back to the default instead.
+        options = self._entry_data.get(DATA_OPTIONS)
+        if not options:
+            return default
+        option = options.get(param)
         return default if option is None else option
 
     def _get_device_spec(self, key: str) -> Any | None:
