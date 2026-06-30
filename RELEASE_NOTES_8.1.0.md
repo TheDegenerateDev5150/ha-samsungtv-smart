@@ -1,5 +1,17 @@
 # Release notes — 8.1.0 (since 8.0.0)
 
+## Art thumbnails — stop re-probing the unsupported list path on 2024+ Frames
+
+- **No more `SYSTEM_FAIL (-1)` log spam per thumbnail on 2024-2025 Frames**:
+  these models don't support `get_thumbnail_list`, but the code probed it
+  before every single thumbnail fetch (logging one SYSTEM_FAIL each, plus a
+  wasted round-trip) before falling back to the working direct `get_thumbnail`.
+  Once the TV returns a definitive `error -1`, the integration now remembers it
+  and goes straight to `get_thumbnail`. The negative is only latched on that
+  explicit code — never on a transient "no response" — so a TV-not-ready blip
+  can't disable the fast path on TVs that do support it. (Cosmetic/perf only,
+  thumbnails worked before via the fallback.)
+
 ## Fixes — reload crash + clearer logs
 
 - **`KeyError: 'options'` crash during reload/reconfigure**: the IP art-mode
