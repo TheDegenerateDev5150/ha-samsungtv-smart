@@ -347,7 +347,13 @@ async def async_setup_entry(
                 main_status = await st_client.get_device_status(device_id)
                 if "powerConsumptionReport" in main_status.get("main", {}):
                     _LOGGER.info("Adding power consumption sensors for %s", device_name)
-                    for measure in ("power", "energy"):
+                    for measure in (
+                        "power",
+                        "energy",
+                        "deltaEnergy",
+                        "powerEnergy",
+                        "energySaved",
+                    ):
                         entities.append(
                             SmartThingsPowerConsumptionSensor(
                                 hass=hass,
@@ -2119,6 +2125,30 @@ class SmartThingsPowerConsumptionSensor(SensorEntity):
             UnitOfEnergy.KILO_WATT_HOUR,
             1000,  # SmartThings reports Wh; HA wants kWh
         ),
+        "deltaEnergy": (
+            "energy_difference",
+            "Energy difference",
+            SensorDeviceClass.ENERGY,
+            SensorStateClass.TOTAL_INCREASING,
+            UnitOfEnergy.KILO_WATT_HOUR,
+            1000,
+        ),
+        "powerEnergy": (
+            "power_energy",
+            "Power energy",
+            SensorDeviceClass.ENERGY,
+            SensorStateClass.TOTAL_INCREASING,
+            UnitOfEnergy.KILO_WATT_HOUR,
+            1000,
+        ),
+        "energySaved": (
+            "energy_saved",
+            "Energy saved",
+            SensorDeviceClass.ENERGY,
+            SensorStateClass.TOTAL_INCREASING,
+            UnitOfEnergy.KILO_WATT_HOUR,
+            1000,
+        ),
     }
 
     def __init__(
@@ -2142,7 +2172,10 @@ class SmartThingsPowerConsumptionSensor(SensorEntity):
         suffix, friendly, dev_class, state_class, unit, divisor = self._MEASURES[
             measure
         ]
-        self._field = suffix
+        # The SmartThings powerConsumption dict is keyed by the measure name
+        # (power, energy, deltaEnergy, powerEnergy, energySaved); suffix is only
+        # used for the entity's unique_id / friendly name.
+        self._field = measure
         self._friendly = friendly
         self._divisor = divisor
         self._attr_device_class = dev_class

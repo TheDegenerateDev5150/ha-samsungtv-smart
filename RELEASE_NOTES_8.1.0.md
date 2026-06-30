@@ -6,7 +6,12 @@
   SmartThings `powerConsumptionReport` capability (same data shown in the
   SmartThings app). They're attached to the TV device, with the proper
   device classes/state classes so they integrate with the HA Energy dashboard.
-  Energy is converted from the Wh SmartThings reports to kWh.
+  Energy values are converted from the Wh SmartThings reports to kWh.
+- **Full parity with the native SmartThings sensors**: in addition to Power and
+  Energy, the *Energy difference* (`deltaEnergy`), *Power energy*
+  (`powerEnergy`) and *Energy saved* (`energySaved`) sensors are now exposed —
+  useful on TVs where the cumulative `energy` field stays 0 and the real
+  consumption is reported in `deltaEnergy`.
 
 ## Art Mode selects — stop polling the art channel while the TV is off
 
