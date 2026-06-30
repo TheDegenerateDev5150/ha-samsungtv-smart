@@ -1,5 +1,13 @@
 # Release notes — 8.1.0 (since 8.0.0)
 
+## New — Power & Energy consumption sensors (SmartThings)
+
+- **Power (W) and Energy (kWh) sensors** are now created for TVs that report the
+  SmartThings `powerConsumptionReport` capability (same data shown in the
+  SmartThings app). They're attached to the TV device, with the proper
+  device classes/state classes so they integrate with the HA Energy dashboard.
+  Energy is converted from the Wh SmartThings reports to kWh.
+
 ## Art Mode selects — stop polling the art channel while the TV is off
 
 - **The Motion Sensitivity / Motion Timer / Brightness Sensor selects no longer

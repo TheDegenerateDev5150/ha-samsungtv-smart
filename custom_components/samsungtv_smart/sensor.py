@@ -26,6 +26,8 @@ from homeassistant.const import (
     CONF_TOKEN,
     LIGHT_LUX,
     EntityCategory,
+    UnitOfEnergy,
+    UnitOfPower,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -338,6 +340,27 @@ async def async_setup_entry(
                 main_location_id,
                 main_room_id,
             )
+
+            # Power/energy consumption sensors on the TV device itself, when the
+            # TV reports the powerConsumptionReport capability over SmartThings.
+            try:
+                main_status = await st_client.get_device_status(device_id)
+                if "powerConsumptionReport" in main_status.get("main", {}):
+                    _LOGGER.info("Adding power consumption sensors for %s", device_name)
+                    for measure in ("power", "energy"):
+                        entities.append(
+                            SmartThingsPowerConsumptionSensor(
+                                hass=hass,
+                                entry=entry,
+                                session=session,
+                                device_id=device_id,
+                                device_name=device_name,
+                                parent_device_id=device_unique_id,
+                                measure=measure,
+                            )
+                        )
+            except Exception as ex:
+                _LOGGER.debug("Could not check power consumption capability: %s", ex)
 
             # Get ALL devices in the location
             all_devices = await st_client.get_devices()
@@ -2066,6 +2089,122 @@ class SmartThingsBrightnessIntensitySensor(SensorEntity):
                 )
         except Exception as ex:
             _LOGGER.warning("Error updating brightness intensity sensor: %s", ex)
+
+
+class SmartThingsPowerConsumptionSensor(SensorEntity):
+    """TV power/energy consumption via SmartThings ``powerConsumptionReport``.
+
+    SmartThings exposes a single ``powerConsumption`` attribute whose value is a
+    dict (``power`` in W, ``energy``/``deltaEnergy`` in Wh, etc.). One instance
+    surfaces one field of that dict as its own sensor.
+    """
+
+    _attr_has_entity_name = True
+
+    # measure -> (suffix, friendly name, device_class, state_class, unit, divisor)
+    _MEASURES = {
+        "power": (
+            "power",
+            "Power",
+            SensorDeviceClass.POWER,
+            SensorStateClass.MEASUREMENT,
+            UnitOfPower.WATT,
+            1,
+        ),
+        "energy": (
+            "energy",
+            "Energy",
+            SensorDeviceClass.ENERGY,
+            SensorStateClass.TOTAL_INCREASING,
+            UnitOfEnergy.KILO_WATT_HOUR,
+            1000,  # SmartThings reports Wh; HA wants kWh
+        ),
+    }
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        session,  # aiohttp session
+        device_id: str,
+        device_name: str,
+        parent_device_id: str,
+        measure: str,
+    ) -> None:
+        """Initialize the sensor."""
+        self.hass = hass
+        self._entry = entry
+        self._session = session
+        self._device_id = device_id
+        self._device_name = device_name
+        self._parent_device_id = parent_device_id
+        self._measure = measure
+        suffix, friendly, dev_class, state_class, unit, divisor = self._MEASURES[
+            measure
+        ]
+        self._field = suffix
+        self._friendly = friendly
+        self._divisor = divisor
+        self._attr_device_class = dev_class
+        self._attr_state_class = state_class
+        self._attr_native_unit_of_measurement = unit
+        self._attr_unique_id = f"{device_id}_{suffix}"
+        self._attr_native_value = None
+
+    async def _get_st_client(self):
+        """Get SmartThings client with current token from config entry."""
+        from pysmartthings import SmartThings
+
+        api_key = await async_get_samsungtv_api_key(self.hass, self._entry)
+        if not api_key:
+            config = self.hass.data[DOMAIN][self._entry.entry_id][DATA_CFG]
+            api_key = config.get(CONF_API_KEY)
+            if not api_key:
+                oauth_token = config.get(CONF_OAUTH_TOKEN)
+                if oauth_token and isinstance(oauth_token, dict):
+                    api_key = oauth_token.get("access_token")
+        if not api_key:
+            return None
+        st_client = SmartThings(session=self._session)
+        st_client.authenticate(api_key)
+        return st_client
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info - link to the TV device."""
+        return DeviceInfo(identifiers={(DOMAIN, self._parent_device_id)})
+
+    @property
+    def name(self) -> str:
+        """Return the name of the sensor."""
+        return self._friendly
+
+    async def async_update(self) -> None:
+        """Update the sensor value from SmartThings."""
+        try:
+            st_client = await self._get_st_client()
+            if not st_client:
+                return
+            components = await st_client.get_device_status(self._device_id)
+            main = components.get("main", {})
+            # Use string capability/attribute names: the dict is keyed that way
+            # and it avoids depending on enum names across pysmartthings versions.
+            report = main.get("powerConsumptionReport", {}).get("powerConsumption")
+            value = getattr(report, "value", None)
+            if not isinstance(value, dict):
+                return
+            raw = value.get(self._field)
+            if raw is None:
+                return
+            self._attr_native_value = round(raw / self._divisor, 3)
+            _LOGGER.debug(
+                "Updated %s sensor for %s: %s",
+                self._field,
+                self._device_name,
+                self._attr_native_value,
+            )
+        except Exception as ex:
+            _LOGGER.warning("Error updating %s sensor: %s", self._field, ex)
 
 
 class IPControlStateCoordinator(DataUpdateCoordinator):
