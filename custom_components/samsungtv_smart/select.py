@@ -9,9 +9,17 @@ import time
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_ID, CONF_NAME, CONF_PORT, CONF_TOKEN
+from homeassistant.const import (
+    CONF_HOST,
+    CONF_ID,
+    CONF_NAME,
+    CONF_PORT,
+    CONF_TOKEN,
+    STATE_OFF,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -791,6 +799,31 @@ class SamsungTVArtMotionSelectBase(SelectEntity):
             name=self._device_name,
         )
 
+    def _tv_powered_off(self) -> bool:
+        """True when the TV is off (and not in Art Mode) — skip art polling.
+
+        Polling ``get_artmode_settings`` over the art WebSocket while the TV is
+        powered off keeps poking the (sleeping) art-app for nothing and can wedge
+        it overnight. Mirror the switch: rely on the media_player's already
+        published state + ``art_mode_status`` attribute instead of issuing our
+        own TV request, so this never adds traffic to a TV that's off.
+        """
+        ent_reg = er.async_get(self.hass)
+        mp_id = None
+        for entity in er.async_entries_for_config_entry(ent_reg, self._entry.entry_id):
+            if entity.domain == "media_player":
+                mp_id = entity.entity_id
+                break
+        if not mp_id:
+            return False  # unknown → don't suppress
+        state = self.hass.states.get(mp_id)
+        if state is None:
+            return False
+        if state.state not in (STATE_OFF, "unavailable"):
+            return False  # TV is on
+        # media_player off/unavailable → TV off UNLESS Art Mode is active
+        return state.attributes.get("art_mode_status") != "on"
+
     async def _async_set(self, option: str) -> None:
         """To be implemented by subclass: call the matching art_api setter."""
         raise NotImplementedError
@@ -806,6 +839,11 @@ class SamsungTVArtMotionSelectBase(SelectEntity):
             ) from ex
 
     async def async_update(self) -> None:
+        # Don't touch the art channel while the TV is off: it's pointless (the
+        # art-app is asleep) and the constant overnight polling can wedge the
+        # art-app by morning. Keep the last known value instead.
+        if self._tv_powered_off():
+            return
         try:
             item = await self._art_api.get_artmode_settings(self._setting_name)
             if item and isinstance(item, dict):
