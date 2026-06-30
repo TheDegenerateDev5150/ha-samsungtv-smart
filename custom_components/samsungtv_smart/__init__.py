@@ -603,10 +603,12 @@ async def async_get_samsungtv_api_key(  # noqa: C901
                         finally:
                             set_oauth_refresh_in_progress(entry.entry_id, False)
 
-                _LOGGER.debug("Using OAuth access token")
+                _LOGGER.debug("[%s] Using OAuth access token", entry.title)
                 return access_token
 
-        _LOGGER.warning("OAuth method configured but no valid token found")
+        _LOGGER.warning(
+            "[%s] OAuth method configured but no valid token found", entry.title
+        )
         return entry.data.get(CONF_API_KEY)
 
     # Method 2: SmartThings Integration token
@@ -615,7 +617,7 @@ async def async_get_samsungtv_api_key(  # noqa: C901
         if st_unique_id:
             api_key = get_smartthings_api_key(hass, st_unique_id)
             if api_key:
-                _LOGGER.debug("Using SmartThings integration token")
+                _LOGGER.debug("[%s] Using SmartThings integration token", entry.title)
                 return api_key
             _LOGGER.warning(
                 "Failed to retrieve SmartThings integration access token, using last available"
