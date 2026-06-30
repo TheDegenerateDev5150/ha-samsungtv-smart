@@ -1,6 +1,16 @@
 # Release notes — 8.1.0 (since 8.0.0)
 
-## Art API — quieter connection-failure logs
+## Art Mode selects — stop polling the art channel while the TV is off
+
+- **The Motion Sensitivity / Motion Timer / Brightness Sensor selects no longer
+  query the TV while it is powered off**: they polled `get_artmode_settings`
+  over the Art WebSocket every cycle regardless of power, so an off TV kept
+  getting poked on the art channel continuously (≈2 requests/min overnight).
+  Beyond being wasteful, this constant poking of a sleeping art-app could leave
+  Art Mode wedged by morning. The selects now skip the poll when the
+  media_player reports the TV off (and not in Art Mode), keeping their last
+  known value — matching what the Frame Art coordinator already does. When the
+  TV is genuinely off, the integration no longer touches the art channel at all.
 
 - **Art channel connection failures no longer spam `WARNING`**: a TV that's
   simply off/unreachable trips this on every poll, and the early attempts
