@@ -1007,20 +1007,25 @@ class SamsungTVAsyncArt:
         # on most TV models. Only the direct socket fallback (get_thumbnail) fails for
         # SAM-* images. Never set the flag to False: a startup error (TV not ready)
         # must not permanently disable the fast path for the whole session.
-        self._log.debug(
-            "Art API: Trying get_thumbnail_list for %s (capability=%s)",
-            content_id,
-            self._supports_thumbnail_list,
-        )
-        result = await self._get_thumbnail_via_list(content_id)
-        if result:
-            if self._supports_thumbnail_list is None:
-                self._log.info(
-                    "Art API: TV supports get_thumbnail_list — "
-                    "fast path active for this session"
-                )
-                self._supports_thumbnail_list = True
-            return result
+        # Skip the list path entirely once we've learned this TV rejects it
+        # with a definitive error -1 (2024-2025 Tizen): otherwise every single
+        # thumbnail fetch logs a SYSTEM_FAIL and wastes a round-trip before the
+        # direct get_thumbnail fallback below.
+        if self._supports_thumbnail_list is not False:
+            self._log.debug(
+                "Art API: Trying get_thumbnail_list for %s (capability=%s)",
+                content_id,
+                self._supports_thumbnail_list,
+            )
+            result = await self._get_thumbnail_via_list(content_id)
+            if result:
+                if self._supports_thumbnail_list is None:
+                    self._log.info(
+                        "Art API: TV supports get_thumbnail_list — "
+                        "fast path active for this session"
+                    )
+                    self._supports_thumbnail_list = True
+                return result
 
         self._log.debug("Art API: Using get_thumbnail direct for %s", content_id)
 
@@ -1138,6 +1143,22 @@ class SamsungTVAsyncArt:
                 content_id,
                 _describe_art_error(data.get("error_code")),
             )
+            # A definitive error_code -1 means this model doesn't support the
+            # list path at all (2024-2025 Tizen) — remember it so we stop
+            # re-probing it on every single thumbnail and go straight to the
+            # direct get_thumbnail. We only latch on this explicit code, NOT on
+            # a missing/transient response (handled above as "no response"),
+            # so a TV-not-ready blip can't permanently disable the fast path.
+            try:
+                if int(data.get("error_code")) == -1:
+                    if self._supports_thumbnail_list is not False:
+                        self._log.info(
+                            "Art API: TV does not support get_thumbnail_list "
+                            "(error -1) — using direct get_thumbnail from now on"
+                        )
+                    self._supports_thumbnail_list = False
+            except (TypeError, ValueError):
+                pass
             return None
 
         try:
