@@ -234,6 +234,9 @@ You don't have to write YAML: add the card from the dashboard and use the
 visual editor. Besides the basic fields (title, sensor, folder, columns, image
 height) it exposes:
 
+- **Gallery type** — forces the fullscreen-preview buttons for the whole
+  gallery: *Personal* (Select + Delete), *Favorites* (Select + Unfavourite),
+  *Upload* (Upload), or *Auto* (detect per image).
 - **Thumbnails** — a *Server-side thumbnails* checkbox and a *Thumbnail width*
   field.
 - **Actions** — dropdowns for **single tap / double tap / long press**
@@ -277,6 +280,7 @@ transparently falls back to the original image.
 | `border_radius` | string | `8px` | Image border radius |
 | `show_filename` | boolean | `true` | Show filename on hover |
 | `filter` | string | `*` | File filter pattern |
+| `gallery_type` | string | *(auto)* | Forces which action buttons the fullscreen preview shows for the whole gallery: `personal` (Select + Delete), `favorites` (Select + Unfavourite), `upload` (Upload). Omit / `auto` = detect per image from the content-id prefix. |
 | `server_thumbnails` | boolean | `true` | Serve small server-resized thumbnails for the grid instead of the full originals (recommended for folders of large photos). The full-resolution image is still used for the lightbox and actions. Set `false` to load originals. |
 | `thumbnail_width` | number | `400` | Width (px) of the server-generated thumbnails. Raise for sharper tiles, lower for even less bandwidth. |
 | `tap_action` | string/object | - | Action on single tap (e.g. `lightbox`, or a service/perform-action object) |

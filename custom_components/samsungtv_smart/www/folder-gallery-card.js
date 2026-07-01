@@ -68,6 +68,7 @@ class FolderGalleryCard extends HTMLElement {
       image_list: config.image_list || null, // Static list of images
       server_thumbnails: config.server_thumbnails !== false, // resize via integration
       thumbnail_width: config.thumbnail_width || 400,
+      gallery_type: config.gallery_type || null, // auto | personal | favorites | upload
       ...config
     };
     
@@ -736,17 +737,39 @@ class FolderGalleryCard extends HTMLElement {
     img.src = imageData.path;
     lightbox.classList.add('open');
 
-    const contentId = (imageData.content_id || imageData.name || '');
-    const upper = contentId.toUpperCase();
-    const isSam = upper.startsWith('SAM-') || upper.startsWith('SAM_');
-    const isMy = upper.startsWith('MY-') || upper.startsWith('MY_');
-    const isOther = !isSam && !isMy;
+    // Which action buttons to show. When `gallery_type` is set, it forces the
+    // button set for the whole gallery, so e.g. an upload folder always offers
+    // Upload even if a filename happens to look like a content id. Otherwise
+    // fall back to per-image detection from the content_id prefix.
+    let showSelect;
+    let showUnfavourite;
+    let showUpload;
+    let showDelete;
 
-    // SAM-: Select + Unfavourite
-    if (actionBtn) actionBtn.style.display = (isSam || isMy) ? 'inline-block' : 'none';
-    if (unfavouriteBtn) unfavouriteBtn.style.display = isSam ? 'inline-block' : 'none';
-    if (uploadBtn) uploadBtn.style.display = isOther ? 'inline-block' : 'none';
-    if (deleteBtn) deleteBtn.style.display = isMy ? 'inline-block' : 'none';
+    const gt = (this._config.gallery_type || 'auto').toLowerCase();
+    if (gt === 'personal') {
+      showSelect = true;  showUnfavourite = false; showUpload = false; showDelete = true;
+    } else if (gt === 'favorites' || gt === 'favourites') {
+      showSelect = true;  showUnfavourite = true;  showUpload = false; showDelete = false;
+    } else if (gt === 'upload') {
+      showSelect = false; showUnfavourite = false; showUpload = true;  showDelete = false;
+    } else {
+      // auto: infer from the content id
+      const contentId = imageData.content_id || imageData.name || '';
+      const upper = contentId.toUpperCase();
+      const isSam = upper.startsWith('SAM-') || upper.startsWith('SAM_');
+      const isMy = upper.startsWith('MY-') || upper.startsWith('MY_');
+      const isOther = !isSam && !isMy;
+      showSelect = isSam || isMy;
+      showUnfavourite = isSam;
+      showUpload = isOther;
+      showDelete = isMy;
+    }
+
+    if (actionBtn) actionBtn.style.display = showSelect ? 'inline-block' : 'none';
+    if (unfavouriteBtn) unfavouriteBtn.style.display = showUnfavourite ? 'inline-block' : 'none';
+    if (uploadBtn) uploadBtn.style.display = showUpload ? 'inline-block' : 'none';
+    if (deleteBtn) deleteBtn.style.display = showDelete ? 'inline-block' : 'none';
   }
 
   _getEntityId() {
@@ -1178,6 +1201,17 @@ class FolderGalleryCardEditor extends HTMLElement {
         <input type="text" id="image_height" value="${this._config.image_height || '150px'}">
       </div>
 
+      <div class="form-row">
+        <label>Gallery type (lightbox buttons)</label>
+        <select id="gallery_type">
+          <option value="auto" ${sel('auto', (this._config.gallery_type || 'auto'))}>Auto (detect per image)</option>
+          <option value="personal" ${sel('personal', this._config.gallery_type)}>Personal — Select + Delete</option>
+          <option value="favorites" ${sel('favorites', this._config.gallery_type)}>Favorites — Select + Unfavourite</option>
+          <option value="upload" ${sel('upload', this._config.gallery_type)}>Upload — Upload</option>
+        </select>
+        <span class="hint">Forces which action buttons appear in the fullscreen preview for the whole gallery.</span>
+      </div>
+
       <div class="section">Thumbnails</div>
       <div class="form-row">
         <label><input type="checkbox" id="server_thumbnails" ${this._config.server_thumbnails !== false ? 'checked' : ''}>Server-side resized thumbnails</label>
@@ -1224,6 +1258,7 @@ class FolderGalleryCardEditor extends HTMLElement {
       'folder_sensor',
       'columns',
       'image_height',
+      'gallery_type',
       'server_thumbnails',
       'thumbnail_width',
       '_tv_entity',
@@ -1252,6 +1287,8 @@ class FolderGalleryCardEditor extends HTMLElement {
     cfg.image_height = g('image_height').value || '150px';
     cfg.server_thumbnails = g('server_thumbnails').checked;
     cfg.thumbnail_width = parseInt(g('thumbnail_width').value, 10) || 400;
+    const gt = g('gallery_type').value;
+    cfg.gallery_type = gt && gt !== 'auto' ? gt : undefined;
 
     const tv = g('_tv_entity').value.trim();
     const selectAction = this._buildSelectAction(tv);

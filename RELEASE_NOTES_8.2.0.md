@@ -2,6 +2,17 @@
 
 > **Status: pre-release (beta).** 8.2.0 builds on 8.1.0.
 
+## Folder Gallery card — per-gallery action buttons (`gallery_type`)
+
+- **New `gallery_type` option** to force the fullscreen-preview action buttons
+  for a whole gallery, instead of guessing per image:
+  - `personal` → **Select** + **Delete**
+  - `favorites` → **Select** + **Unfavourite**
+  - `upload` → **Upload**
+  - omitted / `auto` → detect per image from the content-id prefix (previous
+    behaviour). Also available as a dropdown in the visual editor. Useful for an
+    upload folder of plain photos, which would otherwise be guessed per file.
+
 ## Folder Gallery card — more options in the visual editor
 
 - The card's visual editor now exposes, in addition to the basic fields:
