@@ -1,5 +1,17 @@
 # Release notes — 8.1.0 (since 8.0.0)
 
+## OAuth — stop the refresh-storm when the SmartThings refresh token is dead
+
+- **A rejected refresh token no longer hammers the auth endpoint thousands of
+  times**: when SmartThings replies `invalid_grant` ("Invalid refresh token"),
+  the token can't be refreshed and only re-authentication fixes it — but the
+  integration kept retrying the refresh on every cycle (observed 7000+ failed
+  attempts/hour, spamming ERROR logs and risking an auth rate-limit). It now
+  recognises `invalid_grant` as terminal: it **stops retrying**, starts Home
+  Assistant's **reauth flow once** (you get a "reconfigure" prompt), and
+  resumes automatically once a valid token is stored again after you
+  re-authenticate.
+
 ## Art thumbnails — stop re-probing the unsupported list path on 2024+ Frames
 
 - **No more `SYSTEM_FAIL (-1)` log spam per thumbnail on 2024-2025 Frames**:

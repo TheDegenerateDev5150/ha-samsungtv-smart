@@ -67,7 +67,11 @@ from homeassistant.util.async_ import run_callback_threadsafe
 from . import (
     get_oauth_refresh_lock,
     get_smartthings_api_key,
+    is_invalid_grant_error,
+    is_oauth_token_invalid,
     set_oauth_refresh_in_progress,
+    set_oauth_token_invalid,
+    start_oauth_reauth,
 )
 from .api.art import SamsungTVAsyncArt
 from .api.ipcontrol import (
@@ -927,8 +931,16 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         # Check if token needs refresh (within buffer period before expiration)
         if expires_at and current_time < (expires_at - OAUTH_TOKEN_REFRESH_BUFFER):
-            # Token still valid, no refresh needed
+            # Token still valid, no refresh needed. A valid token means any
+            # previous invalid_grant condition has been resolved (reauth done).
+            set_oauth_token_invalid(self._entry_id, False)
             return True
+
+        # If the refresh token was already rejected (invalid_grant), a reauth
+        # flow is pending — don't keep hammering the auth endpoint every cycle.
+        if is_oauth_token_invalid(self._entry_id):
+            self._log.debug("Skipping OAuth refresh — reauth pending")
+            return False
 
         # Token is expiring or expired
         time_until_expiry = expires_at - current_time if expires_at else 0
@@ -1003,14 +1015,21 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 new_token.get("expires_at", 0) - time.time(),
             )
             self._clear_oauth_issue()
+            set_oauth_token_invalid(self._entry_id, False)
             return True
 
         except Exception as ex:
-            self._log.error(
-                "Failed to refresh OAuth token: %s. "
-                "You may need to reconfigure the integration with OAuth.",
-                ex,
-            )
+            if is_invalid_grant_error(ex):
+                # Terminal: the refresh token is dead. Trigger reauth and stop
+                # retrying (start_oauth_reauth logs + latches the flag) so we
+                # don't hammer the SmartThings auth endpoint every cycle.
+                start_oauth_reauth(self.hass, self._entry_id)
+            else:
+                self._log.error(
+                    "Failed to refresh OAuth token: %s. "
+                    "You may need to reconfigure the integration with OAuth.",
+                    ex,
+                )
             self._raise_oauth_issue()
             return False
 
