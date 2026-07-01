@@ -66,6 +66,8 @@ class FolderGalleryCard extends HTMLElement {
       double_tap_action: config.double_tap_action || null,
       sensor: config.sensor || null, // Sensor that provides image list
       image_list: config.image_list || null, // Static list of images
+      server_thumbnails: config.server_thumbnails !== false, // resize via integration
+      thumbnail_width: config.thumbnail_width || 400,
       ...config
     };
     
@@ -523,6 +525,17 @@ class FolderGalleryCard extends HTMLElement {
     this.setupLightbox();
   }
 
+  _thumbUrl(path) {
+    // Route grid thumbnails through the integration's resize endpoint so a
+    // folder of full-size originals isn't downloaded at full resolution. Only
+    // applies to local files (/local/...); remote/absolute URLs are used as-is.
+    // The original path is still used for the lightbox and tap/hold actions.
+    if (this._config.server_thumbnails === false) return path;
+    if (!path || !path.startsWith('/local/')) return path;
+    const w = parseInt(this._config.thumbnail_width, 10) || 400;
+    return `/api/samsungtv_smart/thumbnail?path=${encodeURIComponent(path)}&w=${w}`;
+  }
+
   renderGallery() {
     const container = this.shadowRoot.querySelector('.gallery-container');
     const countEl = this.shadowRoot.querySelector('.image-count');
@@ -550,8 +563,8 @@ class FolderGalleryCard extends HTMLElement {
       <div class="gallery-grid">
         ${this._images.map((img, index) => `
           <div class="gallery-item" data-index="${index}" data-path="${img.path}" data-content-id="${img.content_id || ''}">
-            <img src="${img.path}" alt="${img.name}" loading="lazy" class="loading"
-                 onerror="this.classList.add('error')" 
+            <img src="${this._thumbUrl(img.path)}" alt="${img.name}" loading="lazy" decoding="async" class="loading"
+                 onerror="this.classList.add('error')"
                  onload="this.classList.remove('loading')">
             ${this._config.show_filename ? `
               <div class="image-overlay">

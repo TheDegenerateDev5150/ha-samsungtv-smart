@@ -1052,6 +1052,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # Register folder-gallery-card as Lovelace resource
     await _register_gallery_card(hass)
 
+    # On-demand resized-thumbnail endpoint used by the gallery card so big
+    # folders of full-size originals don't get downloaded at full resolution.
+    try:
+        from .http_thumbnail import SamsungTVThumbnailView
+
+        hass.http.register_view(SamsungTVThumbnailView(hass))
+    except Exception as exc:  # pylint: disable=broad-except
+        _LOGGER.warning("Could not register thumbnail view: %s", exc)
+
     return True
 
 
