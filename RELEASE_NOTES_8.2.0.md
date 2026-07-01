@@ -2,6 +2,21 @@
 
 > **Status: pre-release (beta).** 8.2.0 builds on 8.1.0.
 
+## Folder Gallery card — gesture actions follow the gallery type
+
+- **The tap / double-tap / long-press action dropdowns in the visual editor now
+  offer the actions that fit the gallery's `gallery_type`:**
+  - `upload` → **Upload to TV**
+  - `personal` → **Display on TV** / **Delete**
+  - `favorites` → **Display on TV** / **Unfavourite**
+  - `auto` → **Display on TV** (generic)
+
+  So e.g. an upload gallery no longer offers "Display on TV" on double-tap/hold —
+  it offers **Upload** instead. Each preset builds the matching
+  `samsungtv_smart.art_*` action for the configured Frame TV entity. Choosing a
+  gallery type re-scopes the gesture options (a now-invalid choice resets to
+  "Nothing").
+
 ## Folder Gallery card — per-gallery action buttons (`gallery_type`)
 
 - **New `gallery_type` option** to force the fullscreen-preview action buttons

@@ -1098,10 +1098,15 @@ class FolderGalleryCardEditor extends HTMLElement {
   // --- helpers to map between config actions and the simple dropdowns ------
 
   _actionKind(action) {
-    // 'select' (display artwork on TV) | 'none'
+    // Map a config action back to a gesture preset:
+    // select | upload | delete | unfavourite | none.
     if (!action || typeof action !== 'object') return 'none';
     const svc = (action.service || action.perform_action || '').toLowerCase();
-    return svc.includes('art_select_image') ? 'select' : 'none';
+    if (svc.includes('art_select_image')) return 'select';
+    if (svc.includes('art_upload')) return 'upload';
+    if (svc.includes('art_delete')) return 'delete';
+    if (svc.includes('art_set_favourite')) return 'unfavourite';
+    return 'none';
   }
 
   _tapKind() {
@@ -1125,13 +1130,58 @@ class FolderGalleryCardEditor extends HTMLElement {
     );
   }
 
-  _buildSelectAction(tvEntity) {
+  // Gesture presets available for the current gallery_type. Each entry is
+  // { v: kind, l: label }. `lightbox` (preview) is offered for single tap only.
+  _gestureOptions(includeLightbox) {
+    const gt = (this._config.gallery_type || 'auto').toLowerCase();
+    const opts = [{ v: 'none', l: 'Nothing' }];
+    if (includeLightbox) opts.push({ v: 'lightbox', l: 'Open preview (lightbox)' });
+    if (gt === 'upload') {
+      opts.push({ v: 'upload', l: 'Upload to TV' });
+    } else if (gt === 'personal') {
+      opts.push({ v: 'select', l: 'Display on TV' });
+      opts.push({ v: 'delete', l: 'Delete' });
+    } else if (gt === 'favorites' || gt === 'favourites') {
+      opts.push({ v: 'select', l: 'Display on TV' });
+      opts.push({ v: 'unfavourite', l: 'Unfavourite' });
+    } else {
+      opts.push({ v: 'select', l: 'Display on TV' });
+    }
+    return opts;
+  }
+
+  // Build the config action object for a gesture preset (all need the TV entity).
+  _buildAction(kind, tvEntity) {
     if (!tvEntity) return null;
-    return {
-      perform_action: 'samsungtv_smart.art_select_image',
-      target: { entity_id: tvEntity },
-      data: { content_id: '{{content_id}}' },
-    };
+    const target = { entity_id: tvEntity };
+    switch (kind) {
+      case 'select':
+        return {
+          perform_action: 'samsungtv_smart.art_select_image',
+          target,
+          data: { content_id: '{{content_id}}' },
+        };
+      case 'upload':
+        return {
+          perform_action: 'samsungtv_smart.art_upload',
+          target,
+          data: { file_path: '{{file_path}}' },
+        };
+      case 'delete':
+        return {
+          perform_action: 'samsungtv_smart.art_delete',
+          target,
+          data: { content_id: '{{content_id}}' },
+        };
+      case 'unfavourite':
+        return {
+          perform_action: 'samsungtv_smart.art_set_favourite',
+          target,
+          data: { content_id: '{{content_id}}', status: 'off' },
+        };
+      default:
+        return null;
+    }
   }
 
   render() {
@@ -1230,25 +1280,27 @@ class FolderGalleryCardEditor extends HTMLElement {
       <div class="form-row">
         <label>Single tap</label>
         <select id="_tap_kind">
-          <option value="lightbox" ${sel('lightbox', tapKind)}>Open preview (lightbox)</option>
-          <option value="select" ${sel('select', tapKind)}>Display on TV</option>
-          <option value="none" ${sel('none', tapKind)}>Nothing</option>
+          ${this._gestureOptions(true)
+            .map((o) => `<option value="${o.v}" ${sel(o.v, tapKind)}>${o.l}</option>`)
+            .join('')}
         </select>
       </div>
       <div class="form-row">
         <label>Double tap</label>
         <select id="_dtap_kind">
-          <option value="none" ${sel('none', dtapKind)}>Nothing</option>
-          <option value="select" ${sel('select', dtapKind)}>Display on TV</option>
+          ${this._gestureOptions(false)
+            .map((o) => `<option value="${o.v}" ${sel(o.v, dtapKind)}>${o.l}</option>`)
+            .join('')}
         </select>
       </div>
       <div class="form-row">
         <label>Long press</label>
         <select id="_hold_kind">
-          <option value="none" ${sel('none', holdKind)}>Nothing</option>
-          <option value="select" ${sel('select', holdKind)}>Display on TV</option>
+          ${this._gestureOptions(false)
+            .map((o) => `<option value="${o.v}" ${sel(o.v, holdKind)}>${o.l}</option>`)
+            .join('')}
         </select>
-        <span class="hint">"Display on TV" needs the Frame TV entity above.</span>
+        <span class="hint">The actions here follow the <b>Gallery type</b> above, and need the Frame TV entity.</span>
       </div>
     `;
 
@@ -1291,16 +1343,22 @@ class FolderGalleryCardEditor extends HTMLElement {
     cfg.gallery_type = gt && gt !== 'auto' ? gt : undefined;
 
     const tv = g('_tv_entity').value.trim();
-    const selectAction = this._buildSelectAction(tv);
+
+    // Only keep gesture kinds that are valid for the selected gallery type
+    // (e.g. switching to "upload" drops a stale "select"/"delete" choice).
+    const validTap = new Set(this._gestureOptions(true).map((o) => o.v));
+    const validGesture = new Set(this._gestureOptions(false).map((o) => o.v));
+    const clamp = (kind, valid) => (valid.has(kind) ? kind : 'none');
 
     // Single tap
-    const tapKind = g('_tap_kind').value;
+    const tapKind = clamp(g('_tap_kind').value, validTap);
     if (tapKind === 'lightbox') {
       cfg.tap_action = 'lightbox';
       cfg.action = undefined;
-    } else if (tapKind === 'select' && selectAction) {
-      cfg.tap_action = 'action';
-      cfg.action = selectAction;
+    } else if (tapKind !== 'none') {
+      const act = this._buildAction(tapKind, tv);
+      cfg.tap_action = act ? 'action' : undefined;
+      cfg.action = act || undefined;
     } else {
       cfg.tap_action = undefined;
       cfg.action = undefined;
@@ -1308,9 +1366,9 @@ class FolderGalleryCardEditor extends HTMLElement {
 
     // Double tap / long press
     cfg.double_tap_action =
-      g('_dtap_kind').value === 'select' ? selectAction || undefined : undefined;
+      this._buildAction(clamp(g('_dtap_kind').value, validGesture), tv) || undefined;
     cfg.hold_action =
-      g('_hold_kind').value === 'select' ? selectAction || undefined : undefined;
+      this._buildAction(clamp(g('_hold_kind').value, validGesture), tv) || undefined;
 
     Object.keys(cfg).forEach((k) => cfg[k] === undefined && delete cfg[k]);
     this._config = cfg;
