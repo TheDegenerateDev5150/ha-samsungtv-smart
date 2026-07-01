@@ -179,6 +179,45 @@ _LOGGER = logging.getLogger(__name__)
 # This is shared across all entities (media_player, switch, sensor)
 _OAUTH_REFRESH_LOCKS: dict[str, asyncio.Lock] = {}
 _OAUTH_REFRESH_IN_PROGRESS: dict[str, bool] = {}
+# Set once the SmartThings refresh token is rejected with invalid_grant: the
+# refresh token is dead and retrying only hammers the auth endpoint (observed
+# thousands of times/hour). We stop attempting refresh and trigger a reauth
+# flow; the flag is cleared automatically once a valid token is stored again.
+_OAUTH_TOKEN_INVALID: dict[str, bool] = {}
+
+
+def is_oauth_token_invalid(entry_id: str) -> bool:
+    """True when the entry's refresh token was rejected and reauth is needed."""
+    return _OAUTH_TOKEN_INVALID.get(entry_id, False)
+
+
+def set_oauth_token_invalid(entry_id: str, invalid: bool) -> None:
+    """Mark/clear the entry's refresh token as invalid (reauth required)."""
+    _OAUTH_TOKEN_INVALID[entry_id] = invalid
+
+
+def is_invalid_grant_error(ex: Exception) -> bool:
+    """True when an OAuth refresh failure is the terminal invalid_grant case."""
+    text = str(ex).lower()
+    return "invalid_grant" in text or "invalid refresh token" in text
+
+
+def start_oauth_reauth(hass: HomeAssistant, entry_id: str) -> None:
+    """Latch the invalid-token flag and kick off HA's reauth flow once."""
+    if _OAUTH_TOKEN_INVALID.get(entry_id):
+        return  # already handled — don't spawn duplicate reauth flows
+    _OAUTH_TOKEN_INVALID[entry_id] = True
+    entry = hass.config_entries.async_get_entry(entry_id)
+    if entry is not None:
+        _LOGGER.warning(
+            "[%s] SmartThings refresh token rejected (invalid_grant) — reauth "
+            "required; stopping refresh attempts until re-authenticated",
+            entry.title,
+        )
+        try:
+            entry.async_start_reauth(hass)
+        except Exception as exc:  # pylint: disable=broad-except
+            _LOGGER.debug("Could not start reauth flow: %s", exc)
 
 
 def get_oauth_refresh_lock(entry_id: str) -> asyncio.Lock:
@@ -499,6 +538,17 @@ async def async_get_samsungtv_api_key(  # noqa: C901
                         )
                         return access_token  # Try with expired token anyway
 
+                    # If the refresh token was already rejected (invalid_grant),
+                    # a reauth flow is pending — don't keep hammering the auth
+                    # endpoint on every cycle. Use the (expired) token and wait
+                    # for the user to re-authenticate.
+                    if is_oauth_token_invalid(entry.entry_id):
+                        _LOGGER.debug(
+                            "[%s] Skipping OAuth refresh — reauth pending",
+                            entry.title,
+                        )
+                        return access_token
+
                     # Acquire lock to prevent concurrent refresh. If another
                     # task is already refreshing, WAIT for it instead of
                     # returning the current (expired) token: platform setups
@@ -590,6 +640,7 @@ async def async_get_samsungtv_api_key(  # noqa: C901
                                     },
                                 )
                                 _LOGGER.info("OAuth token refreshed successfully")
+                                set_oauth_token_invalid(entry.entry_id, False)
                                 return new_token["access_token"]
                             else:
                                 _LOGGER.error(
@@ -598,7 +649,12 @@ async def async_get_samsungtv_api_key(  # noqa: C901
                                     "and add credentials for Samsung TV Smart."
                                 )
                         except Exception as ex:
-                            _LOGGER.error("Failed to refresh OAuth token: %s", ex)
+                            if is_invalid_grant_error(ex):
+                                # Terminal: refresh token is dead → reauth, stop
+                                # retrying (start_oauth_reauth logs + latches).
+                                start_oauth_reauth(hass, entry.entry_id)
+                            else:
+                                _LOGGER.error("Failed to refresh OAuth token: %s", ex)
                             # Try to use existing token anyway
                         finally:
                             set_oauth_refresh_in_progress(entry.entry_id, False)
