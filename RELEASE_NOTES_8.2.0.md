@@ -2,6 +2,15 @@
 
 > **Status: pre-release (beta).** 8.2.0 builds on 8.1.0.
 
+## Folder Gallery card — more options in the visual editor
+
+- The card's visual editor now exposes, in addition to the basic fields:
+  - **Server-side thumbnails** (checkbox) and **Thumbnail width** (px).
+  - **Actions** for single tap / double tap / long press, each a simple
+    dropdown (*Open preview / Display on TV / Nothing*), plus a **Frame TV
+    entity** field used to build the "Display on TV" action. No need to hand-
+    write the YAML action objects anymore for the common setup.
+
 ## Folder Gallery card — server-side resized thumbnails for big folders
 
 - **The gallery now loads small resized thumbnails instead of the originals.**

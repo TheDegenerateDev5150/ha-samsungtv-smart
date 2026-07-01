@@ -1072,7 +1072,52 @@ class FolderGalleryCardEditor extends HTMLElement {
     this.render();
   }
 
+  // --- helpers to map between config actions and the simple dropdowns ------
+
+  _actionKind(action) {
+    // 'select' (display artwork on TV) | 'none'
+    if (!action || typeof action !== 'object') return 'none';
+    const svc = (action.service || action.perform_action || '').toLowerCase();
+    return svc.includes('art_select_image') ? 'select' : 'none';
+  }
+
+  _tapKind() {
+    const t = this._config.tap_action;
+    if (t === 'lightbox') return 'lightbox';
+    if (t === 'action') return this._actionKind(this._config.action);
+    if (typeof t === 'object') return this._actionKind(t);
+    return 'none';
+  }
+
+  _tvEntity() {
+    const from = (a) =>
+      a && typeof a === 'object' && a.target && a.target.entity_id
+        ? a.target.entity_id
+        : null;
+    return (
+      from(this._config.action) ||
+      from(this._config.double_tap_action) ||
+      from(this._config.hold_action) ||
+      ''
+    );
+  }
+
+  _buildSelectAction(tvEntity) {
+    if (!tvEntity) return null;
+    return {
+      perform_action: 'samsungtv_smart.art_select_image',
+      target: { entity_id: tvEntity },
+      data: { content_id: '{{content_id}}' },
+    };
+  }
+
   render() {
+    const tapKind = this._tapKind();
+    const dtapKind = this._actionKind(this._config.double_tap_action);
+    const holdKind = this._actionKind(this._config.hold_action);
+    const tvEntity = this._tvEntity();
+    const sel = (v, cur) => (v === cur ? 'selected' : '');
+
     this.shadowRoot.innerHTML = `
       <style>
         .form-row {
@@ -1091,6 +1136,7 @@ class FolderGalleryCardEditor extends HTMLElement {
           background: var(--card-background-color);
           color: var(--primary-text-color);
         }
+        .form-row input[type="checkbox"] { width: auto; margin-right: 8px; }
         .form-row .hint {
           display: block;
           margin-top: 4px;
@@ -1098,6 +1144,7 @@ class FolderGalleryCardEditor extends HTMLElement {
           font-weight: normal;
           color: var(--secondary-text-color);
         }
+        .section { margin: 16px 0 4px; font-weight: 700; opacity: 0.8; }
       </style>
 
       <div class="form-row">
@@ -1125,26 +1172,112 @@ class FolderGalleryCardEditor extends HTMLElement {
         <label>Columns</label>
         <input type="number" id="columns" value="${this._config.columns || 4}" min="1" max="10">
       </div>
-      
+
       <div class="form-row">
         <label>Image Height</label>
         <input type="text" id="image_height" value="${this._config.image_height || '150px'}">
       </div>
+
+      <div class="section">Thumbnails</div>
+      <div class="form-row">
+        <label><input type="checkbox" id="server_thumbnails" ${this._config.server_thumbnails !== false ? 'checked' : ''}>Server-side resized thumbnails</label>
+        <span class="hint">Recommended for folders of full-size originals — sends small thumbnails to the browser instead of the multi-MB files. The full image is still used on click.</span>
+      </div>
+      <div class="form-row">
+        <label>Thumbnail width (px)</label>
+        <input type="number" id="thumbnail_width" value="${this._config.thumbnail_width || 400}" min="64" max="1024">
+      </div>
+
+      <div class="section">Actions</div>
+      <div class="form-row">
+        <label>Frame TV entity (for "Display on TV")</label>
+        <input type="text" id="_tv_entity" value="${tvEntity}" placeholder="media_player.samsung_frame">
+      </div>
+      <div class="form-row">
+        <label>Single tap</label>
+        <select id="_tap_kind">
+          <option value="lightbox" ${sel('lightbox', tapKind)}>Open preview (lightbox)</option>
+          <option value="select" ${sel('select', tapKind)}>Display on TV</option>
+          <option value="none" ${sel('none', tapKind)}>Nothing</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Double tap</label>
+        <select id="_dtap_kind">
+          <option value="none" ${sel('none', dtapKind)}>Nothing</option>
+          <option value="select" ${sel('select', dtapKind)}>Display on TV</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>Long press</label>
+        <select id="_hold_kind">
+          <option value="none" ${sel('none', holdKind)}>Nothing</option>
+          <option value="select" ${sel('select', holdKind)}>Display on TV</option>
+        </select>
+        <span class="hint">"Display on TV" needs the Frame TV entity above.</span>
+      </div>
     `;
 
-    // Add event listeners
-    ['title', 'folder', 'folder_sensor', 'columns', 'image_height'].forEach(field => {
-      const input = this.shadowRoot.getElementById(field);
-      if (input) {
-        input.addEventListener('change', (e) => {
-          let value = e.target.value;
-          if (field === 'columns') value = parseInt(value);
-          this.fireEvent('config-changed', { 
-            config: { ...this._config, [field]: value } 
-          });
-        });
+    const ids = [
+      'title',
+      'folder',
+      'folder_sensor',
+      'columns',
+      'image_height',
+      'server_thumbnails',
+      'thumbnail_width',
+      '_tv_entity',
+      '_tap_kind',
+      '_dtap_kind',
+      '_hold_kind',
+    ];
+    ids.forEach((id) => {
+      const el = this.shadowRoot.getElementById(id);
+      if (el) {
+        el.addEventListener('change', () => this._emit());
       }
     });
+  }
+
+  _emit() {
+    const g = (id) => this.shadowRoot.getElementById(id);
+    const cfg = { ...this._config };
+
+    cfg.title = g('title').value || '';
+    const sensor = g('folder_sensor').value.trim();
+    cfg.folder_sensor = sensor || undefined;
+    const folder = g('folder').value.trim();
+    cfg.folder = folder || undefined;
+    cfg.columns = parseInt(g('columns').value, 10) || 4;
+    cfg.image_height = g('image_height').value || '150px';
+    cfg.server_thumbnails = g('server_thumbnails').checked;
+    cfg.thumbnail_width = parseInt(g('thumbnail_width').value, 10) || 400;
+
+    const tv = g('_tv_entity').value.trim();
+    const selectAction = this._buildSelectAction(tv);
+
+    // Single tap
+    const tapKind = g('_tap_kind').value;
+    if (tapKind === 'lightbox') {
+      cfg.tap_action = 'lightbox';
+      cfg.action = undefined;
+    } else if (tapKind === 'select' && selectAction) {
+      cfg.tap_action = 'action';
+      cfg.action = selectAction;
+    } else {
+      cfg.tap_action = undefined;
+      cfg.action = undefined;
+    }
+
+    // Double tap / long press
+    cfg.double_tap_action =
+      g('_dtap_kind').value === 'select' ? selectAction || undefined : undefined;
+    cfg.hold_action =
+      g('_hold_kind').value === 'select' ? selectAction || undefined : undefined;
+
+    Object.keys(cfg).forEach((k) => cfg[k] === undefined && delete cfg[k]);
+    this._config = cfg;
+    this.fireEvent('config-changed', { config: cfg });
   }
 
   fireEvent(type, detail) {
