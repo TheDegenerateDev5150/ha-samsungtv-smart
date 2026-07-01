@@ -36,6 +36,7 @@ __min_ha_version__ = f"{MIN_HA_MAJ_VER}.{MIN_HA_MIN_VER}.0"
 DATA_CFG = "cfg"
 DATA_CFG_YAML = "cfg_yaml"
 DATA_OPTIONS = "options"
+DATA_ENTRY_DATA = "entry_data"  # Snapshot of entry.data to detect data changes
 DATA_ART_API = "art_api"  # Shared Frame Art API instance
 CONF_IS_FRAME_TV = "is_frame_tv"  # Persisted flag: TV confirmed as Frame TV
 # V7: persisted capability flags for the dedicated brightness / colour-temp
@@ -74,6 +75,12 @@ CONF_LOAD_ALL_APPS = "load_all_apps"
 CONF_LOGO_OPTION = "logo_option"
 CONF_PING_PORT = "ping_port"
 CONF_POWER_ON_METHOD = "power_on_method"
+# REST/HTTP port, learned independently of CONF_PORT (the WS/token + Art port).
+# Some older Frames (~2020) serve the REST API on 8001 while the secure token
+# WebSocket + Art channel live on 8002, so a single shared port made the two
+# self-heal mechanisms fight forever (8001 <-> 8002 ping-pong). Falls back to
+# CONF_PORT when unset (existing installs / TVs where one port serves both).
+CONF_REST_PORT = "rest_port"
 CONF_SHOW_CHANNEL_NR = "show_channel_number"
 CONF_SOURCE_LIST = "source_list"
 CONF_SYNC_TURN_OFF = "sync_turn_off"
@@ -108,6 +115,14 @@ CONF_ENABLE_IP_CONTROL = "enable_ip_control"
 # this setting. Re-enable once the TV's firmware reports artModeControl
 # correctly again.
 CONF_IP_CONTROL_ART_MODE = "ip_control_art_mode"
+
+# Device identity, learned once via IP Control's getDeviceInformation right
+# after pairing. Used to gate which model-dependent features/entities get
+# created (not every TV supports the same IP Control capability set).
+# Distinct from CONF_DEVICE_MODEL (the WS-discovered friendly model name):
+# modelID here is the raw internal code IP Control returns (e.g. "25_PTM_FTV").
+CONF_IP_CONTROL_MODEL_ID = "ip_control_model_id"
+CONF_IP_CONTROL_FW_VERSION = "ip_control_fw_version"
 
 # Authentication methods
 AUTH_METHOD_OAUTH = "oauth"

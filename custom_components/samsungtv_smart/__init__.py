@@ -38,6 +38,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import config_entry_oauth2_flow
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -58,6 +59,8 @@ from .const import (
     CONF_AUTH_METHOD,
     CONF_CHANNEL_LIST,
     CONF_DEVICE_NAME,
+    CONF_ENABLE_IP_CONTROL,
+    CONF_IP_CONTROL_ART_MODE,
     CONF_LOAD_ALL_APPS,
     CONF_OAUTH_TOKEN,
     CONF_SCAN_APP_HTTP,
@@ -75,6 +78,7 @@ from .const import (
     DATA_ART_API,
     DATA_CFG,
     DATA_CFG_YAML,
+    DATA_ENTRY_DATA,
     DATA_OPTIONS,
     DEFAULT_PORT,
     DEFAULT_SOURCE_LIST,
@@ -92,6 +96,7 @@ from .const import (
     __min_ha_version__,
 )
 from .logo import CUSTOM_IMAGE_BASE_URL, STATIC_IMAGE_BASE_URL
+from .token_notify import METHOD_IP_CONTROL, METHOD_LOCAL, clear_token_problem
 
 # workaroud for failing import native domain when custom integration is present
 try:
@@ -174,6 +179,45 @@ _LOGGER = logging.getLogger(__name__)
 # This is shared across all entities (media_player, switch, sensor)
 _OAUTH_REFRESH_LOCKS: dict[str, asyncio.Lock] = {}
 _OAUTH_REFRESH_IN_PROGRESS: dict[str, bool] = {}
+# Set once the SmartThings refresh token is rejected with invalid_grant: the
+# refresh token is dead and retrying only hammers the auth endpoint (observed
+# thousands of times/hour). We stop attempting refresh and trigger a reauth
+# flow; the flag is cleared automatically once a valid token is stored again.
+_OAUTH_TOKEN_INVALID: dict[str, bool] = {}
+
+
+def is_oauth_token_invalid(entry_id: str) -> bool:
+    """True when the entry's refresh token was rejected and reauth is needed."""
+    return _OAUTH_TOKEN_INVALID.get(entry_id, False)
+
+
+def set_oauth_token_invalid(entry_id: str, invalid: bool) -> None:
+    """Mark/clear the entry's refresh token as invalid (reauth required)."""
+    _OAUTH_TOKEN_INVALID[entry_id] = invalid
+
+
+def is_invalid_grant_error(ex: Exception) -> bool:
+    """True when an OAuth refresh failure is the terminal invalid_grant case."""
+    text = str(ex).lower()
+    return "invalid_grant" in text or "invalid refresh token" in text
+
+
+def start_oauth_reauth(hass: HomeAssistant, entry_id: str) -> None:
+    """Latch the invalid-token flag and kick off HA's reauth flow once."""
+    if _OAUTH_TOKEN_INVALID.get(entry_id):
+        return  # already handled — don't spawn duplicate reauth flows
+    _OAUTH_TOKEN_INVALID[entry_id] = True
+    entry = hass.config_entries.async_get_entry(entry_id)
+    if entry is not None:
+        _LOGGER.warning(
+            "[%s] SmartThings refresh token rejected (invalid_grant) — reauth "
+            "required; stopping refresh attempts until re-authenticated",
+            entry.title,
+        )
+        try:
+            entry.async_start_reauth(hass)
+        except Exception as exc:  # pylint: disable=broad-except
+            _LOGGER.debug("Could not start reauth flow: %s", exc)
 
 
 def get_oauth_refresh_lock(entry_id: str) -> asyncio.Lock:
@@ -494,6 +538,17 @@ async def async_get_samsungtv_api_key(  # noqa: C901
                         )
                         return access_token  # Try with expired token anyway
 
+                    # If the refresh token was already rejected (invalid_grant),
+                    # a reauth flow is pending — don't keep hammering the auth
+                    # endpoint on every cycle. Use the (expired) token and wait
+                    # for the user to re-authenticate.
+                    if is_oauth_token_invalid(entry.entry_id):
+                        _LOGGER.debug(
+                            "[%s] Skipping OAuth refresh — reauth pending",
+                            entry.title,
+                        )
+                        return access_token
+
                     # Acquire lock to prevent concurrent refresh. If another
                     # task is already refreshing, WAIT for it instead of
                     # returning the current (expired) token: platform setups
@@ -585,6 +640,7 @@ async def async_get_samsungtv_api_key(  # noqa: C901
                                     },
                                 )
                                 _LOGGER.info("OAuth token refreshed successfully")
+                                set_oauth_token_invalid(entry.entry_id, False)
                                 return new_token["access_token"]
                             else:
                                 _LOGGER.error(
@@ -593,15 +649,22 @@ async def async_get_samsungtv_api_key(  # noqa: C901
                                     "and add credentials for Samsung TV Smart."
                                 )
                         except Exception as ex:
-                            _LOGGER.error("Failed to refresh OAuth token: %s", ex)
+                            if is_invalid_grant_error(ex):
+                                # Terminal: refresh token is dead → reauth, stop
+                                # retrying (start_oauth_reauth logs + latches).
+                                start_oauth_reauth(hass, entry.entry_id)
+                            else:
+                                _LOGGER.error("Failed to refresh OAuth token: %s", ex)
                             # Try to use existing token anyway
                         finally:
                             set_oauth_refresh_in_progress(entry.entry_id, False)
 
-                _LOGGER.debug("Using OAuth access token")
+                _LOGGER.debug("[%s] Using OAuth access token", entry.title)
                 return access_token
 
-        _LOGGER.warning("OAuth method configured but no valid token found")
+        _LOGGER.warning(
+            "[%s] OAuth method configured but no valid token found", entry.title
+        )
         return entry.data.get(CONF_API_KEY)
 
     # Method 2: SmartThings Integration token
@@ -610,7 +673,7 @@ async def async_get_samsungtv_api_key(  # noqa: C901
         if st_unique_id:
             api_key = get_smartthings_api_key(hass, st_unique_id)
             if api_key:
-                _LOGGER.debug("Using SmartThings integration token")
+                _LOGGER.debug("[%s] Using SmartThings integration token", entry.title)
                 return api_key
             _LOGGER.warning(
                 "Failed to retrieve SmartThings integration access token, using last available"
@@ -1012,6 +1075,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # migrate options to new format if required
     _migrate_options_format(hass, entry)
 
+    # Dismiss any stale "local connection not authorized" / "IP Control
+    # token problem" notifications left over from a previous session. Both
+    # are only re-raised on a fresh auth rejection, so clearing them here
+    # is safe even on a clean reload — they will be re-created if the
+    # problem genuinely still exists, instead of staying stuck forever when
+    # the TV was simply offline and never produced the one clean reconnect
+    # that would otherwise dismiss them.
+    clear_token_problem(hass, entry.entry_id, METHOD_LOCAL)
+    clear_token_problem(hass, entry.entry_id, METHOD_IP_CONTROL)
+
     # setup entry
     if DOMAIN not in hass.data:
         hass.data[DOMAIN] = {}
@@ -1028,6 +1101,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = {
         DATA_CFG: config,
         DATA_OPTIONS: entry.options.copy(),
+        # Snapshot used by the update listener to tell an options-only change
+        # (applied live) from one that needs a reload (connection/auth data, or
+        # a structural option that adds/removes platforms). Cheap to compare.
+        DATA_ENTRY_DATA: _reload_fingerprint(entry),
     }
     if add_conf:
         hass.data[DOMAIN][entry.entry_id][DATA_CFG_YAML] = add_conf
@@ -1080,9 +1157,44 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         hass.data[DOMAIN].pop(entry.entry_id, None)
         if not hass.data[DOMAIN]:
             hass.data.pop(DOMAIN)
+    # The entry is gone for good (unlike unload/reload), so any Repairs issue
+    # keyed to its entry_id (e.g. oauth_auth_failed_<entry_id>) can never be
+    # cleared by a future successful refresh on this entry — nothing will ever
+    # call _clear_oauth_issue() for it again. Without this, dismissing the
+    # issue in the UI only hides it; the registry entry itself outlives the
+    # entry it refers to and clutters diagnostics indefinitely.
+    ir.async_delete_issue(hass, DOMAIN, f"oauth_auth_failed_{entry.entry_id}")
+
+
+# Options whose change adds/removes platforms or clients and therefore needs a
+# full reload (everything else is applied live via SIGNAL_CONFIG_ENTITY).
+_RELOAD_OPTIONS = (CONF_ENABLE_IP_CONTROL, CONF_IP_CONTROL_ART_MODE)
+
+
+def _reload_fingerprint(entry: ConfigEntry) -> tuple:
+    """Snapshot the parts of an entry whose change requires a reload."""
+    return (
+        dict(entry.data),
+        tuple(entry.options.get(key) for key in _RELOAD_OPTIONS),
+    )
 
 
 async def _update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Update when config_entry options update."""
-    hass.data[DOMAIN][entry.entry_id][DATA_OPTIONS] = entry.options.copy()
+    """React to a config entry change.
+
+    Most options (scan interval, app/source lists, ...) are applied live via the
+    dispatcher signal — no costly full reload. Connection/auth *data* changes
+    (host, port, token, API key) and structural options (IP Control enable /
+    Art Mode) need the platforms or clients re-created, so those, and only
+    those, schedule a reload. The reload is always scheduled from this listener
+    (never from the config/options flow) per Home Assistant's deprecation of
+    combining an update listener with in-flow reload methods.
+    """
+    store = hass.data[DOMAIN][entry.entry_id]
+    store[DATA_OPTIONS] = entry.options.copy()
     async_dispatcher_send(hass, SIGNAL_CONFIG_ENTITY)
+
+    fingerprint = _reload_fingerprint(entry)
+    if store.get(DATA_ENTRY_DATA) != fingerprint:
+        store[DATA_ENTRY_DATA] = fingerprint
+        hass.config_entries.async_schedule_reload(entry.entry_id)

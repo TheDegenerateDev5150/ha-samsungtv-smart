@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import timedelta
 import logging
 import time
@@ -13,6 +14,7 @@ from pysmartthings import Attribute, Capability
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
+    SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
@@ -23,6 +25,9 @@ from homeassistant.const import (
     CONF_PORT,
     CONF_TOKEN,
     LIGHT_LUX,
+    EntityCategory,
+    UnitOfEnergy,
+    UnitOfPower,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -36,9 +41,17 @@ from homeassistant.helpers.update_coordinator import (
 
 from . import async_get_samsungtv_api_key
 from .api.art import SamsungTVAsyncArt, _DeviceLoggerAdapter
+from .api.ipcontrol import (
+    SamsungIPControl,
+    SamsungIPControlAuthError,
+    SamsungIPControlError,
+    SamsungIPControlTransportError,
+)
 from .const import (
     CONF_API_KEY,
     CONF_DEVICE_ID,
+    CONF_ENABLE_IP_CONTROL,
+    CONF_IP_CONTROL_TOKEN,
     CONF_IS_FRAME_TV,
     CONF_OAUTH_TOKEN,
     CONF_SLIDESHOW_API,
@@ -49,8 +62,138 @@ from .const import (
     DOMAIN,
     WS_PREFIX,
 )
+from .token_notify import METHOD_IP_CONTROL, clear_token_problem, notify_token_problem
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _ip_control_active(entry: ConfigEntry) -> bool:
+    """True when IP Control is paired AND enabled in the options."""
+    return bool(entry.data.get(CONF_IP_CONTROL_TOKEN)) and entry.options.get(
+        CONF_ENABLE_IP_CONTROL, True
+    )
+
+
+# Update interval for the read-only IP Control state sensors. Picture/sound
+# settings change slowly, so a relaxed cadence keeps JSON-RPC traffic light.
+IP_CONTROL_STATE_SCAN_INTERVAL = timedelta(seconds=30)
+
+# How long to wait before re-fetching the thumbnail of an Art Store (SAM-*)
+# artwork the TV has not cached locally yet. The TV materializes the thumbnail
+# a little while after the content is displayed/favorited; this bounded retry
+# recovers within seconds of that happening without hammering the art channel
+# on every poll.
+STORE_THUMBNAIL_RETRY_INTERVAL = 30  # seconds
+
+
+@dataclass(frozen=True, kw_only=True)
+class SamsungIPControlSensorDescription(SensorEntityDescription):
+    """Describes an IP Control read-only state sensor.
+
+    ``source`` selects which JSON-RPC snapshot the value is read from:
+    ``"tv"`` for ``getTVStates`` or ``"video"`` for ``getVideoStates``.
+    """
+
+    source: str = "tv"
+
+
+# getTVStates / getVideoStates are READ-ONLY on consumer Frame TVs (the matching
+# setters return -32601 "Method not found"), so these are diagnostic sensors
+# only — setting these values must go through SmartThings / the WebSocket.
+IP_CONTROL_STATE_SENSORS: tuple[SamsungIPControlSensorDescription, ...] = (
+    # getTVStates
+    SamsungIPControlSensorDescription(
+        key="inputSource",
+        source="tv",
+        name="Input Source",
+        icon="mdi:import",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="pictureMode",
+        source="tv",
+        name="Picture Mode",
+        icon="mdi:image-multiple-outline",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="soundMode",
+        source="tv",
+        name="Sound Mode",
+        icon="mdi:music-note",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="pictureSize",
+        source="tv",
+        name="Picture Size",
+        icon="mdi:aspect-ratio",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="speakerSelect",
+        source="tv",
+        name="Speaker Select",
+        icon="mdi:speaker",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="mute",
+        source="tv",
+        name="Mute",
+        icon="mdi:volume-mute",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="volume",
+        source="tv",
+        name="Volume",
+        icon="mdi:volume-high",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    # getVideoStates
+    SamsungIPControlSensorDescription(
+        key="contrast",
+        source="video",
+        name="Contrast",
+        icon="mdi:contrast-box",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="brightness",
+        source="video",
+        name="Brightness",
+        icon="mdi:brightness-6",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="sharpness",
+        source="video",
+        name="Sharpness",
+        icon="mdi:blur",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="color",
+        source="video",
+        name="Color",
+        icon="mdi:palette",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    SamsungIPControlSensorDescription(
+        key="tint",
+        source="video",
+        name="Tint",
+        icon="mdi:invert-colors",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+)
 
 # Update interval for the Frame Art sensor (reduced for faster manual updates)
 SCAN_INTERVAL = timedelta(seconds=15)
@@ -198,6 +341,33 @@ async def async_setup_entry(
                 main_room_id,
             )
 
+            # Power/energy consumption sensors on the TV device itself, when the
+            # TV reports the powerConsumptionReport capability over SmartThings.
+            try:
+                main_status = await st_client.get_device_status(device_id)
+                if "powerConsumptionReport" in main_status.get("main", {}):
+                    _LOGGER.info("Adding power consumption sensors for %s", device_name)
+                    for measure in (
+                        "power",
+                        "energy",
+                        "deltaEnergy",
+                        "powerEnergy",
+                        "energySaved",
+                    ):
+                        entities.append(
+                            SmartThingsPowerConsumptionSensor(
+                                hass=hass,
+                                entry=entry,
+                                session=session,
+                                device_id=device_id,
+                                device_name=device_name,
+                                parent_device_id=device_unique_id,
+                                measure=measure,
+                            )
+                        )
+            except Exception as ex:
+                _LOGGER.debug("Could not check power consumption capability: %s", ex)
+
             # Get ALL devices in the location
             all_devices = await st_client.get_devices()
 
@@ -309,6 +479,27 @@ async def async_setup_entry(
         except Exception as ex:
             _LOGGER.warning("Could not setup SmartThings sensors: %s", ex)
 
+    # Read-only IP Control state sensors (getTVStates / getVideoStates).
+    # Gated behind IP Control being paired AND enabled, sharing a single
+    # coordinator so each poll issues just two JSON-RPC calls for all 12.
+    if _ip_control_active(entry):
+        state_coordinator = IPControlStateCoordinator(hass, entry, host)
+        entities.extend(
+            IPControlStateSensor(
+                state_coordinator, entry, description, device_name, device_unique_id
+            )
+            for description in IP_CONTROL_STATE_SENSORS
+        )
+        hass.async_create_background_task(
+            state_coordinator.async_request_refresh(),
+            f"ip_control_state_initial_refresh_{entry.entry_id}",
+        )
+        _LOGGER.debug(
+            "IP Control state sensors created for %s (%d entities)",
+            device_name,
+            len(IP_CONTROL_STATE_SENSORS),
+        )
+
     if entities:
         async_add_entities(entities)
 
@@ -338,6 +529,26 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         self._entry = entry
         self._hass = hass
         self._last_content_id: str | None = None
+        # content_id that the saved current.jpg actually represents. Tracked
+        # separately from "does current.jpg exist on disk" so a stale file from
+        # a previous artwork cannot masquerade as the current content's
+        # thumbnail (which used to block re-fetching for minutes — see
+        # _has_thumbnail_for).
+        self._current_thumbnail_content_id: str | None = None
+        # Art Store (SAM-*) content the TV has not cached yet: remember which
+        # content_id is pending and the earliest time to retry, so we recover
+        # within seconds of the TV materializing it without re-fetching on
+        # every single poll.
+        self._store_retry_content_id: str | None = None
+        self._store_retry_at: float | None = None
+        # Debounce for transient content_id glitches: the TV occasionally
+        # reports a spurious one-off content_id from get_current_artwork during
+        # matte/select operations (a single poll returning an unrelated id,
+        # corrected on the next poll). _confirmed_content_id is the trusted
+        # value currently exposed in HA; _pending_content_id is a changed id
+        # seen only once, held until a second consecutive poll confirms it.
+        self._confirmed_content_id: str | None = None
+        self._pending_content_id: str | None = None
         # Enabled by default - thumbnails are fetched for current artwork
         self._thumbnail_fetch_enabled = True
         self._thumbnail_failures = 0
@@ -434,12 +645,26 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 async with asyncio.timeout(8):
                     current = await self._art_api.get_current()
                     if current:
-                        content_id = current.get("content_id")
-                        data["current_artwork"] = {
-                            "content_id": content_id,
-                            "category_id": current.get("category_id"),
-                            "matte_id": current.get("matte_id"),
-                        }
+                        raw_content_id = current.get("content_id")
+                        content_id = self._confirm_content_id(raw_content_id)
+                        if content_id is not None and content_id == raw_content_id:
+                            # Trusted reading: expose it.
+                            data["current_artwork"] = {
+                                "content_id": content_id,
+                                "category_id": current.get("category_id"),
+                                "matte_id": current.get("matte_id"),
+                            }
+                        else:
+                            # Unconfirmed/transient reading: keep the previously
+                            # exposed artwork (already copied into data above) and
+                            # don't let this id drive thumbnail logic this cycle.
+                            if raw_content_id is not None:
+                                self._log.debug(
+                                    "Frame Art: ignoring unconfirmed content_id "
+                                    "%s this cycle",
+                                    raw_content_id,
+                                )
+                            content_id = None
             except asyncio.TimeoutError:
                 self._log.debug("Timeout getting current artwork")
             except Exception as ex:
@@ -473,19 +698,32 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                         "Frame Art: Thumbnail auto-fetch disabled, skipping %s",
                         content_id,
                     )
-            elif (
+            # Re-fetch when the content changed OR we don't actually hold this
+            # content's thumbnail. The check is content-aware (not just "does
+            # current.jpg exist"): a stale file from a previous artwork must not
+            # block fetching the current one. For Art Store content the TV has
+            # not cached yet, a short cooldown throttles the retry so we recover
+            # within seconds of it becoming available without polling-hammering.
+            need_thumbnail = (
+                content_id != self._last_content_id
+                or not self._has_thumbnail_for(content_id)
+            )
+            store_retry_waiting = (
+                self._store_retry_content_id == content_id
+                and self._store_retry_at is not None
+                and time.time() < self._store_retry_at
+            )
+            if (
                 content_id
                 and not thumbnail_in_backoff
-                and (
-                    content_id != self._last_content_id
-                    or not self._has_current_thumbnail()
-                )
+                and need_thumbnail
+                and not store_retry_waiting
             ):
                 self._log.info(
                     "Frame Art: Triggering thumbnail fetch for %s (changed: %s, has_thumbnail: %s)",
                     content_id,
                     content_id != self._last_content_id,
-                    self._has_current_thumbnail(),
+                    self._has_thumbnail_for(content_id),
                 )
                 # Schedule thumbnail fetch as background task (non-blocking)
                 self._hass.async_create_background_task(
@@ -499,11 +737,18 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                     self._thumbnail_backoff_until - time.time(),
                     content_id,
                 )
+            elif content_id and store_retry_waiting:
+                self._log.debug(
+                    "Frame Art: Art Store thumbnail %s not cached yet, next "
+                    "retry in %.0fs",
+                    content_id,
+                    self._store_retry_at - time.time(),
+                )
             elif content_id:
                 self._log.debug(
                     "Frame Art: Skipping thumbnail fetch - same content_id %s, has_thumbnail: %s",
                     content_id,
-                    self._has_current_thumbnail(),
+                    self._has_thumbnail_for(content_id),
                 )
 
             # If we have a saved thumbnail, use it
@@ -702,6 +947,68 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         )
         return os.path.isfile(www_path)
 
+    def _clear_store_retry(self, content_id: str) -> None:
+        """Clear the Art Store retry cooldown once ``content_id`` is resolved."""
+        if self._store_retry_content_id == content_id:
+            self._store_retry_content_id = None
+            self._store_retry_at = None
+
+    def _has_thumbnail_for(self, content_id: str) -> bool:
+        """Whether current.jpg exists AND actually represents ``content_id``.
+
+        ``_has_current_thumbnail`` only checks the file on disk, so a leftover
+        current.jpg from a previously displayed artwork would otherwise look
+        like a valid thumbnail for the new content and suppress the fetch. Gate
+        on the tracked content_id so we keep (re)fetching until we genuinely
+        hold this artwork's thumbnail.
+        """
+        return (
+            self._current_thumbnail_content_id == content_id
+            and self._has_current_thumbnail()
+        )
+
+    def _confirm_content_id(self, raw_content_id: str | None) -> str | None:
+        """Debounce transient content_id glitches from the TV.
+
+        The Frame occasionally reports a spurious one-off content_id from
+        get_current_artwork during matte/select operations (observed: a single
+        poll returning an unrelated id such as SAM-F0222 while a different
+        artwork is actually displayed, corrected on the very next poll). Require
+        a *changed* id to be seen on two consecutive polls before trusting it,
+        so one bad reading never flashes in HA or triggers a wasted thumbnail
+        fetch.
+
+        Returns the trusted content_id. It equals ``raw_content_id`` only when
+        the reading is accepted; otherwise it returns the previously trusted id
+        (or None) so callers can tell an accepted reading from a held one.
+        """
+        if raw_content_id is None:
+            # Failed/empty poll: don't disturb the trusted value or pending state.
+            return None
+        if raw_content_id == self._confirmed_content_id:
+            # Steady state: clear any half-seen pending change.
+            self._pending_content_id = None
+            return raw_content_id
+        if self._confirmed_content_id is None:
+            # First reading after startup: nothing to protect, trust immediately.
+            self._confirmed_content_id = raw_content_id
+            self._pending_content_id = None
+            return raw_content_id
+        if raw_content_id == self._pending_content_id:
+            # Same new id seen twice in a row: it's real now.
+            self._confirmed_content_id = raw_content_id
+            self._pending_content_id = None
+            return raw_content_id
+        # First sighting of a new id: hold it tentatively, keep the trusted one.
+        self._log.debug(
+            "Frame Art: content_id %s seen once (current trusted: %s); waiting "
+            "for confirmation before exposing it",
+            raw_content_id,
+            self._confirmed_content_id,
+        )
+        self._pending_content_id = raw_content_id
+        return self._confirmed_content_id
+
     def _create_error_placeholder(self) -> bytes:
         """Create a generic download error placeholder image.
 
@@ -871,17 +1178,35 @@ class FrameArtCoordinator(DataUpdateCoordinator):
     async def _fetch_and_save_thumbnail(self, content_id: str) -> None:
         """Fetch and save thumbnail in background (non-blocking).
 
-        Uses retry logic to handle transient failures: the Samsung Art API
-        sometimes returns 0 bytes when the TV is busy or the WebSocket is slow.
-        These are NOT DRM failures — thumbnails are never DRM-protected.
+        For personal photos (MY_F*) a 0-byte / failed response is usually a
+        transient transport issue (TV busy, slow WebSocket), so retries help.
+
+        For Art Store content (SAM-S*) it is different: the TV only keeps a
+        thumbnail in its local cache (``data/download_thumbnail_contents/``)
+        once the item has actually been downloaded — i.e. displayed, favorited
+        or otherwise materialized. Until then ``get_thumbnail`` returns
+        ``SYSTEM_FAIL`` / 0 bytes because there is genuinely nothing to serve.
+        That is structural, not transient, so hammering it with retries + an
+        error placeholder + a global backoff (the previous behavior) just
+        spammed the log for content that was never going to resolve until the
+        TV materialized it. Such content is fetched on a single attempt and, on
+        failure, left quietly for the next ``image_added`` / ``image_selected``
+        broadcast to retrigger.
         """
         import os
 
         self._log.info("Frame Art: Starting thumbnail fetch for %s", content_id)
 
-        # Retry logic: up to 3 attempts with progressive delays.
-        max_retries = 3
-        retry_delays = [1, 2, 5]  # seconds
+        # Art Store (SAM-S*) thumbnails only exist once the TV has materialized
+        # the content locally; retrying before that is pointless. Personal
+        # photos can fail transiently, so they keep the multi-attempt retry.
+        is_store_content = content_id.startswith("SAM-S")
+        if is_store_content:
+            max_retries = 1
+            retry_delays: list[int] = []
+        else:
+            max_retries = 3
+            retry_delays = [1, 2, 5]  # seconds
         thumbnail_data = None
         last_error = None
 
@@ -980,6 +1305,8 @@ class FrameArtCoordinator(DataUpdateCoordinator):
 
             self._log.info("Frame Art: Successfully saved thumbnail for %s", content_id)
             self._thumbnail_failures = 0
+            self._current_thumbnail_content_id = content_id
+            self._clear_store_retry(content_id)
             self.async_set_updated_data(self.data)
             return
 
@@ -993,13 +1320,37 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         if await self._restore_current_from_cache(content_id):
             return
 
+        # Art Store content the TV hasn't materialized yet: the failure is
+        # structural (no local thumbnail exists), not a transport problem.
+        # Log it calmly and leave the current image — do NOT write an error
+        # placeholder or trip the global backoff. The TV caches the thumbnail a
+        # little while after the content is displayed/favorited; favoriting Art
+        # Store content does NOT emit an image_added broadcast (only personal
+        # uploads do), so we cannot rely on an event to retrigger the fetch.
+        # Instead arm a short retry cooldown so the next poll after it elapses
+        # re-attempts and picks the thumbnail up within seconds of it becoming
+        # available, rather than stalling until the artwork happens to change.
+        if is_store_content:
+            self._store_retry_content_id = content_id
+            self._store_retry_at = time.time() + STORE_THUMBNAIL_RETRY_INTERVAL
+            self._log.debug(
+                "Frame Art: No thumbnail for Art Store content %s yet "
+                "(last error: %s) — the TV only caches it once it has been "
+                "displayed/favorited. Will retry in %ds.",
+                content_id,
+                last_error,
+                STORE_THUMBNAIL_RETRY_INTERVAL,
+            )
+            return
+
         # No cached copy available — save generic error placeholder.
-        # NOT a DRM issue: thumbnails are never DRM-protected.
+        # Personal photos are never DRM-protected; a failure here is a
+        # transient transport issue (TV busy, WebSocket lag).
         self._thumbnail_failures += 1
         self._log.warning(
             "Frame Art: Could not download thumbnail for %s after %d attempts "
             "(last error: %s), and no cached copy was found. "
-            "Transient transport failure, not DRM.",
+            "Transient transport failure.",
             content_id,
             max_retries,
             last_error,
@@ -1078,6 +1429,8 @@ class FrameArtCoordinator(DataUpdateCoordinator):
                 subdir,
             )
             self._thumbnail_failures = 0
+            self._current_thumbnail_content_id = content_id
+            self._clear_store_retry(content_id)
             self.async_set_updated_data(self.data)
 
         return promoted
@@ -1742,3 +2095,296 @@ class SmartThingsBrightnessIntensitySensor(SensorEntity):
                 )
         except Exception as ex:
             _LOGGER.warning("Error updating brightness intensity sensor: %s", ex)
+
+
+class SmartThingsPowerConsumptionSensor(SensorEntity):
+    """TV power/energy consumption via SmartThings ``powerConsumptionReport``.
+
+    SmartThings exposes a single ``powerConsumption`` attribute whose value is a
+    dict (``power`` in W, ``energy``/``deltaEnergy`` in Wh, etc.). One instance
+    surfaces one field of that dict as its own sensor.
+    """
+
+    _attr_has_entity_name = True
+
+    # measure -> (suffix, friendly name, device_class, state_class, unit, divisor)
+    _MEASURES = {
+        "power": (
+            "power",
+            "Power",
+            SensorDeviceClass.POWER,
+            SensorStateClass.MEASUREMENT,
+            UnitOfPower.WATT,
+            1,
+        ),
+        "energy": (
+            "energy",
+            "Energy",
+            SensorDeviceClass.ENERGY,
+            SensorStateClass.TOTAL_INCREASING,
+            UnitOfEnergy.KILO_WATT_HOUR,
+            1000,  # SmartThings reports Wh; HA wants kWh
+        ),
+        "deltaEnergy": (
+            "energy_difference",
+            "Energy difference",
+            SensorDeviceClass.ENERGY,
+            SensorStateClass.TOTAL_INCREASING,
+            UnitOfEnergy.KILO_WATT_HOUR,
+            1000,
+        ),
+        "powerEnergy": (
+            "power_energy",
+            "Power energy",
+            SensorDeviceClass.ENERGY,
+            SensorStateClass.TOTAL_INCREASING,
+            UnitOfEnergy.KILO_WATT_HOUR,
+            1000,
+        ),
+        "energySaved": (
+            "energy_saved",
+            "Energy saved",
+            SensorDeviceClass.ENERGY,
+            SensorStateClass.TOTAL_INCREASING,
+            UnitOfEnergy.KILO_WATT_HOUR,
+            1000,
+        ),
+    }
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        session,  # aiohttp session
+        device_id: str,
+        device_name: str,
+        parent_device_id: str,
+        measure: str,
+    ) -> None:
+        """Initialize the sensor."""
+        self.hass = hass
+        self._entry = entry
+        self._session = session
+        self._device_id = device_id
+        self._device_name = device_name
+        self._parent_device_id = parent_device_id
+        self._measure = measure
+        suffix, friendly, dev_class, state_class, unit, divisor = self._MEASURES[
+            measure
+        ]
+        # The SmartThings powerConsumption dict is keyed by the measure name
+        # (power, energy, deltaEnergy, powerEnergy, energySaved); suffix is only
+        # used for the entity's unique_id / friendly name.
+        self._field = measure
+        self._friendly = friendly
+        self._divisor = divisor
+        self._attr_device_class = dev_class
+        self._attr_state_class = state_class
+        self._attr_native_unit_of_measurement = unit
+        self._attr_unique_id = f"{device_id}_{suffix}"
+        self._attr_native_value = None
+
+    async def _get_st_client(self):
+        """Get SmartThings client with current token from config entry."""
+        from pysmartthings import SmartThings
+
+        api_key = await async_get_samsungtv_api_key(self.hass, self._entry)
+        if not api_key:
+            config = self.hass.data[DOMAIN][self._entry.entry_id][DATA_CFG]
+            api_key = config.get(CONF_API_KEY)
+            if not api_key:
+                oauth_token = config.get(CONF_OAUTH_TOKEN)
+                if oauth_token and isinstance(oauth_token, dict):
+                    api_key = oauth_token.get("access_token")
+        if not api_key:
+            return None
+        st_client = SmartThings(session=self._session)
+        st_client.authenticate(api_key)
+        return st_client
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info - link to the TV device."""
+        return DeviceInfo(identifiers={(DOMAIN, self._parent_device_id)})
+
+    @property
+    def name(self) -> str:
+        """Return the name of the sensor."""
+        return self._friendly
+
+    async def async_update(self) -> None:
+        """Update the sensor value from SmartThings."""
+        try:
+            st_client = await self._get_st_client()
+            if not st_client:
+                return
+            components = await st_client.get_device_status(self._device_id)
+            main = components.get("main", {})
+            # Use string capability/attribute names: the dict is keyed that way
+            # and it avoids depending on enum names across pysmartthings versions.
+            report = main.get("powerConsumptionReport", {}).get("powerConsumption")
+            value = getattr(report, "value", None)
+            if not isinstance(value, dict):
+                return
+            raw = value.get(self._field)
+            if raw is None:
+                return
+            self._attr_native_value = round(raw / self._divisor, 3)
+            _LOGGER.debug(
+                "Updated %s sensor for %s: %s",
+                self._field,
+                self._device_name,
+                self._attr_native_value,
+            )
+        except Exception as ex:
+            _LOGGER.warning("Error updating %s sensor: %s", self._field, ex)
+
+
+class IPControlStateCoordinator(DataUpdateCoordinator):
+    """Polls getTVStates + getVideoStates over IP Control for the state sensors.
+
+    A single coordinator feeds all 12 read-only sensors, so each cycle issues
+    only two JSON-RPC calls (plus a cheap power-state check) regardless of how
+    many sensors are enabled. The TV is skipped while it is powered off, both
+    to avoid pointless traffic and because the picture-state getters return
+    stale values in standby.
+    """
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        host: str,
+    ) -> None:
+        """Initialize the IP Control state coordinator."""
+        self._log = _DeviceLoggerAdapter(_LOGGER, {"host": host})
+        super().__init__(
+            hass,
+            self._log,
+            name=f"IP Control state {entry.title}",
+            update_interval=IP_CONTROL_STATE_SCAN_INTERVAL,
+        )
+        self._entry = entry
+        self._host = host
+        self._ip_control: SamsungIPControl | None = None
+        self._ip_control_token: str | None = None
+
+    def _device_title(self) -> str:
+        entry = self.hass.config_entries.async_get_entry(self._entry.entry_id)
+        return entry.title if entry else (self._host or "this Samsung TV")
+
+    def _get_ip_control(self) -> SamsungIPControl | None:
+        """Return a live IP Control client if paired AND enabled."""
+        entry = self.hass.config_entries.async_get_entry(self._entry.entry_id)
+        if entry is None or not _ip_control_active(entry):
+            self._ip_control = None
+            self._ip_control_token = None
+            return None
+        token = entry.data.get(CONF_IP_CONTROL_TOKEN)
+        if self._ip_control is None or self._ip_control_token != token:
+            self._ip_control = SamsungIPControl(self.hass, self._host, token=token)
+            self._ip_control_token = token
+        return self._ip_control
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        """Fetch the TV and video state snapshots over IP Control."""
+        client = self._get_ip_control()
+        if client is None:
+            raise UpdateFailed("IP Control is not paired or is disabled")
+
+        try:
+            # Skip the snapshots while the TV is off: the getters would return
+            # stale values, and this avoids needless traffic to a sleeping TV.
+            # A powered-off TV is an expected, recurring condition — NOT an
+            # update failure — so do not raise UpdateFailed here. Doing so makes
+            # HA log an ERROR on the first cycle of every off streak (i.e. once
+            # per off->on transition), spamming the log. Instead return a
+            # "powered_off" snapshot and let the sensors report unavailable via
+            # that flag, keeping last_update_success True (no ERROR).
+            if await client.async_get_power_state() == "powerOff":
+                self._log.debug(
+                    "IP Control state: TV is powered off, skipping state poll"
+                )
+                return {"tv": {}, "video": {}, "powered_off": True}
+
+            tv_states = await client.async_get_tv_states()
+            video_states = await client.async_get_video_states()
+        except SamsungIPControlAuthError as ex:
+            notify_token_problem(
+                self.hass,
+                self._entry.entry_id,
+                METHOD_IP_CONTROL,
+                self._device_title(),
+            )
+            raise UpdateFailed(f"IP Control token rejected: {ex}") from ex
+        except SamsungIPControlTransportError as ex:
+            # A network-layer failure (timeout, host unreachable, connection
+            # refused) is indistinguishable from "the TV is simply off" on the
+            # Frames that drop off the network when powered down — and the
+            # power-state probe above raises this very error when it can't
+            # reach the TV to learn it's off in the first place. Treat it like
+            # a powered-off snapshot (sensors go unavailable, no ERROR) instead
+            # of UpdateFailed, which would log an ERROR on every off streak for
+            # a perfectly normal condition. Genuine application errors still
+            # fall through to the UpdateFailed branch below.
+            self._log.debug(
+                "IP Control state: transport failure (TV likely off): %s", ex
+            )
+            return {"tv": {}, "video": {}, "powered_off": True}
+        except SamsungIPControlError as ex:
+            raise UpdateFailed(f"IP Control state read failed: {ex}") from ex
+
+        clear_token_problem(self.hass, self._entry.entry_id, METHOD_IP_CONTROL)
+        return {"tv": tv_states, "video": video_states, "powered_off": False}
+
+
+class IPControlStateSensor(CoordinatorEntity, SensorEntity):
+    """Read-only sensor for one getTVStates / getVideoStates field."""
+
+    entity_description: SamsungIPControlSensorDescription
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: IPControlStateCoordinator,
+        entry: ConfigEntry,
+        description: SamsungIPControlSensorDescription,
+        device_name: str,
+        device_unique_id: str,
+    ) -> None:
+        """Initialize the IP Control state sensor."""
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._entry_id = entry.entry_id
+        self._device_name = device_name
+        self._device_unique_id = device_unique_id
+        self._attr_unique_id = f"{device_unique_id}_ip_control_{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device_unique_id)},
+            name=device_name,
+        )
+
+    @property
+    def native_value(self) -> Any | None:
+        """Return the value for this field from the coordinator snapshot."""
+        if not self.coordinator.data:
+            return None
+        snapshot = self.coordinator.data.get(self.entity_description.source, {})
+        return snapshot.get(self.entity_description.key)
+
+    @property
+    def available(self) -> bool:
+        """Available only while IP Control is active and the TV is on.
+
+        A powered-off TV is reported through the coordinator data (not as an
+        update failure), so honor that flag here to mark the sensor
+        unavailable while the TV is off without logging an ERROR each cycle.
+        """
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        data = self.coordinator.data or {}
+        return bool(
+            entry
+            and _ip_control_active(entry)
+            and self.coordinator.last_update_success
+            and not data.get("powered_off")
+        )

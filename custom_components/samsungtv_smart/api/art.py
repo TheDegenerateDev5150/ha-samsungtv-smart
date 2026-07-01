@@ -44,6 +44,45 @@ D2D_SERVICE_MESSAGE_EVENT = "d2d_service_message"
 MS_CHANNEL_CONNECT_EVENT = "ms.channel.connect"
 MS_CHANNEL_READY_EVENT = "ms.channel.ready"
 
+# aiohttp WebSocket heartbeat (seconds): aiohttp sends a PING this often and,
+# if no PONG comes back in time, raises ServerTimeoutError on the receive loop.
+# That is what kills a "zombie" socket — one the TV dropped without a TCP FIN
+# (e.g. an abrupt power-off) so it still looks open but delivers nothing and
+# would otherwise never reconnect. Kept above the 15s art coordinator poll so a
+# genuinely live-but-quiet channel is not torn down unnecessarily.
+ART_WS_HEARTBEAT = 20
+
+# Art-app error codes returned in {"event": "error", "error_code": N} replies,
+# per the decompiled firmware (notes/QN55LS03FAFXZA/ART_MODE_DECOMPILED.md).
+# Logged alongside the raw code so e.g. a thumbnail failure reads as
+# "SYSTEM_FAIL (-1)" instead of a bare, otherwise meaningless "-1".
+ART_ERROR_CODES = {
+    -14: "INSUFFICIENT_SYSTEM_SPACE",
+    -13: "PREVIEW_NOT_STARTED",
+    -12: "CHECKOUT_IN_PROGRESS",
+    -11: "INSUFFICIENT_SPACE",
+    -10: "TEMPORARILY_UNAVAILABLE",
+    -9: "NOT_SUPPORTED_API",
+    -8: "SSO_REQUIRED",
+    -7: "INVALID_PARAMETER",
+    -6: "REQUEST_PARSE_FAIL",
+    -5: "DB_ERROR",
+    -4: "FILE_NOT_FOUND",
+    -3: "NO_MEMORY",
+    -2: "NO_PERMISSION",
+    -1: "SYSTEM_FAIL",
+    0: "NO_ERROR",
+}
+
+
+def _describe_art_error(error_code: Any) -> str:
+    """Format an art-app error_code with its known name, if any."""
+    try:
+        name = ART_ERROR_CODES.get(int(error_code))
+    except (TypeError, ValueError):
+        name = None
+    return f"{name} ({error_code})" if name else str(error_code)
+
 
 def _get_ssl_context() -> ssl.SSLContext:
     """Get SSL context for secure connections without blocking calls."""
@@ -92,6 +131,11 @@ class SamsungTVAsyncArt:
 
         # Async handling
         self._pending_requests: dict[str, asyncio.Future] = {}
+        # set_artmode() waiters: some Frames never echo the matching
+        # request_id, only the art_mode_changed broadcast. Resolved as soon
+        # as that broadcast arrives, instead of always paying the full
+        # request timeout.
+        self._art_mode_broadcast_waiters: list[asyncio.Future] = []
         self._recv_task: asyncio.Task | None = None
         self._connected = False
 
@@ -319,19 +363,24 @@ class SamsungTVAsyncArt:
             if await self._connect_once(self._port):
                 return True
 
+            previous_port = self._port
             alternate_port = 8001 if self._port == 8002 else 8002
             self._log.debug(
                 "Art API: Port %d failed, trying alternate port %d",
-                self._port,
+                previous_port,
                 alternate_port,
             )
+            # _connect_once already sets self._port to the port it succeeds on,
+            # so log previous_port (not self._port) to avoid a nonsensical
+            # "Port changed from N to N" line.
             if await self._connect_once(alternate_port):
-                self._log.warning(
-                    "Art API: Port changed from %d to %d "
-                    "(likely a firmware update filtered the previous port)",
-                    self._port,
-                    alternate_port,
-                )
+                if previous_port != alternate_port:
+                    self._log.warning(
+                        "Art API: Port changed from %d to %d "
+                        "(likely a firmware update filtered the previous port)",
+                        previous_port,
+                        alternate_port,
+                    )
                 self._port = alternate_port
                 self._learn_port(alternate_port)
                 return True
@@ -340,13 +389,20 @@ class SamsungTVAsyncArt:
             # (not once per port), so a temporarily unreachable TV does not
             # reach the backoff threshold twice as fast.
             self._connection_failures += 1
-            self._log.warning(
+            # A TV that's simply off/unreachable trips this on every poll, and
+            # the early attempts usually recover on their own, so keep them at
+            # DEBUG. Surface a single INFO line only on the last attempt — i.e.
+            # when we actually give up and back off — rather than WARNING, since
+            # an unreachable TV is an expected condition, not a fault.
+            reached_max = self._connection_failures >= self._max_connection_failures
+            self._log.log(
+                logging.INFO if reached_max else logging.DEBUG,
                 "Art API: Connection failure %d/%d",
                 self._connection_failures,
                 self._max_connection_failures,
             )
 
-            if self._connection_failures >= self._max_connection_failures:
+            if reached_max:
                 # Exponential backoff: 2, 5, 10, 20, 30 minutes (capped)
                 backoff_minutes = min(
                     2
@@ -354,7 +410,7 @@ class SamsungTVAsyncArt:
                     30,
                 )
                 self._backoff_until = time.time() + (backoff_minutes * 60)
-                self._log.warning(
+                self._log.debug(
                     "Art API: Too many connection failures (%d), entering %d minute backoff period",
                     self._connection_failures,
                     backoff_minutes,
@@ -382,6 +438,7 @@ class SamsungTVAsyncArt:
                 self._ws_url,
                 timeout=aiohttp.ClientTimeout(total=self._timeout),
                 ssl=ssl_context,
+                heartbeat=ART_WS_HEARTBEAT,
             )
 
             # Wait for connection events
@@ -524,12 +581,22 @@ class SamsungTVAsyncArt:
         finally:
             if not cancelled:
                 # Receive loop is exiting on its own (TV standby, network
-                # drop, transport closed) and nobody else will clean up.
-                # Drop stale references so the next _send_art_request
-                # triggers a fresh open().
+                # drop, transport closed, or a missed heartbeat PONG on a
+                # zombie socket) and nobody else will clean up. Drop stale
+                # references so the next _send_art_request triggers a fresh
+                # open().
                 self._connected = False
                 self._ws = None
                 self._recv_task = None
+                # Invalidate the cached art_mode: the channel that keeps it
+                # live is gone, so the last value (typically "on", since Art
+                # Mode is a Frame's last state before power-off) is now stale
+                # and must not keep being reported. Resetting to None makes
+                # _art_mode_is_on() fall through to the independent power
+                # sources (IP Control / SmartThings / REST PowerState) instead
+                # of pinning a false "on". A reconnect restores the real value
+                # from the first event received.
+                self.art_mode = None
                 # Fail in-flight pending requests immediately rather than
                 # letting their callers block on the per-request timeout;
                 # the response will never arrive on this dead channel.
@@ -560,6 +627,10 @@ class SamsungTVAsyncArt:
         elif sub_event == "art_mode_changed":
             self.art_mode = data.get("status") == "on"
             self._fire_art_event()
+            for future in self._art_mode_broadcast_waiters:
+                if not future.done():
+                    future.set_result(None)
+            self._art_mode_broadcast_waiters.clear()
         elif sub_event == "go_to_standby":
             # Ambiguous, not a definitive "art mode off": the panel also
             # fires this when it dims for its own power-save sleep timer
@@ -579,15 +650,21 @@ class SamsungTVAsyncArt:
             "slideshow_changed",
             "favorite_changed",
             "rotation_changed",
+            "image_added",
+            "image_of_list_added",
         ):
             # Confirmed broadcasts (WEBSOCKET_DECOMPILED.md) for changes the
             # Frame Art sensor otherwise only learns about on its next poll.
+            # image_added / image_of_list_added fire when the TV materializes
+            # new content locally — that is when an Art Store (SAM-S*)
+            # thumbnail finally becomes fetchable, so refreshing here retries
+            # the thumbnail that was skipped while the content was uncached.
             self._fire_art_content_event()
 
         # Check for error
         if sub_event == "error":
             error_code = data.get("error_code", "unknown")
-            self._log.debug("Art API: Error event: %s", error_code)
+            self._log.debug("Art API: Error event: %s", _describe_art_error(error_code))
 
         # Resolve pending requests
         request_id = data.get("request_id", data.get("id"))
@@ -794,7 +871,7 @@ class SamsungTVAsyncArt:
         if data.get("event") == "error":
             self._log.debug(
                 "Art API: get_thumbnail_list returned error: %s",
-                data.get("error_code"),
+                _describe_art_error(data.get("error_code")),
             )
             return {}
 
@@ -930,20 +1007,25 @@ class SamsungTVAsyncArt:
         # on most TV models. Only the direct socket fallback (get_thumbnail) fails for
         # SAM-* images. Never set the flag to False: a startup error (TV not ready)
         # must not permanently disable the fast path for the whole session.
-        self._log.debug(
-            "Art API: Trying get_thumbnail_list for %s (capability=%s)",
-            content_id,
-            self._supports_thumbnail_list,
-        )
-        result = await self._get_thumbnail_via_list(content_id)
-        if result:
-            if self._supports_thumbnail_list is None:
-                self._log.info(
-                    "Art API: TV supports get_thumbnail_list — "
-                    "fast path active for this session"
-                )
-                self._supports_thumbnail_list = True
-            return result
+        # Skip the list path entirely once we've learned this TV rejects it
+        # with a definitive error -1 (2024-2025 Tizen): otherwise every single
+        # thumbnail fetch logs a SYSTEM_FAIL and wastes a round-trip before the
+        # direct get_thumbnail fallback below.
+        if self._supports_thumbnail_list is not False:
+            self._log.debug(
+                "Art API: Trying get_thumbnail_list for %s (capability=%s)",
+                content_id,
+                self._supports_thumbnail_list,
+            )
+            result = await self._get_thumbnail_via_list(content_id)
+            if result:
+                if self._supports_thumbnail_list is None:
+                    self._log.info(
+                        "Art API: TV supports get_thumbnail_list — "
+                        "fast path active for this session"
+                    )
+                    self._supports_thumbnail_list = True
+                return result
 
         self._log.debug("Art API: Using get_thumbnail direct for %s", content_id)
 
@@ -967,7 +1049,10 @@ class SamsungTVAsyncArt:
 
         # Check for error
         if data.get("event") == "error":
-            self._log.debug("Art API: get_thumbnail error: %s", data.get("error_code"))
+            self._log.debug(
+                "Art API: get_thumbnail error: %s",
+                _describe_art_error(data.get("error_code")),
+            )
             return None
 
         try:
@@ -1056,8 +1141,24 @@ class SamsungTVAsyncArt:
             self._log.debug(
                 "Art API: get_thumbnail_list error for %s: %s",
                 content_id,
-                data.get("error_code"),
+                _describe_art_error(data.get("error_code")),
             )
+            # A definitive error_code -1 means this model doesn't support the
+            # list path at all (2024-2025 Tizen) — remember it so we stop
+            # re-probing it on every single thumbnail and go straight to the
+            # direct get_thumbnail. We only latch on this explicit code, NOT on
+            # a missing/transient response (handled above as "no response"),
+            # so a TV-not-ready blip can't permanently disable the fast path.
+            try:
+                if int(data.get("error_code")) == -1:
+                    if self._supports_thumbnail_list is not False:
+                        self._log.info(
+                            "Art API: TV does not support get_thumbnail_list "
+                            "(error -1) — using direct get_thumbnail from now on"
+                        )
+                    self._supports_thumbnail_list = False
+            except (TypeError, ValueError):
+                pass
             return None
 
         try:
@@ -1198,23 +1299,53 @@ class SamsungTVAsyncArt:
         """Set art mode on or off."""
         if isinstance(mode, bool):
             mode = "on" if mode else "off"
-        data = await self._send_art_request(
-            {
-                "request": "set_artmode_status",
-                "value": mode,
-            }
-        )
-        if data is not None:
-            return True
-        # Fallback for older Frames (e.g. 2020/2021): these confirm the change
-        # by broadcasting an `art_mode_changed` event that carries no
-        # request_id, so it never matches the pending request and the send
-        # above times out even though the TV did switch. The event handler
-        # already updates self.art_mode from that broadcast, so trust it here
-        # rather than reporting a false failure. If the TV genuinely did not
-        # change, self.art_mode won't match the requested state and we still
-        # return False — so the success path is unchanged.
         desired = mode == "on"
+
+        # Some Frames (e.g. 2020/2021) never echo the matching request_id for
+        # set_artmode_status, only the art_mode_changed broadcast — and that
+        # broadcast carries no request_id either, so it can't be awaited via
+        # _send_art_request's normal matching. Race both: whichever confirms
+        # first (the direct response, or the broadcast updating self.art_mode)
+        # wins, instead of always paying the full request timeout.
+        broadcast_future = asyncio.get_event_loop().create_future()
+        self._art_mode_broadcast_waiters.append(broadcast_future)
+        request_task = asyncio.ensure_future(
+            self._send_art_request(
+                {
+                    "request": "set_artmode_status",
+                    "value": mode,
+                }
+            )
+        )
+        try:
+            done, _ = await asyncio.wait(
+                {request_task, broadcast_future},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if request_task in done and request_task.result() is not None:
+                return True
+            if self.art_mode == desired:
+                if broadcast_future in done:
+                    self._log.debug(
+                        "Art API: set_artmode(%s) confirmed early by an "
+                        "art_mode_changed broadcast",
+                        mode,
+                    )
+                return True
+            if request_task not in done:
+                await request_task
+                if request_task.result() is not None:
+                    return True
+        finally:
+            if broadcast_future in self._art_mode_broadcast_waiters:
+                self._art_mode_broadcast_waiters.remove(broadcast_future)
+            if not request_task.done():
+                request_task.cancel()
+
+        # Final fallback: the request timed out and no broadcast arrived in
+        # time either. If the TV's state already matches what we asked for
+        # (e.g. a late broadcast resolved it after our wait above), treat it
+        # as success; otherwise report a genuine failure.
         if self.art_mode == desired:
             self._log.debug(
                 "Art API: set_artmode(%s) timed out, but an art_mode_changed "
@@ -1474,6 +1605,22 @@ class SamsungTVAsyncArt:
         """
         data = await self._send_art_request(
             {"request": "set_motion_timer", "value": value}
+        )
+        if data is not None:
+            self._invalidate_artmode_settings_cache()
+        return data is not None
+
+    async def set_brightness_sensor_setting(self, value: str) -> bool:
+        """Enable/disable the Art Mode ambient brightness sensor.
+
+        Accepts ``"on"`` / ``"off"`` (per the decompiled firmware, calls
+        ScreenManagerSetBrightnessSensorEnableValue). Only supported on Frame
+        models that report `get_artmode_settings("brightness_sensor_setting")`.
+        No dedicated get request exists; read the current value back via
+        get_artmode_settings.
+        """
+        data = await self._send_art_request(
+            {"request": "set_brightness_sensor_setting", "value": value}
         )
         if data is not None:
             self._invalidate_artmode_settings_cache()

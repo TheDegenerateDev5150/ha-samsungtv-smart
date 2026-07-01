@@ -137,8 +137,10 @@ so you can point the card straight at them with **no manual configuration**:
 ```yaml
 type: custom:folder-gallery-card
 folder_sensor: sensor.mastertv_store
-folder: /local/frame_art/YOUR_ENTRY_ID/store
 ```
+
+(No `folder:` line needed — see [the note below](#basic-configuration) on what
+`folder:` is actually for.)
 
 **Legacy / optional:** if you prefer the built-in Home Assistant `folder`
 platform (for example to watch a custom directory the integration doesn't
@@ -192,7 +194,6 @@ When you click an image and open the lightbox, the card automatically shows cont
 type: custom:folder-gallery-card
 title: Frame TV Favorites
 folder_sensor: sensor.store
-folder: /local/frame_art/store
 columns: 4
 image_height: 160px
 aspect_ratio: "1"
@@ -205,13 +206,35 @@ action:
     content_id: "{{content_id}}"
 ```
 
+> **What does `folder:` actually do? (usually: nothing you need to set)**
+>
+> The **image list** always comes from the `folder_sensor` / `sensor` (a
+> `platform: folder` sensor) or from `image_list`. A browser can't list a
+> directory from a URL, so `folder:` is *only* the base URL prepended to each
+> filename to build the thumbnail `<img>` src — it never produces the list
+> itself.
+>
+> - **Folder sensor under `/config/www/`** (the normal case): the card derives
+>   the `/local/...` URL automatically from the sensor's `path`, so you **don't
+>   need `folder:` at all**. That's why the examples omit it.
+> - **Set `folder:` only when the card can't derive the URL** — files served
+>   from outside `/config/www/`, or a custom/template sensor whose `file_list`
+>   has bare filenames and no `path`. Give a `/local/...` URL (a
+>   `/config/www/...` path is also accepted and mapped to `/local/...`).
+> - **`folder:` with no sensor and no `image_list` → empty gallery.** On its own
+>   it can't list any files.
+>
+> The action also accepts the modern syntax — `perform_action:` instead of
+> `service:`, or an object-form `tap_action:` — in addition to the legacy
+> `action: { service: ... }` shown above.
+
 ### All Configuration Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `title` | string | - | Card title |
 | `folder_sensor` | string | - | Folder sensor entity ID |
-| `folder` | string | - | Base folder path (e.g., `/local/frame_art/store`) |
+| `folder` | string | *(auto)* | Base **URL** for thumbnails (e.g., `/local/frame_art/store`). Optional — auto-derived from `folder_sensor`'s `path` when under `/config/www/`. Does **not** provide the image list (a sensor or `image_list` does). A `/config/www/...` value is accepted and mapped to `/local/...`. |
 | `columns` | number | `4` | Number of columns |
 | `image_height` | string | `150px` | Image height (ignored if `aspect_ratio` set) |
 | `aspect_ratio` | string | - | Aspect ratio (e.g., `1`, `16/9`, `3/4`) |
@@ -219,7 +242,8 @@ action:
 | `border_radius` | string | `8px` | Image border radius |
 | `show_filename` | boolean | `true` | Show filename on hover |
 | `filter` | string | `*` | File filter pattern |
-| `tap_action` | string/object | - | Action on tap |
+| `tap_action` | string/object | - | Action on single tap (e.g. `lightbox`, or a service/perform-action object) |
+| `double_tap_action` | object | - | Action on double tap (e.g. select the artwork directly). When set, a single tap is delayed slightly to detect the double tap. |
 | `hold_action` | object | - | Action on long press |
 | `action` | object | - | Default action (used by lightbox Select button) |
 
@@ -230,6 +254,32 @@ action:
 | `lightbox` | Open image in fullscreen lightbox with smart action buttons |
 | `action` | Execute the configured action directly |
 | `more-info` | Show entity more-info dialog |
+
+### Example: tap = preview, double-tap = select, hold = select
+
+```yaml
+type: custom:folder-gallery-card
+title: Gallery Personal
+folder_sensor: sensor.samsung_hacs_personal
+columns: 4
+aspect_ratio: "1"
+tap_action: lightbox          # single tap → open the preview
+double_tap_action:            # double tap → display the artwork on the TV
+  perform_action: samsungtv_smart.art_select_image
+  target:
+    entity_id: media_player.samsung_hacs
+  data:
+    content_id: "{{content_id}}"
+hold_action:                  # long press → display the artwork on the TV
+  perform_action: samsungtv_smart.art_select_image
+  target:
+    entity_id: media_player.samsung_hacs
+  data:
+    content_id: "{{content_id}}"
+```
+
+> When `double_tap_action` is set, a single tap is held back briefly (~250 ms)
+> to tell the two apart, so `tap_action` fires a touch later than usual.
 
 ### Template Variables
 

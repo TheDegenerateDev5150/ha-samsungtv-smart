@@ -32,6 +32,10 @@ class FolderGalleryCard extends HTMLElement {
     this.attachShadow({ mode: 'open' });
     this._images = [];
     this._config = {};
+    // Double-tap detection state (survives gallery re-renders).
+    this._dtIndex = -1;
+    this._dtTime = 0;
+    this._dtTimer = null;
   }
 
   static get properties() {
@@ -59,6 +63,7 @@ class FolderGalleryCard extends HTMLElement {
       action: config.action || null,
       tap_action: config.tap_action || null,
       hold_action: config.hold_action || null,
+      double_tap_action: config.double_tap_action || null,
       sensor: config.sensor || null, // Sensor that provides image list
       image_list: config.image_list || null, // Static list of images
       ...config
@@ -113,6 +118,13 @@ class FolderGalleryCard extends HTMLElement {
     // If neither yields a usable URL, `folder` stays empty and per-image
     // fallbacks may apply below (image_list with absolute URLs, etc.).
     let folder = (this._config.folder || '').replace(/\/+$/, '');
+    // An explicitly-set folder may be given as a filesystem path
+    // (/config/www/...) rather than the browser URL (/local/...). HA serves
+    // /config/www/ at /local/, so map it — otherwise the <img> src points at a
+    // path the browser can't fetch and every thumbnail breaks.
+    if (folder.startsWith('/config/www/')) {
+      folder = folder.replace(/^\/config\/www\//, '/local/');
+    }
     if (!folder) {
       const sensorEntity = this._config.folder_sensor || this._config.sensor;
       if (sensorEntity) {
@@ -551,10 +563,99 @@ class FolderGalleryCard extends HTMLElement {
       </div>
     `;
 
-    // Add click handlers
+    // Add click + long-press handlers.
+    // Long-press is detected with a pointer timer rather than the `contextmenu`
+    // event: contextmenu doesn't fire reliably on touch / the HA Companion app,
+    // and a `click` always follows the release — which used to open the lightbox
+    // (tap_action) on top of, or instead of, the hold_action. Here a fired
+    // long-press swallows that trailing click.
+    const LONG_PRESS_MS = 500;
+    const MOVE_TOLERANCE = 10;
+    const DOUBLE_TAP_MS = 300;
+    const hasDoubleTap = !!this._config.double_tap_action;
     container.querySelectorAll('.gallery-item').forEach(item => {
-      item.addEventListener('click', (e) => this.handleClick(e, item));
-      item.addEventListener('contextmenu', (e) => this.handleHold(e, item));
+      let pressTimer = null;
+      let holdFired = false;
+      let startX = 0;
+      let startY = 0;
+
+      const clearTimer = () => {
+        if (pressTimer) {
+          clearTimeout(pressTimer);
+          pressTimer = null;
+        }
+      };
+
+      item.addEventListener('pointerdown', (e) => {
+        holdFired = false;
+        startX = e.clientX;
+        startY = e.clientY;
+        clearTimer();
+        pressTimer = setTimeout(() => {
+          holdFired = true;
+          this.handleHold(e, item);
+        }, LONG_PRESS_MS);
+      });
+
+      item.addEventListener('pointermove', (e) => {
+        // Treat a finger/cursor drag as a scroll, not a press.
+        if (Math.abs(e.clientX - startX) > MOVE_TOLERANCE ||
+            Math.abs(e.clientY - startY) > MOVE_TOLERANCE) {
+          clearTimer();
+        }
+      });
+
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach((evt) =>
+        item.addEventListener(evt, clearTimer));
+
+      item.addEventListener('click', (e) => {
+        if (holdFired) {
+          // A long-press already handled this interaction; swallow the click so
+          // tap_action (e.g. lightbox) doesn't also fire on release.
+          e.preventDefault();
+          e.stopPropagation();
+          holdFired = false;
+          return;
+        }
+
+        // Without a double_tap_action, fire the single tap immediately (no
+        // added latency). With one configured, debounce: a second click within
+        // the window is a double tap; otherwise the single tap fires on timeout.
+        if (!hasDoubleTap) {
+          this.handleClick(e, item);
+          return;
+        }
+
+        // Double-tap state lives on the instance (keyed by image index), not in
+        // this closure: a sensor update can re-render the gallery between the
+        // two clicks, recreating the element and losing any per-element timer —
+        // which made the second click look like a fresh first click and opened
+        // the lightbox instead of firing double_tap_action.
+        const index = parseInt(item.dataset.index);
+        const now = Date.now();
+        if (this._dtIndex === index && (now - this._dtTime) < DOUBLE_TAP_MS) {
+          if (this._dtTimer) {
+            clearTimeout(this._dtTimer);
+            this._dtTimer = null;
+          }
+          this._dtIndex = -1;
+          this._dtTime = 0;
+          this.executeAction(this._images[index], this._config.double_tap_action);
+        } else {
+          this._dtIndex = index;
+          this._dtTime = now;
+          if (this._dtTimer) clearTimeout(this._dtTimer);
+          this._dtTimer = setTimeout(() => {
+            this._dtTimer = null;
+            this._dtIndex = -1;
+            this.handleClick(e, item);
+          }, DOUBLE_TAP_MS);
+        }
+      });
+
+      // Suppress the native context menu on long-press / right-click so it
+      // doesn't interrupt the hold.
+      item.addEventListener('contextmenu', (e) => e.preventDefault());
     });
   }
 
@@ -678,12 +779,33 @@ class FolderGalleryCard extends HTMLElement {
   handleClick(e, item) {
     const index = parseInt(item.dataset.index);
     const imageData = this._images[index];
-    
+
+    // Modern object-form tap_action, e.g.
+    //   tap_action:
+    //     action: perform-action      # (or the legacy call-service)
+    //     perform_action: samsungtv_smart.art_select_image
+    //     target: {...}
+    //     data: {...}
+    // HA's own cards accept this shape; handle it here so the new syntax works
+    // instead of silently doing nothing (the dispatcher used to only read the
+    // legacy `action: { service: ... }` block).
+    const tapAction = this._config.tap_action;
+    if (tapAction && typeof tapAction === 'object') {
+      if (tapAction.action === 'more-info' && this._config.entity) {
+        this.fireEvent('hass-more-info', { entityId: this._config.entity });
+      } else if (tapAction.action === 'none') {
+        // explicitly do nothing
+      } else {
+        this.executeAction(imageData, tapAction);
+      }
+      return;
+    }
+
     // If tap_action is 'lightbox' or not defined with action, show lightbox
-    if (this._config.tap_action === 'lightbox' || 
+    if (this._config.tap_action === 'lightbox' ||
         (!this._config.tap_action && this._config.action)) {
       this.openLightbox(imageData);
-    } 
+    }
     // Direct action on tap
     else if (this._config.tap_action === 'action' || this._config.action) {
       this.executeAction(imageData);
@@ -709,7 +831,9 @@ class FolderGalleryCard extends HTMLElement {
   executeAction(imageData, actionConfig = null) {
     const action = actionConfig || this._config.action;
     if (!action || !this._hass) return;
-    if (!action.service) return;
+    // Accept both the legacy `service:` key and the modern `perform_action:`
+    // key (HA renamed call-service -> perform-action).
+    if (!action.service && !action.perform_action) return;
 
     // Multi-frame upload routing.
     // When the action is an upload, the gallery points at a local photo
@@ -729,9 +853,9 @@ class FolderGalleryCard extends HTMLElement {
   }
 
   _dispatchAction(imageData, action, entityOverride = null) {
-    if (!action || !this._hass || !action.service) return Promise.resolve();
+    const service = action ? (action.service || action.perform_action) : null;
+    if (!action || !this._hass || !service) return Promise.resolve();
 
-    const service = action.service;
     const [domain, serviceName] = service.split('.');
 
     // Build service data with template substitution
@@ -788,7 +912,7 @@ class FolderGalleryCard extends HTMLElement {
   }
 
   _isUploadAction(action) {
-    const svc = (action.service || '').toLowerCase();
+    const svc = (action.service || action.perform_action || '').toLowerCase();
     if (svc.endsWith('art_upload')) return true;
     // Generic heuristic: an upload-style action carries a file_path payload.
     return !!(action.data && Object.prototype.hasOwnProperty.call(action.data, 'file_path'));
@@ -954,23 +1078,36 @@ class FolderGalleryCardEditor extends HTMLElement {
           background: var(--card-background-color);
           color: var(--primary-text-color);
         }
+        .form-row .hint {
+          display: block;
+          margin-top: 4px;
+          font-size: 0.8em;
+          font-weight: normal;
+          color: var(--secondary-text-color);
+        }
       </style>
-      
+
       <div class="form-row">
         <label>Title</label>
         <input type="text" id="title" value="${this._config.title || ''}">
       </div>
-      
+
       <div class="form-row">
-        <label>Folder Path</label>
-        <input type="text" id="folder" value="${this._config.folder || ''}" placeholder="/local/images">
-      </div>
-      
-      <div class="form-row">
-        <label>Sensor (provides image list)</label>
+        <label>Sensor (provides the image list)</label>
         <input type="text" id="folder_sensor" value="${this._config.folder_sensor || this._config.sensor || ''}" placeholder="sensor.your_folder_sensor">
+        <span class="hint">Required — a <code>platform: folder</code> sensor (e.g. <code>sensor.&lt;tv&gt;_store</code>). This is what lists the images.</span>
       </div>
-      
+
+      <div class="form-row">
+        <label>Folder Path (optional)</label>
+        <input type="text" id="folder" value="${this._config.folder || ''}" placeholder="auto-detected from the sensor">
+        <span class="hint">${
+          (this._config.folder_sensor || this._config.sensor)
+            ? 'Auto-detected from the sensor — leave empty unless your files are outside <code>/config/www/</code>.'
+            : 'Only the base URL for thumbnails — it does <b>not</b> list images. On its own it shows nothing; set a sensor above.'
+        }</span>
+      </div>
+
       <div class="form-row">
         <label>Columns</label>
         <input type="number" id="columns" value="${this._config.columns || 4}" min="1" max="10">

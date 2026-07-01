@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 import logging
+import time
 from typing import Any
 
 from pysmartthings import Capability, Command
@@ -209,6 +210,13 @@ class FrameArtModeSwitch(SwitchEntity):
         self._attr_is_on = None
         self._available = True
         self._updating = False
+        # Optimistic-hold guard: after an explicit user toggle the
+        # media_player's art_mode_status lags (~5s poll + Art WebSocket
+        # propagation), so for a short window we keep the value we just set and
+        # ignore any *contradicting* stale reading (which previously snapped the
+        # switch back and made it look like a ~25s refresh).
+        self._optimistic_value: bool | None = None
+        self._optimistic_until: float = 0.0
         self._media_player_entity_id: str | None = None
         self._ip_control: SamsungIPControl | None = None
         self._ip_control_token: str | None = None
@@ -450,19 +458,21 @@ class FrameArtModeSwitch(SwitchEntity):
                     )
                     result = await self._set_artmode(True)
                     if result:
-                        # Set state immediately for responsive UI
-                        self._attr_is_on = True
+                        # Set state immediately for responsive UI and hold it
+                        # against the lagging media_player reading.
+                        self._set_optimistic(True)
                         self._available = True
                         self.async_write_ha_state()
                         self._log.info("Art Mode turned ON for %s", self._device_name)
 
-                        # Wait for TV to confirm, then refresh state.
-                        # async_update() only mutates attributes — publish
-                        # the refreshed state so the UI is corrected if the
-                        # TV ended up differing from the optimistic write.
-                        await asyncio.sleep(2)
-                        await self.async_update()
-                        self.async_write_ha_state()
+                        # Keep the optimistic state and let the media_player
+                        # state-change listener correct it authoritatively once
+                        # art_mode_status actually flips. A self-triggered
+                        # async_update() here read the media_player's
+                        # art_mode_status before it had caught up (~5s poll +
+                        # WebSocket propagation), so it overwrote the fresh
+                        # optimistic True with a stale False — making the switch
+                        # snap back off and only recover ~25s later.
                         return  # Success, exit
                     else:
                         # set_artmode returned None/False — this can happen when
@@ -543,19 +553,20 @@ class FrameArtModeSwitch(SwitchEntity):
                     )
                     result = await self._set_artmode(False)
                     if result:
-                        # Set state immediately for responsive UI
-                        self._attr_is_on = False
+                        # Set state immediately for responsive UI and hold it
+                        # against the lagging media_player reading.
+                        self._set_optimistic(False)
                         self._available = True
                         self.async_write_ha_state()
                         self._log.info("Art Mode turned OFF for %s", self._device_name)
 
-                        # Wait for TV to confirm, then refresh state.
-                        # async_update() only mutates attributes — publish
-                        # the refreshed state so the UI is corrected if the
-                        # TV ended up differing from the optimistic write.
-                        await asyncio.sleep(2)
-                        await self.async_update()
-                        self.async_write_ha_state()
+                        # Keep the optimistic state and let the media_player
+                        # state-change listener correct it authoritatively once
+                        # art_mode_status actually flips. A self-triggered
+                        # async_update() here read the media_player's
+                        # art_mode_status before it had caught up, overwriting
+                        # the fresh optimistic value with a stale one (the
+                        # mirror of the turn-on slow-refresh bug).
                         return  # Success, exit
                     else:
                         self._log.debug(
@@ -588,6 +599,34 @@ class FrameArtModeSwitch(SwitchEntity):
         )
         self.async_write_ha_state()
 
+    # How long to trust an explicit user toggle over a contradicting
+    # media_player reading (its art_mode_status lags ~5s poll + WS propagation,
+    # observed up to ~40s on a 2024 Frame).
+    _OPTIMISTIC_HOLD_SECONDS = 45
+
+    def _set_optimistic(self, value: bool) -> None:
+        """Record an explicit toggle so stale readings don't override it."""
+        self._attr_is_on = value
+        self._optimistic_value = value
+        self._optimistic_until = time.monotonic() + self._OPTIMISTIC_HOLD_SECONDS
+
+    def _optimistic_blocks(self, incoming: bool) -> bool:
+        """Return True if ``incoming`` contradicts a still-valid optimistic value.
+
+        A reading that *matches* the optimistic value clears the hold (the
+        authoritative source caught up); a contradicting one within the window
+        is ignored (it is the lagging pre-toggle value).
+        """
+        if self._optimistic_value is None:
+            return False
+        if time.monotonic() >= self._optimistic_until:
+            self._optimistic_value = None
+            return False
+        if incoming == self._optimistic_value:
+            self._optimistic_value = None
+            return False
+        return True
+
     async def async_update(self) -> None:
         """Update the Art Mode state."""
         if self._updating:
@@ -616,9 +655,17 @@ class FrameArtModeSwitch(SwitchEntity):
             entity_id = self._get_media_player_entity_id()
             mp_state = self._hass.states.get(entity_id) if entity_id else None
             if mp_state is not None and "art_mode_status" in mp_state.attributes:
-                self._attr_is_on = mp_state.attributes.get("art_mode_status") == "on"
+                incoming = mp_state.attributes.get("art_mode_status") == "on"
                 self._available = True
-                self._log.debug("Art Mode state updated: %s", self._attr_is_on)
+                if self._optimistic_blocks(incoming):
+                    self._log.debug(
+                        "Ignoring stale art_mode_status=%s (holding optimistic %s)",
+                        incoming,
+                        self._optimistic_value,
+                    )
+                else:
+                    self._attr_is_on = incoming
+                    self._log.debug("Art Mode state updated: %s", self._attr_is_on)
             else:
                 async with asyncio.timeout(8):
                     art_mode = await self._art_api.get_artmode()
@@ -668,14 +715,23 @@ class FrameArtModeSwitch(SwitchEntity):
         if new_state is None:
             return
         art_status = new_state.attributes.get("art_mode_status")
-        if art_status == "on":
-            self._attr_is_on = True
-        elif art_status == "off":
+        if art_status in ("on", "off"):
             # Mirror the media_player's authoritative art_mode_status directly,
             # including when the TV is ON but no longer in Art Mode (e.g. an app
             # was just launched). Without this the switch kept its previous
-            # "on" value and lingered until its own poll.
-            self._attr_is_on = False
+            # value and lingered until its own poll. But honour a recent
+            # explicit toggle: this attribute lags after a switch action, and
+            # the stale pre-toggle value used to snap the switch back.
+            incoming = art_status == "on"
+            if self._optimistic_blocks(incoming):
+                self._log.debug(
+                    "Ignoring stale media_player art_mode_status=%s"
+                    " (holding optimistic %s)",
+                    art_status,
+                    self._optimistic_value,
+                )
+                return
+            self._attr_is_on = incoming
         elif new_state.state == STATE_OFF:
             self._attr_is_on = False
         elif new_state.state in ("unknown", "unavailable"):

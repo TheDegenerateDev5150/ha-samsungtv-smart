@@ -18,7 +18,7 @@ Protocol notes (confirmed on Frame 2024 / 2025):
     (Settings -> Connections -> Network -> Expert Settings).
   * Older Samsung TVs (Tizen <= 5.5, ~2020 Frames) negotiate a weak DH group
     that OpenSSL's default security level rejects ("dh key too small"). The
-    client detects this and transparently retries with @SECLEVEL=1.
+    client detects this and transparently retries with @SECLEVEL=0.
 
 The blocking HTTP work runs in the executor so the event loop is never blocked.
 The SSL context is also built lazily inside the executor — `create_default_context`
@@ -84,6 +84,16 @@ class SamsungIPControlModeLockedError(SamsungIPControlError):
     """
 
 
+class SamsungIPControlTransportError(SamsungIPControlError):
+    """Network-layer failure reaching the TV (timeout, host unreachable, etc).
+
+    Distinct from an application-level error: on many Frames (notably the
+    2020/2021 sets) the TV drops off the network entirely when powered off,
+    so a transport failure on the IP Control port is indistinguishable from
+    "the TV is simply off" and should not be treated as a hard error.
+    """
+
+
 class SamsungIPControl:
     """Minimal async client for the Samsung IP Control JSON-RPC interface."""
 
@@ -106,7 +116,7 @@ class SamsungIPControl:
         self._ctx: ssl.SSLContext | None = None
         # Older TVs (Tizen <= 5.5, ~2020 Frames) negotiate a weak DH group and
         # are rejected by OpenSSL's default security level. When that happens
-        # we retry once with @SECLEVEL=1 and remember it for subsequent calls.
+        # we retry once with @SECLEVEL=0 and remember it for subsequent calls.
         self._tls_legacy = False
         # Consecutive (artModeControl says on / pictureMode says not-art)
         # disagreements, for the desync guard in async_get_art_mode.
@@ -288,6 +298,79 @@ class SamsungIPControl:
             raise SamsungIPControlError(f"unexpected colorTone response: {result!r}")
         return response_value
 
+    async def async_get_mute(self) -> bool:
+        """Return whether the TV is currently muted."""
+        result = await self._async_request("muteControl")
+        value = result.get("mute")
+        if value not in ("muteOn", "muteOff"):
+            raise SamsungIPControlError(f"unexpected mute response: {result!r}")
+        return value == "muteOn"
+
+    async def async_set_mute(self, mute: bool) -> bool:
+        """Set and return whether the TV is muted.
+
+        ``muteControl`` is the only mute setter that works via IP Control on
+        a Frame 2024/2025 — the matching field in ``getTVStates`` is
+        read-only.
+        """
+        target = "muteOn" if mute else "muteOff"
+        result = await self._async_request("muteControl", {"mute": target})
+        value = result.get("mute", target)
+        if value not in ("muteOn", "muteOff"):
+            raise SamsungIPControlError(f"unexpected mute response: {result!r}")
+        return value == "muteOn"
+
+    async def async_volume_up(self) -> None:
+        """Step the volume up by one (relative — no absolute level over IP Control).
+
+        ``volumeUpDnControl`` is the only volume setter that works via IP
+        Control on a Frame 2024/2025 — ``directVolumeControl`` (absolute
+        volume) returns ``-32601 "Method not found"``. There is no getter:
+        the call is fire-and-forget, matching the WebSocket ``KEY_VOLUP``
+        semantics it replaces.
+        """
+        await self._async_request("volumeUpDnControl", {"control": "volumeUp"})
+
+    async def async_volume_down(self) -> None:
+        """Step the volume down by one. See :meth:`async_volume_up`."""
+        await self._async_request("volumeUpDnControl", {"control": "volumeDn"})
+
+    async def async_get_device_information(self) -> dict[str, str]:
+        """Return the TV's model, firmware version and serial number."""
+        result = await self._async_request("getDeviceInformation")
+        model_id = result.get("modelID")
+        if not isinstance(model_id, str):
+            raise SamsungIPControlError(
+                f"no modelID in getDeviceInformation response: {result!r}"
+            )
+        return {
+            "modelID": model_id,
+            "FWVersion": str(result.get("FWVersion", "")),
+            "serialNumber": str(result.get("serialNumber", "")),
+        }
+
+    async def async_get_tv_states(self) -> dict[str, Any]:
+        """Return the TV's general state snapshot (read-only).
+
+        ``getTVStates`` reports, on a Frame 2024/2025:
+        ``speakerSelect, volume, mute, pictureSize, pictureMode, soundMode,
+        inputSource``. These are all read-only over IP Control on consumer
+        Frames (the matching setters return ``-32601 "Method not found"``), so
+        this is exposed only as diagnostic sensors. Setting these values must
+        go through SmartThings / the WebSocket.
+        """
+        return await self._async_request("getTVStates")
+
+    async def async_get_video_states(self) -> dict[str, Any]:
+        """Return the TV's picture-level snapshot (read-only).
+
+        ``getVideoStates`` reports ``contrast, sharpness, brightness, color,
+        tint`` on a Frame 2024/2025. As with :meth:`async_get_tv_states`, these
+        are read-only over IP Control on consumer Frames; only ``backlight`` is
+        settable (see :meth:`async_set_backlight`).
+        """
+        return await self._async_request("getVideoStates")
+
     # -- transport -----------------------------------------------------------
 
     async def _async_request(
@@ -319,7 +402,12 @@ class SamsungIPControl:
         ctx.verify_mode = ssl.CERT_NONE
         if legacy:
             try:
-                ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+                # SECLEVEL=0 (not 1): some ~2020 Frames negotiate a DH group
+                # smaller than 1024 bits, which SECLEVEL=1 still rejects with
+                # "dh key too small". These are local, self-signed panels we
+                # already talk to with CERT_NONE, so dropping to SECLEVEL=0 (the
+                # most permissive) is safe and strictly looser than SECLEVEL=1.
+                ctx.set_ciphers("DEFAULT@SECLEVEL=0")
             except ssl.SSLError as ex:
                 _LOGGER.warning(
                     "Could not lower TLS security level for %s: %s", self._host, ex
@@ -335,7 +423,7 @@ class SamsungIPControl:
     ) -> dict[str, Any]:
         """Blocking JSON-RPC request — runs in the executor.
 
-        Retries once with @SECLEVEL=1 on a "dh key too small" SSL error so the
+        Retries once with @SECLEVEL=0 on a "dh key too small" SSL error so the
         client transparently handles older Samsung TVs.
         """
         body: dict[str, Any] = {
@@ -440,7 +528,7 @@ class SamsungIPControl:
                     f"TLS error talking to {self._host}:{self._port}: {ex}"
                 ) from ex
             except (TimeoutError, OSError) as ex:
-                raise SamsungIPControlError(
+                raise SamsungIPControlTransportError(
                     f"transport failure talking to {self._host}:{self._port}: {ex}"
                 ) from ex
             finally:

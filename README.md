@@ -352,7 +352,7 @@ These are called on the `media_player` entity.
 **Sending key commands via `play_media`:**
 
 ```yaml
-service: media_player.play_media
+action: media_player.play_media
 target:
   entity_id: media_player.samsung_tv
 data:
@@ -392,9 +392,10 @@ These services require a Samsung **Frame TV** with Art Mode. They are called on 
 **Select an artwork:**
 
 ```yaml
-service: samsungtv_smart.art_select_image
-data:
+action: samsungtv_smart.art_select_image
+target:
   entity_id: media_player.samsung_frame
+data:
   content_id: SAM-F0206
   show: true
 ```
@@ -402,9 +403,10 @@ data:
 **Upload a local image:**
 
 ```yaml
-service: samsungtv_smart.art_upload
-data:
+action: samsungtv_smart.art_upload
+target:
   entity_id: media_player.samsung_frame
+data:
   file_path: /config/www/my_art.jpg
   matte_id: modern_apricot
   file_type: jpg
@@ -413,9 +415,10 @@ data:
 **Batch download thumbnails:**
 
 ```yaml
-service: samsungtv_smart.art_get_thumbnails_batch
-data:
+action: samsungtv_smart.art_get_thumbnails_batch
+target:
   entity_id: media_player.samsung_frame
+data:
   category_id: MY-C0002
   favorites_only: false
   force_download: false
@@ -424,9 +427,10 @@ data:
 **Configure slideshow:**
 
 ```yaml
-service: samsungtv_smart.art_set_slideshow
-data:
+action: samsungtv_smart.art_set_slideshow
+target:
   entity_id: media_player.samsung_frame
+data:
   duration: 15min
   shuffle: true
   category_id: 2
@@ -611,6 +615,69 @@ Mitigations built into this fork:
 - Proper handling of invalid WebSocket close opcodes
 - Active connection cleanup to prevent zombie connections
 - Use the **nightly reload automation** above as a preventive measure.
+
+### Recurring "IP Control state read failed" / "Host is unreachable" errors
+
+If your log shows repeated errors like this, spaced minutes apart, for a TV that is otherwise powered on and working:
+
+```
+Error fetching IP Control state <name> data: IP Control state read failed:
+transport failure talking to <ip>:1516: [Errno 113] Host is unreachable
+Error fetching IP Control state <name> data: IP Control state read failed:
+transport failure talking to <ip>:1516: timed out
+```
+
+These are network-layer errors (the TV briefly becomes unreachable at the IP
+level), not something the integration can retry around — it just means the
+TV's network connection dropped for a moment.
+
+The most common cause is a **DHCP lease renewal hiccup**: even with a DHCP
+reservation, a short or unstable lease can cause brief unreachability when it
+renews. The fix is to **configure a fully static IP on the TV itself**
+instead of relying on a router-side reservation:
+
+- On the TV: **Settings → General → Network → Network Status/Settings → IP Settings → Manual**, and enter the IP, subnet, gateway and DNS yourself.
+
+This removes DHCP renewal from the equation entirely. If the errors persist
+after switching to a static IP, also check the network switch port the TV is
+plugged into (port resets, re-negotiation, rising CRC/error counters point to
+a cabling/port issue rather than the integration).
+
+### "Host is unreachable" / connection-failure logs only when the TV is OFF
+
+If the errors above happen **only while a TV is powered off** (and stop once it's
+on), this is expected behaviour for some Frames — **not** a bug or a network
+problem.
+
+Older Frames (notably the **2020 and 2021** models) **drop off the network
+entirely in standby**: their network chip powers down, so they stop answering
+*everything* incoming — ping, IP Control (port 1516) and the Art WebSocket. From
+the integration's side that's indistinguishable from "the TV is simply off", so a
+read failure there just means the TV is off. (2024+ Frames keep their network
+interface alive in standby and still answer a ping, so they don't show this.)
+
+You can confirm which case you have: with the TV off, `ping <tv-ip>` from any
+machine. No reply → that TV goes fully off the network in standby, and the
+off-state log lines are normal.
+
+Recent versions already keep this quiet: while a TV is off, IP Control transport
+failures and Art channel connection failures are logged at **DEBUG** (with at most
+a single INFO line), not ERROR/WARNING — so real problems still stand out.
+
+**"Then how does Home Assistant turn it back on if it's off the network?"** — it
+doesn't *reach* the TV, it *pushes* a wake signal, and neither path needs the TV
+to be reachable:
+
+- **SmartThings (cloud):** even in deep standby the TV keeps an *outbound*
+  connection to Samsung's cloud (an always-on part, separate from the main
+  network stack). The power-on command goes to the SmartThings cloud, which pushes
+  it down that channel.
+- **Wake-on-LAN:** the network card's WoL engine listens for a magic packet at the
+  Ethernet level even while the OS network stack is down; a magic packet expects no
+  reply, so it works on a TV that won't answer a ping.
+
+Set the wake method per TV with the **Power On Method** option (Wake-on-LAN by
+default; SmartThings or IP Control also available).
 
 ### SmartThings features not working
 

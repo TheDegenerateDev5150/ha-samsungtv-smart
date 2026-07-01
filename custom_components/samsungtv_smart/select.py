@@ -9,9 +9,17 @@ import time
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_ID, CONF_NAME, CONF_PORT, CONF_TOKEN
+from homeassistant.const import (
+    CONF_HOST,
+    CONF_ID,
+    CONF_NAME,
+    CONF_PORT,
+    CONF_TOKEN,
+    STATE_OFF,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -336,6 +344,9 @@ async def _load_motion_options(
                     "motion_sensitivity"
                 )
                 timer_item = await art_api.get_artmode_settings("motion_timer")
+                brightness_sensor_item = await art_api.get_artmode_settings(
+                    "brightness_sensor_setting"
+                )
 
             entities = []
 
@@ -367,6 +378,25 @@ async def _load_motion_options(
                     )
                 )
 
+            # Brightness sensor is on/off; the TV reports a value but no
+            # valid_values, so the option list is fixed (the only accepted
+            # values per the firmware).
+            if (
+                isinstance(brightness_sensor_item, dict)
+                and brightness_sensor_item.get("value") is not None
+            ):
+                entities.append(
+                    SamsungTVArtBrightnessSensorSelect(
+                        hass,
+                        entry,
+                        art_api,
+                        device_name,
+                        device_unique_id,
+                        ["off", "on"],
+                        str(brightness_sensor_item.get("value")),
+                    )
+                )
+
             if entities:
                 async_add_entities(entities)
                 _LOGGER.info(
@@ -375,8 +405,14 @@ async def _load_motion_options(
                     [e._setting_name for e in entities],
                 )
             else:
-                _LOGGER.debug(
-                    "TV %s does not report Art Mode motion settings, skipping",
+                _LOGGER.info(
+                    "TV %s did not report any Art Mode motion/brightness sensor "
+                    "settings (motion_sensitivity, motion_timer, "
+                    "brightness_sensor_setting) — this model has no such sensor, "
+                    "so the Motion Sensitivity, Motion Timer and Brightness "
+                    "Sensor controls are intentionally not created. This is "
+                    "expected on Frames without the motion/ambient-light sensor "
+                    "(e.g. some 2020/2021 models); it is not an error.",
                     device_name,
                 )
             return
@@ -763,6 +799,31 @@ class SamsungTVArtMotionSelectBase(SelectEntity):
             name=self._device_name,
         )
 
+    def _tv_powered_off(self) -> bool:
+        """True when the TV is off (and not in Art Mode) — skip art polling.
+
+        Polling ``get_artmode_settings`` over the art WebSocket while the TV is
+        powered off keeps poking the (sleeping) art-app for nothing and can wedge
+        it overnight. Mirror the switch: rely on the media_player's already
+        published state + ``art_mode_status`` attribute instead of issuing our
+        own TV request, so this never adds traffic to a TV that's off.
+        """
+        ent_reg = er.async_get(self.hass)
+        mp_id = None
+        for entity in er.async_entries_for_config_entry(ent_reg, self._entry.entry_id):
+            if entity.domain == "media_player":
+                mp_id = entity.entity_id
+                break
+        if not mp_id:
+            return False  # unknown → don't suppress
+        state = self.hass.states.get(mp_id)
+        if state is None:
+            return False
+        if state.state not in (STATE_OFF, "unavailable"):
+            return False  # TV is on
+        # media_player off/unavailable → TV off UNLESS Art Mode is active
+        return state.attributes.get("art_mode_status") != "on"
+
     async def _async_set(self, option: str) -> None:
         """To be implemented by subclass: call the matching art_api setter."""
         raise NotImplementedError
@@ -778,6 +839,11 @@ class SamsungTVArtMotionSelectBase(SelectEntity):
             ) from ex
 
     async def async_update(self) -> None:
+        # Don't touch the art channel while the TV is off: it's pointless (the
+        # art-app is asleep) and the constant overnight polling can wedge the
+        # art-app by morning. Keep the last known value instead.
+        if self._tv_powered_off():
+            return
         try:
             item = await self._art_api.get_artmode_settings(self._setting_name)
             if item and isinstance(item, dict):
@@ -816,6 +882,25 @@ class SamsungTVArtMotionTimerSelect(SamsungTVArtMotionSelectBase):
 
     async def _async_set(self, option: str) -> None:
         await self._art_api.set_motion_timer(option)
+
+
+class SamsungTVArtBrightnessSensorSelect(SamsungTVArtMotionSelectBase):
+    """Select entity for the Art Mode ambient brightness sensor (on/off).
+
+    The TV reports this setting's current value but no valid_values, so the
+    options are fixed to off/on (per the firmware, the only accepted values).
+    """
+
+    _attr_icon = "mdi:brightness-auto"
+    _setting_name = "brightness_sensor_setting"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._attr_unique_id = f"{self._device_unique_id}_art_brightness_sensor"
+        self._attr_name = "Brightness Sensor"
+
+    async def _async_set(self, option: str) -> None:
+        await self._art_api.set_brightness_sensor_setting(option)
 
 
 # ══════════════════════════════════════════════════════════════════════════
