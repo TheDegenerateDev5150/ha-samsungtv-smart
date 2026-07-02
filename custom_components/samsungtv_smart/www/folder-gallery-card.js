@@ -1139,7 +1139,10 @@ class FolderGalleryCard extends HTMLElement {
       return this._config.action.target.entity_id;
     if (this._config.action && this._config.action.data && this._config.action.data.entity_id)
       return this._config.action.data.entity_id;
-    return '';
+    // Fallback to the dedicated Frame TV entity, so the lightbox buttons still
+    // resolve a target even when no `action` is configured (e.g. tap opens the
+    // lightbox and there is no separate tap action).
+    return this._config.frame_tv_entity || this._config.tv_entity || '';
   }
 
   _callUnfavourite(imageData) {
@@ -1507,6 +1510,8 @@ class FolderGalleryCardEditor extends HTMLElement {
         ? a.target.entity_id
         : null;
     return (
+      this._config.frame_tv_entity ||
+      this._config.tv_entity ||
       from(this._config.action) ||
       from(this._config.double_tap_action) ||
       from(this._config.hold_action) ||
@@ -1729,6 +1734,9 @@ class FolderGalleryCardEditor extends HTMLElement {
     cfg.gallery_type = gt && gt !== 'auto' ? gt : undefined;
 
     const tv = g('_tv_entity').value.trim();
+    // Persist the Frame TV entity on its own key so the lightbox buttons can
+    // always resolve a target, even when there is no `action` configured.
+    cfg.frame_tv_entity = tv || undefined;
 
     // Only keep gesture kinds that are valid for the selected gallery type
     // (e.g. switching to "upload" drops a stale "select"/"delete" choice).
@@ -1740,7 +1748,15 @@ class FolderGalleryCardEditor extends HTMLElement {
     const tapKind = clamp(g('_tap_kind').value, validTap);
     if (tapKind === 'lightbox') {
       cfg.tap_action = 'lightbox';
-      cfg.action = undefined;
+      // The fullscreen-preview buttons (Display on TV / Unfavourite / Delete /
+      // Upload) need a Frame TV entity + service to dispatch: the Select/Upload
+      // buttons run `config.action` and Unfavourite/Delete read the entity from
+      // it. Build the gallery type's primary action instead of clearing it,
+      // otherwise the lightbox opens but every button silently does nothing.
+      const gt = (cfg.gallery_type || 'auto').toLowerCase();
+      const primary = gt === 'upload' ? 'upload' : 'select';
+      const act = this._buildAction(primary, tv);
+      cfg.action = act || undefined;
     } else if (tapKind !== 'none') {
       const act = this._buildAction(tapKind, tv);
       cfg.tap_action = act ? 'action' : undefined;
@@ -1785,7 +1801,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c FOLDER-GALLERY-CARD %c v1.4.0 ',
+  '%c FOLDER-GALLERY-CARD %c v1.5.0 ',
   'color: white; background: #03a9f4; font-weight: bold;',
   'color: #03a9f4; background: white; font-weight: bold;'
 );

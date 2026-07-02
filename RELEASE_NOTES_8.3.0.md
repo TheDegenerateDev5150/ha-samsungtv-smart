@@ -2,6 +2,18 @@
 
 > **Status: pre-release (beta).** 8.3.0 builds on 8.2.0.
 
+## Folder Gallery card — fullscreen-preview buttons work again in lightbox mode (8.3.0b3)
+
+- **Fix: the lightbox buttons (Display on TV / Unfavourite / Delete / Upload)
+  did nothing** when the single tap was set to *Open preview (lightbox)* in the
+  visual editor. That mode cleared the card's `action`, but the buttons rely on
+  it for the Frame TV entity and the service to call, so every button silently
+  no-op'd. The editor now keeps the gallery type's primary action in lightbox
+  mode, and the Frame TV entity is also persisted on its own `frame_tv_entity`
+  key so the buttons always resolve a target.
+  - After updating, **re-open the card in the visual editor and save once** (or
+    re-select the Frame TV entity) so the new `frame_tv_entity` is written.
+
 ## Art Mode is detected immediately again after the polling rework (8.3.0b2)
 
 On some models (notably 2024 Frames where IP Control can't report the art
