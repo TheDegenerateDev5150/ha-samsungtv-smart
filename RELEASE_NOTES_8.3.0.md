@@ -201,3 +201,14 @@ breakdown of what is polled and why.
   explicitly as the source of the channel logos used by the media-player logo
   feature (`logo.py` fetches them from `jaruba.github.io/channel-logos`). It was
   previously only mentioned indirectly as part of the fork lineage.
+
+## README — heads-up about the upcoming SmartThings API pricing change
+
+- Added a notice in the SmartThings Authentication section: Samsung announced
+  the SmartThings API is moving to paid tiers (a $4.99/month "Personal" plan
+  with a monthly call quota, plus separate commercial tiers), with free access
+  phasing out around October 2026. Since this integration's SmartThings calls
+  run under each user's own Samsung account, this may eventually affect users
+  directly. No code changes are required today — this is purely informational
+  until Samsung publishes concrete quotas. (The 8.3.0 polling rework above
+  already cuts that usage dramatically.)
