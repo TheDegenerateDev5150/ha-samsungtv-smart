@@ -407,6 +407,12 @@ class IPControlVideoCoordinator(DataUpdateCoordinator):
             # Indistinguishable from "TV is simply off" on Frames that leave the
             # network in standby — no ERROR, just no values.
             return {}
+        except SamsungIPControlUnsupportedError:
+            # -32601: the picture getters aren't available in the current state
+            # (typically Art Mode, where calibration doesn't apply) or on this
+            # model. Expected, not a failure — go unavailable without an ERROR
+            # and recover automatically when the state changes.
+            return {}
         except SamsungIPControlError as ex:
             raise UpdateFailed(f"IP Control video read failed: {ex}") from ex
 
@@ -443,7 +449,6 @@ class SamsungTVIPControlPictureNumber(CoordinatorEntity, NumberEntity):
         self._device_name = device_name
         self._device_unique_id = device_unique_id
         self._setting = setting
-        self._write_unsupported = False
         self._attr_unique_id = f"{device_unique_id}_ip_control_{setting.key}"
         self._attr_name = setting.name
         self._attr_icon = setting.icon
@@ -491,11 +496,6 @@ class SamsungTVIPControlPictureNumber(CoordinatorEntity, NumberEntity):
                 f"{setting.name} must be between "
                 f"{setting.min_value} and {setting.max_value}."
             )
-        if self._write_unsupported:
-            raise HomeAssistantError(
-                f"Setting {setting.name} over IP Control is not supported on "
-                "this TV model."
-            )
 
         client = self.coordinator.get_ip_control()
         if client is None:
@@ -514,12 +514,15 @@ class SamsungTVIPControlPictureNumber(CoordinatorEntity, NumberEntity):
                 "retry."
             ) from ex
         except SamsungIPControlUnsupportedError as ex:
-            # Permanent capability gap on this model — remember it so we stop
-            # hitting the TV and give the same clear message immediately.
-            self._write_unsupported = True
+            # -32601 is ambiguous: the method may not exist on this model, OR it
+            # exists but isn't available in the current state — most commonly
+            # because the TV is in Art Mode, where picture calibration doesn't
+            # apply. Do NOT latch it off (it may work once out of Art Mode);
+            # just surface a clear, actionable message.
             raise HomeAssistantError(
-                f"Setting {setting.name} over IP Control is not supported on "
-                "this TV model."
+                f"Cannot set {setting.name} right now: this control isn't "
+                "available in the TV's current state (it applies to normal "
+                "viewing, not Art Mode) or isn't supported on this model."
             ) from ex
         except SamsungIPControlAuthError as ex:
             notify_token_problem(

@@ -78,10 +78,12 @@ ERROR_PARSE_STALE_TOKEN = -32700
 # accept them. Not a transport or pairing problem: retrying after switching
 # picture mode succeeds.
 ERROR_SERVER = -32002
-# JSON-RPC "Method not found". Returned when a control method is simply not
-# implemented on this TV model (e.g. the per-field contrastControl/tintControl
-# setters exist on some Frames but not others). A capability gap, not a
-# transient error — do not flap the entity, surface it as "unsupported".
+# JSON-RPC "Method not found". AMBIGUOUS on Frames: the SAME code is returned
+# both when a method genuinely doesn't exist on the model AND when it exists but
+# isn't available in the current TV state — notably the picture controls while
+# the panel is in Art Mode (calibration applies to normal viewing only). So it
+# must be treated as "not available right now", NOT latched as permanently
+# unsupported.
 ERROR_METHOD_NOT_FOUND = -32601
 
 # Art-mode desync guard: number of consecutive reads where the artModeControl
@@ -110,10 +112,13 @@ class SamsungIPControlModeLockedError(SamsungIPControlError):
 
 
 class SamsungIPControlUnsupportedError(SamsungIPControlError):
-    """The method is not implemented on this TV model (code -32601).
+    """The method is not available (code -32601) — "Method not found".
 
-    A permanent capability gap for this host — callers should stop retrying
-    and expose the control as unsupported rather than flapping availability.
+    AMBIGUOUS: the TV returns the same code whether the method genuinely does
+    not exist on this model OR it exists but is unavailable in the current state
+    (e.g. the picture controls while the panel is in Art Mode). Treat it as
+    "not available right now" — surface a clear message but do NOT latch it as
+    permanently unsupported, since it may succeed once the TV leaves Art Mode.
     """
 
 
@@ -541,7 +546,8 @@ class SamsungIPControl:
             if code == ERROR_METHOD_NOT_FOUND:
                 raise SamsungIPControlUnsupportedError(
                     f"TV returned error {code}: {message} — this method is not "
-                    "implemented on this TV model"
+                    "available right now (it may not exist on this model, or the "
+                    "TV may be in Art Mode)"
                 )
             raise SamsungIPControlError(f"TV returned error {code}: {message}")
 

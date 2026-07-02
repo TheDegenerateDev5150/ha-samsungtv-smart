@@ -25,12 +25,16 @@ If this project is useful to you, you can support its development:
     (`Connection reset by peer` / TLS errors) and entities flapped. All IP
     Control calls to a given TV are now **serialized through a per-host lock**,
     which also steadies the pre-existing backlight/color-tone controls.
-  - **Per-model capability.** Some Frames don't implement the per-field
-    `contrastControl`/etc methods and answer `-32601`. The sliders now read all
-    five values in **one shared `getVideoStates` call** (supported everywhere),
-    so their value/availability no longer depend on those methods. Writing on a
-    model that lacks them raises a clear *"not supported on this TV"* message
-    instead of silently flapping.
+  - **Ambiguous `-32601`.** A Frame answers `-32601` "Method not found" for the
+    picture getters both when the method truly doesn't exist *and* when it
+    simply isn't available in the current state — most often because the TV is
+    in **Art Mode**, where picture calibration doesn't apply (the panel has its
+    own Art Mode Brightness / Color Temperature). The sliders now read all five
+    values in **one shared `getVideoStates` call** and treat `-32601` as
+    *"not available right now"*: they go cleanly **unavailable** (e.g. in Art
+    Mode) and come back on their own, rather than flapping. A write that hits
+    `-32601` shows a clear message ("applies to normal viewing, not Art Mode")
+    and is **not** permanently disabled — it works again once the state allows.
 
 ## Picture calibration — Contrast / Brightness / Sharpness / Color / Tint are now adjustable (8.3.0b8)
 
