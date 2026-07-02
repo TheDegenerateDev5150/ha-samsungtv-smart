@@ -2546,10 +2546,6 @@ class IPControlStateSensor(CoordinatorEntity, SensorEntity):
 
     entity_description: SamsungIPControlSensorDescription
     _attr_has_entity_name = True
-    # Read-only diagnostic mirrors of media_player / select state (the setters
-    # return -32601 on consumer Frames). Useful for debugging but noisy in the
-    # default entity list, so ship them disabled — users can enable any they want.
-    _attr_entity_registry_enabled_default = False
 
     def __init__(
         self,
