@@ -14,6 +14,29 @@ If this project is useful to you, you can support its development:
 > the new `frame_tv_entity` key so the fullscreen-preview buttons work — see the
 > *lightbox buttons* note below.
 
+## Picture calibration — stop the sliders flapping available/unavailable (8.3.0b10)
+
+- **Fix: the new Contrast/Brightness/Sharpness/Color/Tint sliders kept dropping
+  to *unavailable* then back, without any mode change.** Two causes, both fixed:
+  - **Concurrent IP Control calls.** The TV's control server (port 1516) accepts
+    one connection at a time and resets overlapping ones. Each slider polled the
+    TV independently, on top of the backlight number, color-tone select, state
+    coordinator and the media_player art poll — so calls collided
+    (`Connection reset by peer` / TLS errors) and entities flapped. All IP
+    Control calls to a given TV are now **serialized through a per-host lock**,
+    which also steadies the pre-existing backlight/color-tone controls.
+  - **State guardrail (Art Mode / off).** Picture calibration only applies to
+    normal viewing — in Art Mode the panel has its own Art Mode Brightness /
+    Color Temperature, and the IP Control picture methods answer `-32601` there
+    (the TV returns the same "Method not found" code whether a method is absent
+    *or* just unavailable in the current state, so it can't be interpreted).
+    The sliders now read all five values in **one shared `getVideoStates` call**,
+    and that call — and every write — is only issued **when the TV is on and out
+    of Art Mode**, gated on the media player's own state. So the sliders go
+    cleanly **unavailable** when off/in Art Mode and recover on their own; a
+    write attempted then gives a clear "the TV must be on and out of Art Mode"
+    message and is never permanently disabled.
+
 ## Picture calibration — Contrast / Brightness / Sharpness / Color / Tint are now adjustable (8.3.0b8)
 
 - **The five expert picture settings become settable sliders instead of

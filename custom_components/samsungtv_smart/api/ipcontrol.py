@@ -27,6 +27,7 @@ loads CA certs from disk, which would block the event loop if done at __init__.
 
 from __future__ import annotations
 
+import asyncio
 import http.client
 import json
 import logging
@@ -36,6 +37,25 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
+
+# The TV's JSON-RPC server on port 1516 handles one connection at a time and
+# resets ("Connection reset by peer" / TLS handshake failure) any that overlap.
+# Every entity builds its own SamsungIPControl instance, so serialize all calls
+# to a given host through a shared per-host lock — otherwise the media_player
+# art poll, the state coordinators, the backlight/picture number sliders and
+# the color-tone select trample each other. Keyed by host so multiple TVs stay
+# independent. Created lazily on the running loop.
+_HOST_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _host_lock(host: str) -> asyncio.Lock:
+    """Return the shared serialization lock for one TV host."""
+    lock = _HOST_LOCKS.get(host)
+    if lock is None:
+        lock = asyncio.Lock()
+        _HOST_LOCKS[host] = lock
+    return lock
+
 
 DEFAULT_IP_CONTROL_PORT = 1516
 JSONRPC_VERSION = "2.0"
@@ -58,6 +78,13 @@ ERROR_PARSE_STALE_TOKEN = -32700
 # accept them. Not a transport or pairing problem: retrying after switching
 # picture mode succeeds.
 ERROR_SERVER = -32002
+# JSON-RPC "Method not found". AMBIGUOUS on Frames: the SAME code is returned
+# both when a method genuinely doesn't exist on the model AND when it exists but
+# isn't available in the current TV state — notably the picture controls while
+# the panel is in Art Mode (calibration applies to normal viewing only). So it
+# must be treated as "not available right now", NOT latched as permanently
+# unsupported.
+ERROR_METHOD_NOT_FOUND = -32601
 
 # Art-mode desync guard: number of consecutive reads where the artModeControl
 # flag claims "on" while getTVStates.pictureMode shows a real (non-art) picture
@@ -81,6 +108,17 @@ class SamsungIPControlModeLockedError(SamsungIPControlError):
     Not a transport, pairing, or capability problem — the same request
     succeeds once the TV is switched to a picture mode that allows manual
     writes (e.g. Standard/Movie/Filmmaker rather than Dynamic/HDR-dynamic).
+    """
+
+
+class SamsungIPControlUnsupportedError(SamsungIPControlError):
+    """The method is not available (code -32601) — "Method not found".
+
+    AMBIGUOUS: the TV returns the same code whether the method genuinely does
+    not exist on this model OR it exists but is unavailable in the current state
+    (e.g. the picture controls while the panel is in Art Mode). Treat it as
+    "not available right now" — surface a clear message but do NOT latch it as
+    permanently unsupported, since it may succeed once the TV leaves Art Mode.
     """
 
 
@@ -298,29 +336,16 @@ class SamsungIPControl:
             raise SamsungIPControlError(f"unexpected colorTone response: {result!r}")
         return response_value
 
-    async def async_get_video_setting(self, method: str, field: str) -> int:
-        """Return one expert picture setting via its ``<field>Control`` getter.
-
-        Called with no params, ``contrastControl`` / ``brightnessControl`` /
-        ``sharpnessControl`` / ``colorControl`` / ``tintControl`` echo the
-        current integer value (e.g. ``{"contrast": 50}``). Verified on
-        Frame 2024/2025; the read works regardless of picture mode.
-        """
-        result = await self._async_request(method)
-        value = result.get(field)
-        try:
-            return int(value)
-        except (TypeError, ValueError) as ex:
-            raise SamsungIPControlError(
-                f"no {field} in {method} response: {result!r}"
-            ) from ex
-
     async def async_set_video_setting(self, method: str, field: str, value: int) -> int:
         """Set one expert picture setting and return the echoed value.
 
-        The write is picture-mode-gated: Standard/Movie/Filmmaker accept it,
+        Current values are read in bulk via :meth:`async_get_video_states`; this
+        per-field ``<field>Control`` write is used only on user action. The write
+        is picture-mode-gated: Standard/Movie/Filmmaker accept it,
         Dynamic/HDR-dynamic reject it with ``-32002`` (raised as
-        :class:`SamsungIPControlModeLockedError` by the transport).
+        :class:`SamsungIPControlModeLockedError`), and models that lack the
+        method reject it with ``-32601`` (raised as
+        :class:`SamsungIPControlUnsupportedError`).
         """
         result = await self._async_request(method, {field: int(value)})
         response_value = result.get(field, value)
@@ -415,10 +440,16 @@ class SamsungIPControl:
         include_token: bool = True,
         timeout: int = CMD_TIMEOUT,
     ) -> dict[str, Any]:
-        """Run a JSON-RPC request in the executor and return the `result` dict."""
-        return await self._hass.async_add_executor_job(
-            self._sync_request, method, params, include_token, timeout
-        )
+        """Run a JSON-RPC request in the executor and return the `result` dict.
+
+        Serialized per host: the TV resets overlapping connections on port 1516,
+        so only one call to a given host runs at a time (across every
+        SamsungIPControl instance).
+        """
+        async with _host_lock(self._host):
+            return await self._hass.async_add_executor_job(
+                self._sync_request, method, params, include_token, timeout
+            )
 
     def _build_ssl_context(self, legacy: bool) -> ssl.SSLContext:
         """Build the SSL context for talking to the TV.
@@ -511,6 +542,12 @@ class SamsungIPControl:
                     "picture mode likely blocks this control (e.g. "
                     "Dynamic/HDR-dynamic); switch to Standard/Movie/"
                     "Filmmaker and retry"
+                )
+            if code == ERROR_METHOD_NOT_FOUND:
+                raise SamsungIPControlUnsupportedError(
+                    f"TV returned error {code}: {message} — this method is not "
+                    "available right now (it may not exist on this model, or the "
+                    "TV may be in Art Mode)"
                 )
             raise SamsungIPControlError(f"TV returned error {code}: {message}")
 
