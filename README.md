@@ -7,6 +7,10 @@
 
 A custom integration for Home Assistant to control Samsung Smart TVs (Tizen OS), based on the excellent work of [ollo69/ha-samsungtv-smart](https://github.com/ollo69/ha-samsungtv-smart).
 
+If this project is useful to you, you can support its development:
+
+<a href="https://buymeacoffee.com/thefab21" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="41" width="174"></a>
+
 This fork brings improved WebSocket stability, full Samsung Frame TV Art Mode support, picture mode and source selection fixes for 2024 Frame TVs, and OAuth2 authentication for SmartThings.
 
 ---
@@ -704,6 +708,8 @@ Once a firmware update reports `artModeControl` correctly again, you can re-enab
 ## Credits
 
 This project was a fork of [ollo69/ha-samsungtv-smart](https://github.com/ollo69/ha-samsungtv-smart), itself based on work by [@jaruba](https://github.com/jaruba) and [@screwdgeh](https://github.com/screwdgeh).
+
+Channel logos provided by [jaruba/channel-logos](https://github.com/jaruba/channel-logos) by [@jaruba](https://github.com/jaruba) — used by the media-player logo feature.
 
 Frame Art API based on [xchwarze/samsung-tv-ws-api](https://github.com/xchwarze/samsung-tv-ws-api) (art-updates branch), with contributions from Matthew Garrett and Nick Waterton.
 
