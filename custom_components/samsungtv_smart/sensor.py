@@ -55,11 +55,14 @@ from .const import (
     CONF_IS_FRAME_TV,
     CONF_OAUTH_TOKEN,
     CONF_SLIDESHOW_API,
+    CONF_ST_POLL_ON_INTERVAL,
     CONF_WS_NAME,
     DATA_ART_API,
     DATA_CFG,
     DEFAULT_PORT,
+    DEFAULT_ST_POLL_ON_INTERVAL,
     DOMAIN,
+    ST_POLL_OFF_INTERVAL,
     WS_PREFIX,
 )
 from .token_notify import METHOD_IP_CONTROL, clear_token_problem, notify_token_problem
@@ -72,6 +75,58 @@ def _ip_control_active(entry: ConfigEntry) -> bool:
     return bool(entry.data.get(CONF_IP_CONTROL_TOKEN)) and entry.options.get(
         CONF_ENABLE_IP_CONTROL, True
     )
+
+
+def _st_poll_on_interval(entry: ConfigEntry) -> int:
+    """Configured SmartThings poll cadence (seconds) while the TV is ON."""
+    return entry.options.get(CONF_ST_POLL_ON_INTERVAL, DEFAULT_ST_POLL_ON_INTERVAL)
+
+
+def _tv_powered_off(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """True when the TV (media_player) is off and NOT showing Art Mode.
+
+    Used to skip SmartThings cloud polls while the TV is off — the local
+    WebSocket is the primary power source, so there is nothing to fetch from
+    the cloud during standby. A Frame displaying Art also reports state "off"
+    (HA convention: off + ``art_mode_status`` attribute), so keep polling in
+    that case: an art-displaying Frame still draws power and can change picture
+    settings. "unknown"/"unavailable" are NOT treated as off (WS still booting
+    or a transient media_player error) to avoid freezing sensors at startup.
+    """
+    from homeassistant.helpers import entity_registry as er
+
+    try:
+        ent_reg = er.async_get(hass)
+        for ent in ent_reg.entities.get_entries_for_config_entry_id(entry.entry_id):
+            if ent.domain != "media_player":
+                continue
+            state = hass.states.get(ent.entity_id)
+            if state is None:
+                return False
+            if state.state != "off":
+                return False
+            return state.attributes.get("art_mode_status") != "on"
+    except Exception:  # pylint: disable=broad-except
+        return False
+    return False
+
+
+def _st_child_gate(entity) -> bool:
+    """Return True if a per-child ST sensor (illuminance/brightness) may poll now.
+
+    Skips while the TV is off (the local WebSocket is the primary power source
+    and the child readings only feed art-brightness features, which don't apply
+    in standby) and throttles to the configured ST cadence so the child light
+    sensors stop polling every 15 s. ``entity`` must expose ``hass``, ``_entry``
+    and a mutable ``_st_last_poll`` float.
+    """
+    if _tv_powered_off(entity.hass, entity._entry):
+        return False
+    now = time.monotonic()
+    if now - getattr(entity, "_st_last_poll", 0.0) < _st_poll_on_interval(entity._entry):
+        return False
+    entity._st_last_poll = now
+    return True
 
 
 # Update interval for the read-only IP Control state sensors. Picture/sound
@@ -347,6 +402,12 @@ async def async_setup_entry(
                 main_status = await st_client.get_device_status(device_id)
                 if "powerConsumptionReport" in main_status.get("main", {}):
                     _LOGGER.info("Adding power consumption sensors for %s", device_name)
+                    # One shared coordinator = one get_device_status per cycle
+                    # for all five fields (was 5× redundant calls), throttled to
+                    # the ST cadence and skipped while the TV is off.
+                    power_coordinator = SmartThingsPowerCoordinator(
+                        hass, entry, session, device_id, device_name
+                    )
                     for measure in (
                         "power",
                         "energy",
@@ -356,15 +417,15 @@ async def async_setup_entry(
                     ):
                         entities.append(
                             SmartThingsPowerConsumptionSensor(
-                                hass=hass,
-                                entry=entry,
-                                session=session,
-                                device_id=device_id,
-                                device_name=device_name,
+                                coordinator=power_coordinator,
                                 parent_device_id=device_unique_id,
                                 measure=measure,
                             )
                         )
+                    hass.async_create_background_task(
+                        power_coordinator.async_request_refresh(),
+                        f"st_power_initial_refresh_{entry.entry_id}",
+                    )
             except Exception as ex:
                 _LOGGER.debug("Could not check power consumption capability: %s", ex)
 
@@ -1934,6 +1995,7 @@ class SmartThingsIlluminanceSensor(SensorEntity):
         self._parent_device_id = parent_device_id
         self._attr_unique_id = f"{device_id}_illuminance"
         self._attr_native_value = None
+        self._st_last_poll = 0.0
 
     async def _get_st_client(self):
         """Get SmartThings client with current token from config entry."""
@@ -1973,6 +2035,10 @@ class SmartThingsIlluminanceSensor(SensorEntity):
 
     async def async_update(self) -> None:
         """Update the sensor value from SmartThings."""
+        # Local WS is primary: skip while the TV is off and throttle to the
+        # configured ST cadence (instead of the 15 s module scan interval).
+        if not _st_child_gate(self):
+            return
         try:
             st_client = await self._get_st_client()
             if not st_client:
@@ -2028,6 +2094,7 @@ class SmartThingsBrightnessIntensitySensor(SensorEntity):
         self._parent_device_id = parent_device_id
         self._attr_unique_id = f"{device_id}_brightness_intensity"
         self._attr_native_value = None
+        self._st_last_poll = 0.0
 
     async def _get_st_client(self):
         """Get SmartThings client with current token from config entry."""
@@ -2067,6 +2134,10 @@ class SmartThingsBrightnessIntensitySensor(SensorEntity):
 
     async def async_update(self) -> None:
         """Update the sensor value from SmartThings."""
+        # Local WS is primary: skip while the TV is off and throttle to the
+        # configured ST cadence (instead of the 15 s module scan interval).
+        if not _st_child_gate(self):
+            return
         try:
             st_client = await self._get_st_client()
             if not st_client:
@@ -2097,12 +2168,102 @@ class SmartThingsBrightnessIntensitySensor(SensorEntity):
             _LOGGER.warning("Error updating brightness intensity sensor: %s", ex)
 
 
-class SmartThingsPowerConsumptionSensor(SensorEntity):
+class SmartThingsPowerCoordinator(DataUpdateCoordinator):
+    """One SmartThings ``get_device_status`` per cycle for all power sensors.
+
+    Previously each of the five power/energy sensors polled ``get_device_status``
+    on the SAME TV device independently (5× redundant cloud calls every 15 s).
+    This shares a single call, throttles it to the configured ST cadence, and
+    skips it entirely while the TV is off (the local WebSocket is the primary
+    power source), so an idle Frame makes no power calls at all. A Frame showing
+    Art still reports power draw, so ``_tv_powered_off`` keeps polling then.
+    """
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        session,  # aiohttp session
+        device_id: str,
+        device_name: str,
+    ) -> None:
+        """Initialize the power-consumption coordinator."""
+        self._entry = entry
+        self._session = session
+        self.device_id = device_id
+        self._device_name = device_name
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=f"SmartThings power {entry.title}",
+            update_interval=timedelta(seconds=_st_poll_on_interval(entry)),
+        )
+
+    async def _get_st_client(self):
+        """Get SmartThings client with current token from config entry."""
+        from pysmartthings import SmartThings
+
+        api_key = await async_get_samsungtv_api_key(self.hass, self._entry)
+        if not api_key:
+            config = self.hass.data[DOMAIN][self._entry.entry_id][DATA_CFG]
+            api_key = config.get(CONF_API_KEY)
+            if not api_key:
+                oauth_token = config.get(CONF_OAUTH_TOKEN)
+                if oauth_token and isinstance(oauth_token, dict):
+                    api_key = oauth_token.get("access_token")
+        if not api_key:
+            return None
+        st_client = SmartThings(session=self._session)
+        st_client.authenticate(api_key)
+        return st_client
+
+    # Fields whose value should NOT be frozen while the TV is off: the
+    # instantaneous power draw (W) is ~0 in standby, unlike the cumulative
+    # energy counters (TOTAL_INCREASING) which must keep their last value.
+    _INSTANTANEOUS_FIELDS = ("power",)
+
+    async def _async_update_data(self) -> dict:
+        """Fetch the powerConsumption dict once, or keep last values."""
+        # Local WS is primary: while the TV is truly off (not showing Art),
+        # skip the cloud call and keep the last reported values — except the
+        # instantaneous power draw, which drops to ~0 in standby (don't leave
+        # the last ON wattage frozen on the sensor).
+        if _tv_powered_off(self.hass, self._entry):
+            self.logger.debug(
+                "Power sensors: TV off, skipping SmartThings poll for %s",
+                self._device_name,
+            )
+            data = dict(self.data or {})
+            for field in self._INSTANTANEOUS_FIELDS:
+                if field in data:
+                    data[field] = 0
+            return data
+        st_client = await self._get_st_client()
+        if not st_client:
+            return self.data or {}
+        try:
+            components = await st_client.get_device_status(self.device_id)
+        except Exception as ex:  # pylint: disable=broad-except
+            # Keep last values instead of marking every energy sensor
+            # unavailable on a transient cloud hiccup.
+            self.logger.debug("Power consumption read failed: %s", ex)
+            return self.data or {}
+        main = components.get("main", {})
+        # String capability/attribute names: the dict is keyed that way and it
+        # avoids depending on enum names across pysmartthings versions.
+        report = main.get("powerConsumptionReport", {}).get("powerConsumption")
+        value = getattr(report, "value", None)
+        if isinstance(value, dict):
+            return value
+        return self.data or {}
+
+
+class SmartThingsPowerConsumptionSensor(CoordinatorEntity, SensorEntity):
     """TV power/energy consumption via SmartThings ``powerConsumptionReport``.
 
     SmartThings exposes a single ``powerConsumption`` attribute whose value is a
     dict (``power`` in W, ``energy``/``deltaEnergy`` in Wh, etc.). One instance
-    surfaces one field of that dict as its own sensor.
+    surfaces one field of that dict, all fed by a shared coordinator.
     """
 
     _attr_has_entity_name = True
@@ -2153,22 +2314,13 @@ class SmartThingsPowerConsumptionSensor(SensorEntity):
 
     def __init__(
         self,
-        hass: HomeAssistant,
-        entry: ConfigEntry,
-        session,  # aiohttp session
-        device_id: str,
-        device_name: str,
+        coordinator: SmartThingsPowerCoordinator,
         parent_device_id: str,
         measure: str,
     ) -> None:
         """Initialize the sensor."""
-        self.hass = hass
-        self._entry = entry
-        self._session = session
-        self._device_id = device_id
-        self._device_name = device_name
+        super().__init__(coordinator)
         self._parent_device_id = parent_device_id
-        self._measure = measure
         suffix, friendly, dev_class, state_class, unit, divisor = self._MEASURES[
             measure
         ]
@@ -2181,26 +2333,7 @@ class SmartThingsPowerConsumptionSensor(SensorEntity):
         self._attr_device_class = dev_class
         self._attr_state_class = state_class
         self._attr_native_unit_of_measurement = unit
-        self._attr_unique_id = f"{device_id}_{suffix}"
-        self._attr_native_value = None
-
-    async def _get_st_client(self):
-        """Get SmartThings client with current token from config entry."""
-        from pysmartthings import SmartThings
-
-        api_key = await async_get_samsungtv_api_key(self.hass, self._entry)
-        if not api_key:
-            config = self.hass.data[DOMAIN][self._entry.entry_id][DATA_CFG]
-            api_key = config.get(CONF_API_KEY)
-            if not api_key:
-                oauth_token = config.get(CONF_OAUTH_TOKEN)
-                if oauth_token and isinstance(oauth_token, dict):
-                    api_key = oauth_token.get("access_token")
-        if not api_key:
-            return None
-        st_client = SmartThings(session=self._session)
-        st_client.authenticate(api_key)
-        return st_client
+        self._attr_unique_id = f"{coordinator.device_id}_{suffix}"
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -2212,32 +2345,16 @@ class SmartThingsPowerConsumptionSensor(SensorEntity):
         """Return the name of the sensor."""
         return self._friendly
 
-    async def async_update(self) -> None:
-        """Update the sensor value from SmartThings."""
+    @property
+    def native_value(self):
+        """Return this field's value from the shared coordinator data."""
+        raw = (self.coordinator.data or {}).get(self._field)
+        if raw is None:
+            return None
         try:
-            st_client = await self._get_st_client()
-            if not st_client:
-                return
-            components = await st_client.get_device_status(self._device_id)
-            main = components.get("main", {})
-            # Use string capability/attribute names: the dict is keyed that way
-            # and it avoids depending on enum names across pysmartthings versions.
-            report = main.get("powerConsumptionReport", {}).get("powerConsumption")
-            value = getattr(report, "value", None)
-            if not isinstance(value, dict):
-                return
-            raw = value.get(self._field)
-            if raw is None:
-                return
-            self._attr_native_value = round(raw / self._divisor, 3)
-            _LOGGER.debug(
-                "Updated %s sensor for %s: %s",
-                self._field,
-                self._device_name,
-                self._attr_native_value,
-            )
-        except Exception as ex:
-            _LOGGER.warning("Error updating %s sensor: %s", self._field, ex)
+            return round(raw / self._divisor, 3)
+        except (TypeError, ValueError):
+            return None
 
 
 class IPControlStateCoordinator(DataUpdateCoordinator):

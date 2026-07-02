@@ -120,6 +120,7 @@ from .const import (
     CONF_SLIDESHOW_API,
     CONF_SOURCE_LIST,
     CONF_ST_ENTRY_UNIQUE_ID,
+    CONF_ST_POLL_ON_INTERVAL,
     CONF_SUPPORTS_GET_BRIGHTNESS,
     CONF_SUPPORTS_GET_COLOR_TEMPERATURE,
     CONF_SYNC_TURN_OFF,
@@ -137,10 +138,12 @@ from .const import (
     DEFAULT_APP,
     DEFAULT_PORT,
     DEFAULT_SOURCE_LIST,
+    DEFAULT_ST_POLL_ON_INTERVAL,
     DEFAULT_TIMEOUT,
     DOMAIN,
     LOCAL_LOGO_PATH,
     MAX_WOL_REPEAT,
+    ST_POLL_OFF_INTERVAL,
     SERVICE_ART_AVAILABLE,
     SERVICE_ART_CHANGE_MATTE,
     SERVICE_ART_DELETE,
@@ -236,7 +239,6 @@ SUPPORT_SAMSUNGTV_SMART = (
     | MediaPlayerEntityFeature.STOP
 )
 
-MIN_TIME_BETWEEN_ST_UPDATE = timedelta(seconds=10)
 ST_API_KEY_UPDATE_INTERVAL = timedelta(minutes=30)
 OAUTH_TOKEN_REFRESH_BUFFER = 300  # Refresh OAuth token 5 minutes before expiration
 SCAN_INTERVAL = timedelta(seconds=5)
@@ -715,6 +717,12 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         self._st_error_count = 0
         self._st_last_exc = None
         self._st_sources_loaded = False
+        # SmartThings poll throttling: the local WebSocket is the primary state
+        # source; SmartThings is only polled for cloud-only data at a slower
+        # cadence (configurable when ON, fixed keepalive when OFF).
+        self._st_last_poll = 0.0
+        self._st_poll_on_interval = DEFAULT_ST_POLL_ON_INTERVAL
+        self._ws_was_connected = False
         self._setvolumebyst = False
 
         # logo control initializzation
@@ -1414,6 +1422,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         self._load_tv_lists(first_load)
         self._use_st_status = self._get_option(CONF_USE_ST_STATUS_INFO, True)
         self._use_channel_info = self._get_option(CONF_USE_ST_CHANNEL_INFO, True)
+        self._st_poll_on_interval = self._get_option(
+            CONF_ST_POLL_ON_INTERVAL, DEFAULT_ST_POLL_ON_INTERVAL
+        )
         self._use_mute_check = self._get_option(CONF_USE_MUTE_CHECK, False)
         self._show_channel_number = self._get_option(CONF_SHOW_CHANNEL_NR, False)
         self._ws.update_app_list(self._app_list)
@@ -1869,7 +1880,40 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         return self._device_info
 
-    @Throttle(MIN_TIME_BETWEEN_ST_UPDATE)
+    def _should_poll_st(self) -> bool:
+        """Decide whether to hit the SmartThings cloud on this cycle.
+
+        The local WebSocket is the primary state source, so SmartThings is
+        polled only for cloud-only data (channel name, picture/sound mode) at a
+        throttled cadence: the configurable interval while the TV is ON, and a
+        fixed keepalive (``ST_POLL_OFF_INTERVAL``) otherwise. Power-on is
+        detected locally: on the *transition* of the local WebSocket to
+        connected, force one immediate poll so cloud-only fields refresh right
+        away instead of lagging by the throttle interval. We key off the
+        transition (not the level) because a Frame showing Art keeps the WS
+        connected while HA still reports state OFF — a level check would then
+        force a poll every cycle and defeat the throttle.
+
+        ``self._state`` still holds the *previous* cycle's power here, because
+        this runs before ``_check_status`` in ``_async_update`` — which is
+        exactly what we want to gate on.
+        """
+        now = time.monotonic()
+        ws_connected = self._ws.is_connected
+        wake_edge = ws_connected and not self._ws_was_connected
+        self._ws_was_connected = ws_connected
+        if wake_edge:
+            self._st_last_poll = now
+            return True
+        if self._state == MediaPlayerState.ON:
+            interval = self._st_poll_on_interval
+        else:
+            interval = ST_POLL_OFF_INTERVAL
+        if now - self._st_last_poll >= interval:
+            self._st_last_poll = now
+            return True
+        return False
+
     async def _async_st_update(self, **kwargs) -> bool | None:
         """Update SmartThings state of device."""
         try:
@@ -1924,9 +1968,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         if self._auth_method == AUTH_METHOD_OAUTH:
             await self._async_refresh_oauth_token()
 
-        # Required to get source and media title
+        # Required to get source and media title. SmartThings is the fallback
+        # data source (cloud-only fields), throttled and gated on local power;
+        # skip the cloud call entirely on cycles where the throttle says so.
         st_error: bool | None = None
-        if self._st:
+        if self._st and self._should_poll_st():
             if (st_update := await self._async_st_update()) is not None:
                 st_error = not st_update
 

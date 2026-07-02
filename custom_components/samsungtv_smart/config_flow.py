@@ -78,6 +78,7 @@ from .const import (
     CONF_SHOW_CHANNEL_NR,
     CONF_SOURCE_LIST,
     CONF_ST_ENTRY_UNIQUE_ID,
+    CONF_ST_POLL_ON_INTERVAL,
     CONF_SUPPORTS_GET_BRIGHTNESS,
     CONF_SUPPORTS_GET_COLOR_TEMPERATURE,
     CONF_SYNC_TURN_OFF,
@@ -91,10 +92,13 @@ from .const import (
     CONF_WS_NAME,
     DEFAULT_CONTENT_LIST_INTERVAL,
     DEFAULT_PORT,
+    DEFAULT_ST_POLL_ON_INTERVAL,
     DOMAIN,
     MAX_CONTENT_LIST_INTERVAL,
+    MAX_ST_POLL_ON_INTERVAL,
     MAX_WOL_REPEAT,
     MIN_CONTENT_LIST_INTERVAL,
+    MIN_ST_POLL_ON_INTERVAL,
     RESULT_ST_DEVICE_NOT_FOUND,
     RESULT_ST_DEVICE_USED,
     RESULT_SUCCESS,
@@ -144,6 +148,7 @@ ADVANCED_OPTIONS = [
     CONF_DUMP_APPS,
     CONF_EXT_POWER_ENTITY,
     CONF_PING_PORT,
+    CONF_ST_POLL_ON_INTERVAL,
     CONF_WOL_REPEAT,
     CONF_TOGGLE_ART_MODE,
     CONF_USE_MUTE_CHECK,
@@ -1459,6 +1464,18 @@ class OptionsFlowHandler(OptionsFlow):
                     vol.Clamp(
                         min=MIN_CONTENT_LIST_INTERVAL,
                         max=MAX_CONTENT_LIST_INTERVAL,
+                    ),
+                ),
+                vol.Required(
+                    CONF_ST_POLL_ON_INTERVAL,
+                    default=options.get(
+                        CONF_ST_POLL_ON_INTERVAL, DEFAULT_ST_POLL_ON_INTERVAL
+                    ),
+                ): vol.All(
+                    vol.Coerce(int),
+                    vol.Clamp(
+                        min=MIN_ST_POLL_ON_INTERVAL,
+                        max=MAX_ST_POLL_ON_INTERVAL,
                     ),
                 ),
             }
