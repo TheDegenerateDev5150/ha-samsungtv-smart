@@ -13,6 +13,20 @@
   after that, it accepts the cloud's value, so a change made on the TV itself is
   still reflected.
 
+## Folder Gallery card — translations (FR, ES, IT, pt-BR, HU) + required Frame TV entity
+
+- **The card is now translated** into French, Spanish, Italian, Brazilian
+  Portuguese and Hungarian (with English as the fallback). This covers the
+  visual editor (labels, hints, gallery-type and gesture dropdowns), the
+  fullscreen-preview buttons (Select / Unfavourite / Upload / Delete / Close),
+  the Frame chooser, the empty state and the toasts. The language follows Home
+  Assistant's UI language (`hass.locale.language`).
+- **The visual editor no longer lets you save an action without a Frame TV
+  entity.** If a single/double/long-press action is set to Display / Upload /
+  Delete / Unfavourite but the **Frame TV entity** field is empty, the card now
+  rejects the config (HA shows the error and blocks the save) instead of
+  silently saving an action that has no target to run against.
+
 ## Folder Gallery card — gesture actions follow the gallery type
 
 - **The tap / double-tap / long-press action dropdowns in the visual editor now

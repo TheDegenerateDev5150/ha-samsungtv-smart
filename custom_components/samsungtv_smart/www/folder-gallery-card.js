@@ -25,8 +25,344 @@
  *     media_content_id: "{{image_path}}"
  */
 
+// --- i18n --------------------------------------------------------------------
+// Custom cards don't pick up Home Assistant's translation files automatically,
+// so the card ships its own small dictionary. Strings support {name}-style
+// placeholders replaced by t(). Languages: en (fallback), fr, es, it, pt-BR, hu.
+const TRANSLATIONS = {
+  en: {
+    err_define_one: 'You need to define at least one of: folder, sensor, folder_sensor, or image_list',
+    err_tv_required: 'Folder Gallery: a Frame TV entity is required for the configured tap / double-tap / long-press action',
+    lb_select: 'Select',
+    lb_unfavourite: '★ Unfavourite',
+    lb_upload: '⬆ Upload',
+    lb_delete: '🗑 Delete',
+    lb_close: 'Close',
+    frame_chooser_title: 'Upload to which Frame?',
+    no_images: 'No images found',
+    configure_sensor: 'Configure a sensor or image_list',
+    images_count: '{n} images',
+    removed_fav: 'Removed from favourites',
+    artwork_deleted: 'Artwork deleted',
+    all_frames: '⬆ All Frames ({n})',
+    uploading_all: 'Uploading to all Frames ({n})…',
+    upload_to: 'Upload → {name}',
+    cancel: 'Cancel',
+    action_executed: 'Action executed: {name}',
+    error: 'Error: {msg}',
+    g_nothing: 'Nothing',
+    g_lightbox: 'Open preview (lightbox)',
+    g_upload: 'Upload to TV',
+    g_select: 'Display on TV',
+    g_delete: 'Delete',
+    g_unfavourite: 'Unfavourite',
+    ed_title: 'Title',
+    ed_sensor: 'Sensor (provides the image list)',
+    ed_sensor_hint: 'Required — a <code>platform: folder</code> sensor (e.g. <code>sensor.&lt;tv&gt;_store</code>). This is what lists the images.',
+    ed_folder: 'Folder Path (optional)',
+    ed_folder_ph: 'auto-detected from the sensor',
+    ed_folder_hint_auto: 'Auto-detected from the sensor — leave empty unless your files are outside <code>/config/www/</code>.',
+    ed_folder_hint_manual: 'Only the base URL for thumbnails — it does <b>not</b> list images. On its own it shows nothing; set a sensor above.',
+    ed_columns: 'Columns',
+    ed_image_height: 'Image Height',
+    ed_gallery_type: 'Gallery type (lightbox buttons)',
+    gt_auto: 'Auto (detect per image)',
+    gt_personal: 'Personal — Select + Delete',
+    gt_favorites: 'Favorites — Select + Unfavourite',
+    gt_upload: 'Upload — Upload',
+    ed_gallery_type_hint: 'Forces which action buttons appear in the fullscreen preview for the whole gallery.',
+    ed_thumbnails: 'Thumbnails',
+    ed_server_thumbs: 'Server-side resized thumbnails',
+    ed_server_thumbs_hint: 'Recommended for folders of full-size originals — sends small thumbnails to the browser instead of the multi-MB files. The full image is still used on click.',
+    ed_thumb_width: 'Thumbnail width (px)',
+    ed_actions: 'Actions',
+    ed_tv_entity: 'Frame TV entity (for "Display on TV")',
+    ed_single_tap: 'Single tap',
+    ed_double_tap: 'Double tap',
+    ed_long_press: 'Long press',
+    ed_actions_hint: 'The actions here follow the <b>Gallery type</b> above, and need the Frame TV entity.',
+  },
+  fr: {
+    err_define_one: 'Vous devez définir au moins l\'un des éléments suivants : folder, sensor, folder_sensor ou image_list',
+    err_tv_required: 'Folder Gallery : une entité Frame TV est requise pour l\'action configurée (appui simple / double / long)',
+    lb_select: 'Sélectionner',
+    lb_unfavourite: '★ Retirer des favoris',
+    lb_upload: '⬆ Envoyer',
+    lb_delete: '🗑 Supprimer',
+    lb_close: 'Fermer',
+    frame_chooser_title: 'Envoyer vers quelle Frame ?',
+    no_images: 'Aucune image trouvée',
+    configure_sensor: 'Configurez un capteur ou image_list',
+    images_count: '{n} images',
+    removed_fav: 'Retiré des favoris',
+    artwork_deleted: 'Œuvre supprimée',
+    all_frames: '⬆ Toutes les Frames ({n})',
+    uploading_all: 'Envoi vers toutes les Frames ({n})…',
+    upload_to: 'Envoyer → {name}',
+    cancel: 'Annuler',
+    action_executed: 'Action exécutée : {name}',
+    error: 'Erreur : {msg}',
+    g_nothing: 'Aucune',
+    g_lightbox: 'Ouvrir l\'aperçu (lightbox)',
+    g_upload: 'Envoyer sur la TV',
+    g_select: 'Afficher sur la TV',
+    g_delete: 'Supprimer',
+    g_unfavourite: 'Retirer des favoris',
+    ed_title: 'Titre',
+    ed_sensor: 'Capteur (fournit la liste des images)',
+    ed_sensor_hint: 'Requis — un capteur <code>platform: folder</code> (ex. <code>sensor.&lt;tv&gt;_store</code>). C\'est lui qui liste les images.',
+    ed_folder: 'Chemin du dossier (facultatif)',
+    ed_folder_ph: 'détecté automatiquement depuis le capteur',
+    ed_folder_hint_auto: 'Détecté automatiquement depuis le capteur — laissez vide sauf si vos fichiers sont hors de <code>/config/www/</code>.',
+    ed_folder_hint_manual: 'Seulement l\'URL de base des miniatures — il ne <b>liste pas</b> les images. Seul, il n\'affiche rien ; définissez un capteur ci-dessus.',
+    ed_columns: 'Colonnes',
+    ed_image_height: 'Hauteur des images',
+    ed_gallery_type: 'Type de galerie (boutons du lightbox)',
+    gt_auto: 'Auto (détecter par image)',
+    gt_personal: 'Personnelle — Sélectionner + Supprimer',
+    gt_favorites: 'Favoris — Sélectionner + Retirer des favoris',
+    gt_upload: 'Envoi — Envoyer',
+    ed_gallery_type_hint: 'Force les boutons d\'action affichés dans l\'aperçu plein écran pour toute la galerie.',
+    ed_thumbnails: 'Miniatures',
+    ed_server_thumbs: 'Miniatures redimensionnées côté serveur',
+    ed_server_thumbs_hint: 'Recommandé pour les dossiers d\'originaux pleine taille — envoie de petites miniatures au navigateur au lieu des fichiers de plusieurs Mo. L\'image complète est toujours utilisée au clic.',
+    ed_thumb_width: 'Largeur des miniatures (px)',
+    ed_actions: 'Actions',
+    ed_tv_entity: 'Entité Frame TV (pour « Afficher sur la TV »)',
+    ed_single_tap: 'Appui simple',
+    ed_double_tap: 'Double appui',
+    ed_long_press: 'Appui long',
+    ed_actions_hint: 'Les actions ici suivent le <b>Type de galerie</b> ci-dessus et nécessitent l\'entité Frame TV.',
+  },
+  es: {
+    err_define_one: 'Debes definir al menos uno de: folder, sensor, folder_sensor o image_list',
+    err_tv_required: 'Folder Gallery: se requiere una entidad Frame TV para la acción configurada (toque / doble toque / pulsación larga)',
+    lb_select: 'Seleccionar',
+    lb_unfavourite: '★ Quitar de favoritos',
+    lb_upload: '⬆ Subir',
+    lb_delete: '🗑 Eliminar',
+    lb_close: 'Cerrar',
+    frame_chooser_title: '¿A qué Frame subir?',
+    no_images: 'No se encontraron imágenes',
+    configure_sensor: 'Configura un sensor o image_list',
+    images_count: '{n} imágenes',
+    removed_fav: 'Eliminado de favoritos',
+    artwork_deleted: 'Obra eliminada',
+    all_frames: '⬆ Todas las Frames ({n})',
+    uploading_all: 'Subiendo a todas las Frames ({n})…',
+    upload_to: 'Subir → {name}',
+    cancel: 'Cancelar',
+    action_executed: 'Acción ejecutada: {name}',
+    error: 'Error: {msg}',
+    g_nothing: 'Nada',
+    g_lightbox: 'Abrir vista previa (lightbox)',
+    g_upload: 'Subir a la TV',
+    g_select: 'Mostrar en la TV',
+    g_delete: 'Eliminar',
+    g_unfavourite: 'Quitar de favoritos',
+    ed_title: 'Título',
+    ed_sensor: 'Sensor (proporciona la lista de imágenes)',
+    ed_sensor_hint: 'Obligatorio — un sensor <code>platform: folder</code> (p. ej. <code>sensor.&lt;tv&gt;_store</code>). Es lo que lista las imágenes.',
+    ed_folder: 'Ruta de carpeta (opcional)',
+    ed_folder_ph: 'detectado automáticamente desde el sensor',
+    ed_folder_hint_auto: 'Detectado automáticamente desde el sensor — déjalo vacío salvo que tus archivos estén fuera de <code>/config/www/</code>.',
+    ed_folder_hint_manual: 'Solo la URL base de las miniaturas — <b>no</b> lista imágenes. Por sí solo no muestra nada; define un sensor arriba.',
+    ed_columns: 'Columnas',
+    ed_image_height: 'Altura de imagen',
+    ed_gallery_type: 'Tipo de galería (botones del lightbox)',
+    gt_auto: 'Auto (detectar por imagen)',
+    gt_personal: 'Personal — Seleccionar + Eliminar',
+    gt_favorites: 'Favoritos — Seleccionar + Quitar de favoritos',
+    gt_upload: 'Subida — Subir',
+    ed_gallery_type_hint: 'Fuerza qué botones de acción aparecen en la vista previa a pantalla completa para toda la galería.',
+    ed_thumbnails: 'Miniaturas',
+    ed_server_thumbs: 'Miniaturas redimensionadas en el servidor',
+    ed_server_thumbs_hint: 'Recomendado para carpetas de originales a tamaño completo — envía miniaturas pequeñas al navegador en lugar de los archivos de varios MB. La imagen completa se sigue usando al hacer clic.',
+    ed_thumb_width: 'Ancho de miniatura (px)',
+    ed_actions: 'Acciones',
+    ed_tv_entity: 'Entidad Frame TV (para «Mostrar en la TV»)',
+    ed_single_tap: 'Toque simple',
+    ed_double_tap: 'Doble toque',
+    ed_long_press: 'Pulsación larga',
+    ed_actions_hint: 'Las acciones aquí siguen el <b>Tipo de galería</b> de arriba y necesitan la entidad Frame TV.',
+  },
+  it: {
+    err_define_one: 'Devi definire almeno uno tra: folder, sensor, folder_sensor o image_list',
+    err_tv_required: 'Folder Gallery: è richiesta un\'entità Frame TV per l\'azione configurata (tocco / doppio tocco / pressione lunga)',
+    lb_select: 'Seleziona',
+    lb_unfavourite: '★ Rimuovi dai preferiti',
+    lb_upload: '⬆ Carica',
+    lb_delete: '🗑 Elimina',
+    lb_close: 'Chiudi',
+    frame_chooser_title: 'Su quale Frame caricare?',
+    no_images: 'Nessuna immagine trovata',
+    configure_sensor: 'Configura un sensore o image_list',
+    images_count: '{n} immagini',
+    removed_fav: 'Rimosso dai preferiti',
+    artwork_deleted: 'Opera eliminata',
+    all_frames: '⬆ Tutte le Frame ({n})',
+    uploading_all: 'Caricamento su tutte le Frame ({n})…',
+    upload_to: 'Carica → {name}',
+    cancel: 'Annulla',
+    action_executed: 'Azione eseguita: {name}',
+    error: 'Errore: {msg}',
+    g_nothing: 'Niente',
+    g_lightbox: 'Apri anteprima (lightbox)',
+    g_upload: 'Carica sulla TV',
+    g_select: 'Mostra sulla TV',
+    g_delete: 'Elimina',
+    g_unfavourite: 'Rimuovi dai preferiti',
+    ed_title: 'Titolo',
+    ed_sensor: 'Sensore (fornisce l\'elenco delle immagini)',
+    ed_sensor_hint: 'Obbligatorio — un sensore <code>platform: folder</code> (es. <code>sensor.&lt;tv&gt;_store</code>). È ciò che elenca le immagini.',
+    ed_folder: 'Percorso cartella (facoltativo)',
+    ed_folder_ph: 'rilevato automaticamente dal sensore',
+    ed_folder_hint_auto: 'Rilevato automaticamente dal sensore — lascia vuoto a meno che i file non siano fuori da <code>/config/www/</code>.',
+    ed_folder_hint_manual: 'Solo l\'URL di base per le miniature — <b>non</b> elenca le immagini. Da solo non mostra nulla; imposta un sensore sopra.',
+    ed_columns: 'Colonne',
+    ed_image_height: 'Altezza immagine',
+    ed_gallery_type: 'Tipo di galleria (pulsanti lightbox)',
+    gt_auto: 'Auto (rileva per immagine)',
+    gt_personal: 'Personale — Seleziona + Elimina',
+    gt_favorites: 'Preferiti — Seleziona + Rimuovi dai preferiti',
+    gt_upload: 'Caricamento — Carica',
+    ed_gallery_type_hint: 'Forza quali pulsanti azione appaiono nell\'anteprima a schermo intero per l\'intera galleria.',
+    ed_thumbnails: 'Miniature',
+    ed_server_thumbs: 'Miniature ridimensionate lato server',
+    ed_server_thumbs_hint: 'Consigliato per cartelle di originali a piena risoluzione — invia piccole miniature al browser invece dei file da diversi MB. L\'immagine completa è comunque usata al clic.',
+    ed_thumb_width: 'Larghezza miniatura (px)',
+    ed_actions: 'Azioni',
+    ed_tv_entity: 'Entità Frame TV (per «Mostra sulla TV»)',
+    ed_single_tap: 'Tocco singolo',
+    ed_double_tap: 'Doppio tocco',
+    ed_long_press: 'Pressione lunga',
+    ed_actions_hint: 'Le azioni qui seguono il <b>Tipo di galleria</b> sopra e richiedono l\'entità Frame TV.',
+  },
+  'pt-BR': {
+    err_define_one: 'Você precisa definir pelo menos um: folder, sensor, folder_sensor ou image_list',
+    err_tv_required: 'Folder Gallery: uma entidade Frame TV é necessária para a ação configurada (toque / toque duplo / pressão longa)',
+    lb_select: 'Selecionar',
+    lb_unfavourite: '★ Remover dos favoritos',
+    lb_upload: '⬆ Enviar',
+    lb_delete: '🗑 Excluir',
+    lb_close: 'Fechar',
+    frame_chooser_title: 'Enviar para qual Frame?',
+    no_images: 'Nenhuma imagem encontrada',
+    configure_sensor: 'Configure um sensor ou image_list',
+    images_count: '{n} imagens',
+    removed_fav: 'Removido dos favoritos',
+    artwork_deleted: 'Obra excluída',
+    all_frames: '⬆ Todas as Frames ({n})',
+    uploading_all: 'Enviando para todas as Frames ({n})…',
+    upload_to: 'Enviar → {name}',
+    cancel: 'Cancelar',
+    action_executed: 'Ação executada: {name}',
+    error: 'Erro: {msg}',
+    g_nothing: 'Nada',
+    g_lightbox: 'Abrir prévia (lightbox)',
+    g_upload: 'Enviar para a TV',
+    g_select: 'Exibir na TV',
+    g_delete: 'Excluir',
+    g_unfavourite: 'Remover dos favoritos',
+    ed_title: 'Título',
+    ed_sensor: 'Sensor (fornece a lista de imagens)',
+    ed_sensor_hint: 'Obrigatório — um sensor <code>platform: folder</code> (ex. <code>sensor.&lt;tv&gt;_store</code>). É o que lista as imagens.',
+    ed_folder: 'Caminho da pasta (opcional)',
+    ed_folder_ph: 'detectado automaticamente pelo sensor',
+    ed_folder_hint_auto: 'Detectado automaticamente pelo sensor — deixe vazio a menos que seus arquivos estejam fora de <code>/config/www/</code>.',
+    ed_folder_hint_manual: 'Apenas a URL base das miniaturas — <b>não</b> lista imagens. Sozinho não mostra nada; defina um sensor acima.',
+    ed_columns: 'Colunas',
+    ed_image_height: 'Altura da imagem',
+    ed_gallery_type: 'Tipo de galeria (botões do lightbox)',
+    gt_auto: 'Auto (detectar por imagem)',
+    gt_personal: 'Pessoal — Selecionar + Excluir',
+    gt_favorites: 'Favoritos — Selecionar + Remover dos favoritos',
+    gt_upload: 'Envio — Enviar',
+    ed_gallery_type_hint: 'Força quais botões de ação aparecem na prévia em tela cheia para toda a galeria.',
+    ed_thumbnails: 'Miniaturas',
+    ed_server_thumbs: 'Miniaturas redimensionadas no servidor',
+    ed_server_thumbs_hint: 'Recomendado para pastas de originais em tamanho completo — envia miniaturas pequenas ao navegador em vez dos arquivos de vários MB. A imagem completa ainda é usada ao clicar.',
+    ed_thumb_width: 'Largura da miniatura (px)',
+    ed_actions: 'Ações',
+    ed_tv_entity: 'Entidade Frame TV (para «Exibir na TV»)',
+    ed_single_tap: 'Toque único',
+    ed_double_tap: 'Toque duplo',
+    ed_long_press: 'Pressão longa',
+    ed_actions_hint: 'As ações aqui seguem o <b>Tipo de galeria</b> acima e precisam da entidade Frame TV.',
+  },
+  hu: {
+    err_define_one: 'Legalább egyet meg kell adnod: folder, sensor, folder_sensor vagy image_list',
+    err_tv_required: 'Folder Gallery: a beállított művelethez (koppintás / dupla koppintás / hosszú nyomás) Frame TV entitás szükséges',
+    lb_select: 'Kiválasztás',
+    lb_unfavourite: '★ Eltávolítás a kedvencekből',
+    lb_upload: '⬆ Feltöltés',
+    lb_delete: '🗑 Törlés',
+    lb_close: 'Bezárás',
+    frame_chooser_title: 'Melyik Frame-re töltsük fel?',
+    no_images: 'Nem található kép',
+    configure_sensor: 'Állíts be egy szenzort vagy image_list-et',
+    images_count: '{n} kép',
+    removed_fav: 'Eltávolítva a kedvencekből',
+    artwork_deleted: 'Kép törölve',
+    all_frames: '⬆ Összes Frame ({n})',
+    uploading_all: 'Feltöltés az összes Frame-re ({n})…',
+    upload_to: 'Feltöltés → {name}',
+    cancel: 'Mégse',
+    action_executed: 'Művelet végrehajtva: {name}',
+    error: 'Hiba: {msg}',
+    g_nothing: 'Semmi',
+    g_lightbox: 'Előnézet megnyitása (lightbox)',
+    g_upload: 'Feltöltés a TV-re',
+    g_select: 'Megjelenítés a TV-n',
+    g_delete: 'Törlés',
+    g_unfavourite: 'Eltávolítás a kedvencekből',
+    ed_title: 'Cím',
+    ed_sensor: 'Szenzor (a képek listáját adja)',
+    ed_sensor_hint: 'Kötelező — egy <code>platform: folder</code> szenzor (pl. <code>sensor.&lt;tv&gt;_store</code>). Ez sorolja fel a képeket.',
+    ed_folder: 'Mappa útvonala (opcionális)',
+    ed_folder_ph: 'automatikusan a szenzorból',
+    ed_folder_hint_auto: 'Automatikusan a szenzorból — hagyd üresen, hacsak a fájljaid nem a <code>/config/www/</code> mappán kívül vannak.',
+    ed_folder_hint_manual: 'Csak a bélyegképek alap-URL-je — <b>nem</b> sorolja fel a képeket. Önmagában semmit sem mutat; állíts be fent egy szenzort.',
+    ed_columns: 'Oszlopok',
+    ed_image_height: 'Képmagasság',
+    ed_gallery_type: 'Galéria típusa (lightbox gombok)',
+    gt_auto: 'Auto (képenként felismerve)',
+    gt_personal: 'Személyes — Kiválasztás + Törlés',
+    gt_favorites: 'Kedvencek — Kiválasztás + Eltávolítás a kedvencekből',
+    gt_upload: 'Feltöltés — Feltöltés',
+    ed_gallery_type_hint: 'Meghatározza, mely műveleti gombok jelenjenek meg a teljes képernyős előnézetben az egész galériára.',
+    ed_thumbnails: 'Bélyegképek',
+    ed_server_thumbs: 'Szerveroldalon átméretezett bélyegképek',
+    ed_server_thumbs_hint: 'Teljes méretű eredetiket tartalmazó mappákhoz ajánlott — kis bélyegképeket küld a böngészőnek a több MB-os fájlok helyett. A teljes kép kattintáskor továbbra is használatban marad.',
+    ed_thumb_width: 'Bélyegkép szélessége (px)',
+    ed_actions: 'Műveletek',
+    ed_tv_entity: 'Frame TV entitás (a „Megjelenítés a TV-n” művelethez)',
+    ed_single_tap: 'Egyszeri koppintás',
+    ed_double_tap: 'Dupla koppintás',
+    ed_long_press: 'Hosszú nyomás',
+    ed_actions_hint: 'Az itteni műveletek a fenti <b>Galéria típusát</b> követik, és Frame TV entitást igényelnek.',
+  },
+};
+
+function fgcTranslate(lang, key, params) {
+  const norm = (l) => {
+    if (!l) return null;
+    if (TRANSLATIONS[l]) return l;
+    const base = String(l).split('-')[0];
+    return TRANSLATIONS[base] ? base : null;
+  };
+  const dict = TRANSLATIONS[norm(lang)] || TRANSLATIONS.en;
+  let str = dict[key] != null ? dict[key] : (TRANSLATIONS.en[key] != null ? TRANSLATIONS.en[key] : key);
+  if (params) {
+    Object.keys(params).forEach((p) => {
+      str = str.replace(new RegExp('\\{' + p + '\\}', 'g'), params[p]);
+    });
+  }
+  return str;
+}
+
 class FolderGalleryCard extends HTMLElement {
-  
+
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
@@ -45,11 +381,37 @@ class FolderGalleryCard extends HTMLElement {
     };
   }
 
+  _t(key, params) {
+    const lang = (this._hass && (this._hass.locale?.language || this._hass.language)) || 'en';
+    return fgcTranslate(lang, key, params);
+  }
+
   setConfig(config) {
     if (!config.folder && !config.sensor && !config.folder_sensor && !config.image_list) {
-      throw new Error('You need to define at least one of: folder, sensor, folder_sensor, or image_list');
+      throw new Error(fgcTranslate('en', 'err_define_one'));
     }
-    
+
+    // A tap / double-tap / long-press action that calls one of our art
+    // services must carry a Frame TV entity, otherwise the service call has no
+    // target. The visual editor builds these actions, so reject the config
+    // here (blocks save) when the entity is missing.
+    const needsEntity = (a) => {
+      if (!a || typeof a !== 'object') return false;
+      const svc = (a.service || a.perform_action || '').toLowerCase();
+      if (!svc.startsWith('samsungtv_smart.')) return false;
+      const hasEntity =
+        (a.target && a.target.entity_id) || (a.data && a.data.entity_id);
+      return !hasEntity;
+    };
+    if (
+      needsEntity(config.action) ||
+      needsEntity(config.tap_action) ||
+      needsEntity(config.double_tap_action) ||
+      needsEntity(config.hold_action)
+    ) {
+      throw new Error(fgcTranslate('en', 'err_tv_required'));
+    }
+
     this._config = {
       title: config.title || '',
       folder: config.folder || null,
@@ -507,16 +869,16 @@ class FolderGalleryCard extends HTMLElement {
           <span class="lightbox-close" id="lightbox-close">&times;</span>
           <img id="lightbox-img" src="" alt="">
           <div class="lightbox-actions">
-            <button class="lightbox-btn" id="lightbox-action" style="display:none">Select</button>
-            <button class="lightbox-btn secondary" id="lightbox-unfavourite" style="display:none">★ Unfavourite</button>
-            <button class="lightbox-btn" id="lightbox-upload" style="display:none">⬆ Upload</button>
-            <button class="lightbox-btn danger" id="lightbox-delete" style="display:none">🗑 Delete</button>
-            <button class="lightbox-btn secondary" id="lightbox-close-btn">Close</button>
+            <button class="lightbox-btn" id="lightbox-action" style="display:none">${this._t('lb_select')}</button>
+            <button class="lightbox-btn secondary" id="lightbox-unfavourite" style="display:none">${this._t('lb_unfavourite')}</button>
+            <button class="lightbox-btn" id="lightbox-upload" style="display:none">${this._t('lb_upload')}</button>
+            <button class="lightbox-btn danger" id="lightbox-delete" style="display:none">${this._t('lb_delete')}</button>
+            <button class="lightbox-btn secondary" id="lightbox-close-btn">${this._t('lb_close')}</button>
           </div>
         </div>
 
         <div class="frame-chooser" id="frame-chooser">
-          <div class="frame-chooser-title">Upload to which Frame?</div>
+          <div class="frame-chooser-title">${this._t('frame_chooser_title')}</div>
           <div class="frame-chooser-list" id="frame-chooser-list"></div>
         </div>
       </ha-card>
@@ -544,16 +906,16 @@ class FolderGalleryCard extends HTMLElement {
     if (!container) return;
     
     if (countEl) {
-      countEl.textContent = `${this._images.length} images`;
+      countEl.textContent = this._t('images_count', { n: this._images.length });
     }
 
     if (this._images.length === 0) {
       container.innerHTML = `
         <div class="empty-state">
           <ha-icon icon="mdi:image-off"></ha-icon>
-          <div>No images found</div>
+          <div>${this._t('no_images')}</div>
           <div style="font-size: 0.8em; margin-top: 8px;">
-            Configure a sensor or image_list
+            ${this._t('configure_sensor')}
           </div>
         </div>
       `;
@@ -789,7 +1151,7 @@ class FolderGalleryCard extends HTMLElement {
       { content_id: contentId, status: 'off' },
       { entity_id: entityId }
     );
-    this.showToast('Removed from favourites');
+    this.showToast(this._t('removed_fav'));
   }
 
   _callDelete(imageData) {
@@ -801,7 +1163,7 @@ class FolderGalleryCard extends HTMLElement {
       { content_id: contentId },
       { entity_id: entityId }
     );
-    this.showToast('Artwork deleted');
+    this.showToast(this._t('artwork_deleted'));
   }
 
   closeLightbox() {
@@ -939,11 +1301,11 @@ class FolderGalleryCard extends HTMLElement {
     return this._hass.callService(domain, serviceName, serviceData, target)
       .then(() => {
         // Visual feedback
-        this.showToast(`Action executed: ${serviceName}`);
+        this.showToast(this._t('action_executed', { name: serviceName }));
       })
       .catch(err => {
         console.error('[FolderGalleryCard] Service call failed:', err);
-        this.showToast(`Error: ${err.message}`, true);
+        this.showToast(this._t('error', { msg: err.message }), true);
       });
   }
 
@@ -1003,10 +1365,10 @@ class FolderGalleryCard extends HTMLElement {
     // "All Frames" option
     const allBtn = document.createElement('button');
     allBtn.className = 'lightbox-btn';
-    allBtn.textContent = `⬆ All Frames (${frames.length})`;
+    allBtn.textContent = this._t('all_frames', { n: frames.length });
     allBtn.addEventListener('click', async () => {
       this._closeFrameChooser();
-      this.showToast(`Uploading to all Frames (${frames.length})…`);
+      this.showToast(this._t('uploading_all', { n: frames.length }));
       for (const f of frames) {
         // Sequential: each upload is a heavy WebSocket transfer.
         await this._dispatchAction(imageData, action, f.entity_id);
@@ -1021,7 +1383,7 @@ class FolderGalleryCard extends HTMLElement {
       btn.textContent = f.name;
       btn.addEventListener('click', () => {
         this._closeFrameChooser();
-        this.showToast(`Upload → ${f.name}`);
+        this.showToast(this._t('upload_to', { name: f.name }));
         this._dispatchAction(imageData, action, f.entity_id);
       });
       list.appendChild(btn);
@@ -1030,7 +1392,7 @@ class FolderGalleryCard extends HTMLElement {
     // Cancel
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'lightbox-btn secondary';
-    cancelBtn.textContent = 'Cancel';
+    cancelBtn.textContent = this._t('cancel');
     cancelBtn.addEventListener('click', () => this._closeFrameChooser());
     list.appendChild(cancelBtn);
 
@@ -1090,6 +1452,28 @@ class FolderGalleryCardEditor extends HTMLElement {
     this.attachShadow({ mode: 'open' });
   }
 
+  _lang() {
+    return (this._hass && (this._hass.locale?.language || this._hass.language)) || 'en';
+  }
+
+  _t(key, params) {
+    return fgcTranslate(this._lang(), key, params);
+  }
+
+  set hass(hass) {
+    const oldLang = this._lang();
+    this._hass = hass;
+    // Re-render once the UI language is known / changes, since setConfig may
+    // have rendered before hass (and therefore the language) was available.
+    if (this._config && this._lang() !== oldLang) {
+      this.render();
+    }
+  }
+
+  get hass() {
+    return this._hass;
+  }
+
   setConfig(config) {
     this._config = config;
     this.render();
@@ -1134,26 +1518,28 @@ class FolderGalleryCardEditor extends HTMLElement {
   // { v: kind, l: label }. `lightbox` (preview) is offered for single tap only.
   _gestureOptions(includeLightbox) {
     const gt = (this._config.gallery_type || 'auto').toLowerCase();
-    const opts = [{ v: 'none', l: 'Nothing' }];
-    if (includeLightbox) opts.push({ v: 'lightbox', l: 'Open preview (lightbox)' });
+    const opts = [{ v: 'none', l: this._t('g_nothing') }];
+    if (includeLightbox) opts.push({ v: 'lightbox', l: this._t('g_lightbox') });
     if (gt === 'upload') {
-      opts.push({ v: 'upload', l: 'Upload to TV' });
+      opts.push({ v: 'upload', l: this._t('g_upload') });
     } else if (gt === 'personal') {
-      opts.push({ v: 'select', l: 'Display on TV' });
-      opts.push({ v: 'delete', l: 'Delete' });
+      opts.push({ v: 'select', l: this._t('g_select') });
+      opts.push({ v: 'delete', l: this._t('g_delete') });
     } else if (gt === 'favorites' || gt === 'favourites') {
-      opts.push({ v: 'select', l: 'Display on TV' });
-      opts.push({ v: 'unfavourite', l: 'Unfavourite' });
+      opts.push({ v: 'select', l: this._t('g_select') });
+      opts.push({ v: 'unfavourite', l: this._t('g_unfavourite') });
     } else {
-      opts.push({ v: 'select', l: 'Display on TV' });
+      opts.push({ v: 'select', l: this._t('g_select') });
     }
     return opts;
   }
 
   // Build the config action object for a gesture preset (all need the TV entity).
+  // When the TV entity is empty we still build the action but omit `target`, so
+  // the card's setConfig can detect the missing entity and refuse to save.
   _buildAction(kind, tvEntity) {
-    if (!tvEntity) return null;
-    const target = { entity_id: tvEntity };
+    if (kind === 'none' || !kind) return null;
+    const target = tvEntity ? { entity_id: tvEntity } : undefined;
     switch (kind) {
       case 'select':
         return {
@@ -1221,64 +1607,64 @@ class FolderGalleryCardEditor extends HTMLElement {
       </style>
 
       <div class="form-row">
-        <label>Title</label>
+        <label>${this._t('ed_title')}</label>
         <input type="text" id="title" value="${this._config.title || ''}">
       </div>
 
       <div class="form-row">
-        <label>Sensor (provides the image list)</label>
+        <label>${this._t('ed_sensor')}</label>
         <input type="text" id="folder_sensor" value="${this._config.folder_sensor || this._config.sensor || ''}" placeholder="sensor.your_folder_sensor">
-        <span class="hint">Required — a <code>platform: folder</code> sensor (e.g. <code>sensor.&lt;tv&gt;_store</code>). This is what lists the images.</span>
+        <span class="hint">${this._t('ed_sensor_hint')}</span>
       </div>
 
       <div class="form-row">
-        <label>Folder Path (optional)</label>
-        <input type="text" id="folder" value="${this._config.folder || ''}" placeholder="auto-detected from the sensor">
+        <label>${this._t('ed_folder')}</label>
+        <input type="text" id="folder" value="${this._config.folder || ''}" placeholder="${this._t('ed_folder_ph')}">
         <span class="hint">${
           (this._config.folder_sensor || this._config.sensor)
-            ? 'Auto-detected from the sensor — leave empty unless your files are outside <code>/config/www/</code>.'
-            : 'Only the base URL for thumbnails — it does <b>not</b> list images. On its own it shows nothing; set a sensor above.'
+            ? this._t('ed_folder_hint_auto')
+            : this._t('ed_folder_hint_manual')
         }</span>
       </div>
 
       <div class="form-row">
-        <label>Columns</label>
+        <label>${this._t('ed_columns')}</label>
         <input type="number" id="columns" value="${this._config.columns || 4}" min="1" max="10">
       </div>
 
       <div class="form-row">
-        <label>Image Height</label>
+        <label>${this._t('ed_image_height')}</label>
         <input type="text" id="image_height" value="${this._config.image_height || '150px'}">
       </div>
 
       <div class="form-row">
-        <label>Gallery type (lightbox buttons)</label>
+        <label>${this._t('ed_gallery_type')}</label>
         <select id="gallery_type">
-          <option value="auto" ${sel('auto', (this._config.gallery_type || 'auto'))}>Auto (detect per image)</option>
-          <option value="personal" ${sel('personal', this._config.gallery_type)}>Personal — Select + Delete</option>
-          <option value="favorites" ${sel('favorites', this._config.gallery_type)}>Favorites — Select + Unfavourite</option>
-          <option value="upload" ${sel('upload', this._config.gallery_type)}>Upload — Upload</option>
+          <option value="auto" ${sel('auto', (this._config.gallery_type || 'auto'))}>${this._t('gt_auto')}</option>
+          <option value="personal" ${sel('personal', this._config.gallery_type)}>${this._t('gt_personal')}</option>
+          <option value="favorites" ${sel('favorites', this._config.gallery_type)}>${this._t('gt_favorites')}</option>
+          <option value="upload" ${sel('upload', this._config.gallery_type)}>${this._t('gt_upload')}</option>
         </select>
-        <span class="hint">Forces which action buttons appear in the fullscreen preview for the whole gallery.</span>
+        <span class="hint">${this._t('ed_gallery_type_hint')}</span>
       </div>
 
-      <div class="section">Thumbnails</div>
+      <div class="section">${this._t('ed_thumbnails')}</div>
       <div class="form-row">
-        <label><input type="checkbox" id="server_thumbnails" ${this._config.server_thumbnails !== false ? 'checked' : ''}>Server-side resized thumbnails</label>
-        <span class="hint">Recommended for folders of full-size originals — sends small thumbnails to the browser instead of the multi-MB files. The full image is still used on click.</span>
+        <label><input type="checkbox" id="server_thumbnails" ${this._config.server_thumbnails !== false ? 'checked' : ''}>${this._t('ed_server_thumbs')}</label>
+        <span class="hint">${this._t('ed_server_thumbs_hint')}</span>
       </div>
       <div class="form-row">
-        <label>Thumbnail width (px)</label>
+        <label>${this._t('ed_thumb_width')}</label>
         <input type="number" id="thumbnail_width" value="${this._config.thumbnail_width || 400}" min="64" max="1024">
       </div>
 
-      <div class="section">Actions</div>
+      <div class="section">${this._t('ed_actions')}</div>
       <div class="form-row">
-        <label>Frame TV entity (for "Display on TV")</label>
+        <label>${this._t('ed_tv_entity')}</label>
         <input type="text" id="_tv_entity" value="${tvEntity}" placeholder="media_player.samsung_frame">
       </div>
       <div class="form-row">
-        <label>Single tap</label>
+        <label>${this._t('ed_single_tap')}</label>
         <select id="_tap_kind">
           ${this._gestureOptions(true)
             .map((o) => `<option value="${o.v}" ${sel(o.v, tapKind)}>${o.l}</option>`)
@@ -1286,7 +1672,7 @@ class FolderGalleryCardEditor extends HTMLElement {
         </select>
       </div>
       <div class="form-row">
-        <label>Double tap</label>
+        <label>${this._t('ed_double_tap')}</label>
         <select id="_dtap_kind">
           ${this._gestureOptions(false)
             .map((o) => `<option value="${o.v}" ${sel(o.v, dtapKind)}>${o.l}</option>`)
@@ -1294,13 +1680,13 @@ class FolderGalleryCardEditor extends HTMLElement {
         </select>
       </div>
       <div class="form-row">
-        <label>Long press</label>
+        <label>${this._t('ed_long_press')}</label>
         <select id="_hold_kind">
           ${this._gestureOptions(false)
             .map((o) => `<option value="${o.v}" ${sel(o.v, holdKind)}>${o.l}</option>`)
             .join('')}
         </select>
-        <span class="hint">The actions here follow the <b>Gallery type</b> above, and need the Frame TV entity.</span>
+        <span class="hint">${this._t('ed_actions_hint')}</span>
       </div>
     `;
 
@@ -1399,7 +1785,7 @@ window.customCards.push({
 });
 
 console.info(
-  '%c FOLDER-GALLERY-CARD %c v1.3.0 ',
+  '%c FOLDER-GALLERY-CARD %c v1.4.0 ',
   'color: white; background: #03a9f4; font-weight: bold;',
   'color: #03a9f4; background: white; font-weight: bold;'
 );
