@@ -1087,6 +1087,14 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         """
         self.async_write_ha_state()
         self.hass.async_create_task(self._refresh_ip_art_mode())
+        # Some models (e.g. 2024 Frames where IP Control cannot report the art
+        # state and REST PowerState stays "on" in art mode) only learn about an
+        # art-mode transition from SmartThings. Since the ST poll is throttled,
+        # force it on the next update so entering/leaving Art Mode is reflected
+        # within a couple of seconds instead of waiting up to the ST interval.
+        if self._st:
+            self._st_last_poll = 0.0
+            self.async_schedule_update_ha_state(True)
 
     async def _refresh_ip_art_mode(self, _now=None) -> None:
         """Refresh the cached Art Mode value via IP Control.
