@@ -62,6 +62,37 @@ def _ip_control_active(entry: ConfigEntry) -> bool:
     )
 
 
+def _tv_normal_viewing(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """True when the TV is on for normal viewing (not off, not Art Mode).
+
+    Guardrail for the picture-calibration controls: contrast/brightness/… only
+    apply to normal viewing. In Art Mode the panel has its own Art Mode
+    Brightness / Color Temperature, and the IP Control picture methods answer
+    -32601 there; when off there is nothing to read. Rather than probe the TV
+    and interpret errors, gate on the media_player's own state — it is fed by
+    the WebSocket / SmartThings and is authoritative regardless of whether IP
+    Control art-mode reads are enabled (they are off on some 2024 Frames).
+
+    Scans every media_player of the entry and returns True if ANY is in normal
+    viewing, so a stale/duplicate "unavailable" media_player entity can't veto a
+    TV that is actually on.
+    """
+    try:
+        ent_reg = er.async_get(hass)
+        for ent in ent_reg.entities.get_entries_for_config_entry_id(entry.entry_id):
+            if ent.domain != "media_player":
+                continue
+            state = hass.states.get(ent.entity_id)
+            if state is None or state.state in ("off", "unavailable", "unknown"):
+                continue
+            if state.attributes.get("art_mode_status") == "on":
+                continue
+            return True
+    except Exception:  # pylint: disable=broad-except
+        return False
+    return False
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -387,31 +418,26 @@ class IPControlVideoCoordinator(DataUpdateCoordinator):
 
     async def _async_update_data(self) -> dict:
         """Fetch the getVideoStates snapshot over IP Control."""
+        # Guardrail: picture calibration only applies to normal viewing. Skip
+        # the poll entirely while the TV is off or in Art Mode (the getters
+        # answer -32601 there) — the sliders go unavailable and recover when the
+        # TV is on again, without probing the TV or interpreting errors.
+        if not _tv_normal_viewing(self.hass, self._entry):
+            return {}
         client = self.get_ip_control()
         if client is None:
             raise UpdateFailed("IP Control is not paired or is disabled")
         try:
-            # Skip while the TV is off: the getters return stale values and a
-            # sleeping Frame drops the connection anyway. An off TV is an
-            # expected condition, not an update failure — return an empty
-            # snapshot (sliders go unavailable) and keep last_update_success.
-            if await client.async_get_power_state() == "powerOff":
-                return {}
             data = await client.async_get_video_states()
         except SamsungIPControlAuthError as ex:
             notify_token_problem(
                 self.hass, self._entry.entry_id, METHOD_IP_CONTROL, self._device_title()
             )
             raise UpdateFailed(f"IP Control token rejected: {ex}") from ex
-        except SamsungIPControlTransportError:
-            # Indistinguishable from "TV is simply off" on Frames that leave the
-            # network in standby — no ERROR, just no values.
-            return {}
-        except SamsungIPControlUnsupportedError:
-            # -32601: the picture getters aren't available in the current state
-            # (typically Art Mode, where calibration doesn't apply) or on this
-            # model. Expected, not a failure — go unavailable without an ERROR
-            # and recover automatically when the state changes.
+        except (SamsungIPControlTransportError, SamsungIPControlUnsupportedError):
+            # Transport failure (TV dropped off the network) or a residual
+            # -32601 (state changed mid-poll): expected, not a failure — go
+            # unavailable without an ERROR and recover on the next cycle.
             return {}
         except SamsungIPControlError as ex:
             raise UpdateFailed(f"IP Control video read failed: {ex}") from ex
@@ -496,6 +522,13 @@ class SamsungTVIPControlPictureNumber(CoordinatorEntity, NumberEntity):
                 f"{setting.name} must be between "
                 f"{setting.min_value} and {setting.max_value}."
             )
+        # Guardrail: the picture methods only work in normal viewing. Don't even
+        # hit the TV while it is off or in Art Mode — give a clear message.
+        if not _tv_normal_viewing(self.hass, self._entry):
+            raise HomeAssistantError(
+                f"Cannot set {setting.name}: the TV must be on and out of Art "
+                "Mode. Picture settings apply to normal viewing only."
+            )
 
         client = self.coordinator.get_ip_control()
         if client is None:
@@ -504,7 +537,9 @@ class SamsungTVIPControlPictureNumber(CoordinatorEntity, NumberEntity):
             )
 
         try:
-            await client.async_set_video_setting(setting.method, setting.field, target)
+            echoed = await client.async_set_video_setting(
+                setting.method, setting.field, target
+            )
         except SamsungIPControlModeLockedError as ex:
             # Rejected by the current picture mode; leave the slider where it is
             # and surface a clear, actionable message.
@@ -537,8 +572,13 @@ class SamsungTVIPControlPictureNumber(CoordinatorEntity, NumberEntity):
             ) from ex
 
         clear_token_problem(self.hass, self._entry_id, METHOD_IP_CONTROL)
-        # Reflect the new value immediately, then refresh from the TV.
-        await self.coordinator.async_request_refresh()
+        # Reflect the accepted value on all sliders at once, without an extra TV
+        # round-trip. This also resets the poll timer, so a rapid burst of sets
+        # isn't swallowed by the request-refresh cooldown; the next scheduled
+        # getVideoStates re-syncs from the TV.
+        data = dict(self.coordinator.data or {})
+        data[setting.field] = echoed
+        self.coordinator.async_set_updated_data(data)
 
 
 # ══════════════════════════════════════════════════════════════════════════

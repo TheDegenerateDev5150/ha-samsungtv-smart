@@ -25,16 +25,17 @@ If this project is useful to you, you can support its development:
     (`Connection reset by peer` / TLS errors) and entities flapped. All IP
     Control calls to a given TV are now **serialized through a per-host lock**,
     which also steadies the pre-existing backlight/color-tone controls.
-  - **Ambiguous `-32601`.** A Frame answers `-32601` "Method not found" for the
-    picture getters both when the method truly doesn't exist *and* when it
-    simply isn't available in the current state — most often because the TV is
-    in **Art Mode**, where picture calibration doesn't apply (the panel has its
-    own Art Mode Brightness / Color Temperature). The sliders now read all five
-    values in **one shared `getVideoStates` call** and treat `-32601` as
-    *"not available right now"*: they go cleanly **unavailable** (e.g. in Art
-    Mode) and come back on their own, rather than flapping. A write that hits
-    `-32601` shows a clear message ("applies to normal viewing, not Art Mode")
-    and is **not** permanently disabled — it works again once the state allows.
+  - **State guardrail (Art Mode / off).** Picture calibration only applies to
+    normal viewing — in Art Mode the panel has its own Art Mode Brightness /
+    Color Temperature, and the IP Control picture methods answer `-32601` there
+    (the TV returns the same "Method not found" code whether a method is absent
+    *or* just unavailable in the current state, so it can't be interpreted).
+    The sliders now read all five values in **one shared `getVideoStates` call**,
+    and that call — and every write — is only issued **when the TV is on and out
+    of Art Mode**, gated on the media player's own state. So the sliders go
+    cleanly **unavailable** when off/in Art Mode and recover on their own; a
+    write attempted then gives a clear "the TV must be on and out of Art Mode"
+    message and is never permanently disabled.
 
 ## Picture calibration — Contrast / Brightness / Sharpness / Color / Tint are now adjustable (8.3.0b8)
 
