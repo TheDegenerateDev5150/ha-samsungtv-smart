@@ -9,7 +9,7 @@ A custom integration for Home Assistant to control Samsung Smart TVs (Tizen OS),
 
 If this project is useful to you, you can support its development:
 
-<a href="https://buymeacoffee.com/thefab21" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="41" width="174"></a>
+<a href="https://buymeacoffee.com/thefab21" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-black.png" alt="Buy Me A Coffee" height="41" width="174"></a>
 
 This fork brings improved WebSocket stability, full Samsung Frame TV Art Mode support, picture mode and source selection fixes for 2024 Frame TVs, and OAuth2 authentication for SmartThings.
 
