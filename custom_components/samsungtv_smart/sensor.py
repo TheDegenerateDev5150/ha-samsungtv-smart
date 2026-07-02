@@ -62,7 +62,6 @@ from .const import (
     DEFAULT_PORT,
     DEFAULT_ST_POLL_ON_INTERVAL,
     DOMAIN,
-    ST_POLL_OFF_INTERVAL,
     WS_PREFIX,
 )
 from .token_notify import METHOD_IP_CONTROL, clear_token_problem, notify_token_problem
@@ -123,7 +122,9 @@ def _st_child_gate(entity) -> bool:
     if _tv_powered_off(entity.hass, entity._entry):
         return False
     now = time.monotonic()
-    if now - getattr(entity, "_st_last_poll", 0.0) < _st_poll_on_interval(entity._entry):
+    if now - getattr(entity, "_st_last_poll", 0.0) < _st_poll_on_interval(
+        entity._entry
+    ):
         return False
     entity._st_last_poll = now
     return True
