@@ -2,6 +2,18 @@
 
 > **Status: pre-release (beta).** 8.3.0 builds on 8.2.0.
 
+## Art Mode is detected immediately again after the polling rework (8.3.0b2)
+
+On some models (notably 2024 Frames where IP Control can't report the art
+state and the TV's REST `PowerState` stays `on` while displaying art),
+entering/leaving **Art Mode** is only learned from SmartThings. After the ST
+poll was throttled (below), a `select_image` / Art Mode change could take up to
+the ST interval (~30 s) to show up in `art_mode_status` / the current art.
+The integration now **forces an immediate SmartThings poll on an art-mode
+transition** (the local Art WebSocket already broadcasts it), so Art Mode is
+reflected within a second or two again — without giving up the throttle for
+idle polling.
+
 ## SmartThings polling — local WebSocket first, far fewer cloud calls
 
 Ahead of Samsung's move to a **paid SmartThings API** (free access phasing out
