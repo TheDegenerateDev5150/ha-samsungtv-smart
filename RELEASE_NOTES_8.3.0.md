@@ -14,6 +14,19 @@ If this project is useful to you, you can support its development:
 > the new `frame_tv_entity` key so the fullscreen-preview buttons work — see the
 > *lightbox buttons* note below.
 
+## SmartThings polling — power sensor uses a fixed 30 s cadence in Art Mode (8.3.0b7)
+
+- **The shared power/energy coordinator no longer follows the (possibly fast)
+  "when on" interval while the Frame is displaying Art.** A Frame in Art Mode
+  still draws power, so the coordinator keeps polling — but if you lower
+  *SmartThings poll interval when on* for snappier channel / picture-mode updates
+  (e.g. 5 s), the power sensor was inheriting that cadence and hitting the cloud
+  every few seconds throughout the (often all-day) Art Mode period, even though
+  the draw barely changes. Power/energy now polls at a **fixed 30 s keepalive in
+  Art Mode**, decoupling the power sensor from the comfort interval: channel and
+  picture mode stay responsive while power stops dominating the ST call budget. A
+  fully-on TV (not Art) still follows the configured interval.
+
 ## Frame Art — `current.jpg` uses the already-downloaded thumbnail first (8.3.0b5)
 
 - **When the artwork changes, `current.jpg` is now taken from the local copy we

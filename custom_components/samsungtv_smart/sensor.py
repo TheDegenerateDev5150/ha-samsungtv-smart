@@ -62,6 +62,7 @@ from .const import (
     DEFAULT_PORT,
     DEFAULT_ST_POLL_ON_INTERVAL,
     DOMAIN,
+    ST_POLL_OFF_INTERVAL,
     WS_PREFIX,
 )
 from .token_notify import METHOD_IP_CONTROL, clear_token_problem, notify_token_problem
@@ -105,6 +106,32 @@ def _tv_powered_off(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if state.state != "off":
                 return False
             return state.attributes.get("art_mode_status") != "on"
+    except Exception:  # pylint: disable=broad-except
+        return False
+    return False
+
+
+def _tv_in_art_mode(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """True when the TV (media_player) is off but displaying Art Mode.
+
+    A Frame showing Art reports state "off" with ``art_mode_status == "on"``.
+    It still draws power, so power/energy stay worth polling — but only slowly,
+    since the draw barely changes. Callers use this to fall back to a fixed slow
+    cadence instead of the (possibly fast) "when on" interval.
+    """
+    from homeassistant.helpers import entity_registry as er
+
+    try:
+        ent_reg = er.async_get(hass)
+        for ent in ent_reg.entities.get_entries_for_config_entry_id(entry.entry_id):
+            if ent.domain != "media_player":
+                continue
+            state = hass.states.get(ent.entity_id)
+            if state is None:
+                return False
+            return (
+                state.state == "off" and state.attributes.get("art_mode_status") == "on"
+            )
     except Exception:  # pylint: disable=broad-except
         return False
     return False
@@ -2237,6 +2264,7 @@ class SmartThingsPowerCoordinator(DataUpdateCoordinator):
         self._session = session
         self.device_id = device_id
         self._device_name = device_name
+        self._st_last_poll = 0.0
         super().__init__(
             hass,
             _LOGGER,
@@ -2283,9 +2311,22 @@ class SmartThingsPowerCoordinator(DataUpdateCoordinator):
                 if field in data:
                     data[field] = 0
             return data
+        # In Art Mode the Frame draws power but the draw barely changes, so poll
+        # at a fixed slow keepalive (ST_POLL_OFF_INTERVAL) rather than the — often
+        # much faster — "when on" cadence used for responsive channel/picture-mode
+        # updates. This decouples the power sensor from the comfort interval.
+        if _tv_in_art_mode(self.hass, self._entry):
+            now = time.monotonic()
+            if now - self._st_last_poll < ST_POLL_OFF_INTERVAL:
+                self.logger.debug(
+                    "Power sensors: Art Mode, throttling SmartThings poll for %s",
+                    self._device_name,
+                )
+                return self.data or {}
         st_client = await self._get_st_client()
         if not st_client:
             return self.data or {}
+        self._st_last_poll = time.monotonic()
         try:
             components = await st_client.get_device_status(self.device_id)
         except Exception as ex:  # pylint: disable=broad-except
