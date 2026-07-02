@@ -14,6 +14,24 @@ If this project is useful to you, you can support its development:
 > the new `frame_tv_entity` key so the fullscreen-preview buttons work — see the
 > *lightbox buttons* note below.
 
+## Picture calibration — stop the sliders flapping available/unavailable (8.3.0b9)
+
+- **Fix: the new Contrast/Brightness/Sharpness/Color/Tint sliders kept dropping
+  to *unavailable* then back, without any mode change.** Two causes, both fixed:
+  - **Concurrent IP Control calls.** The TV's control server (port 1516) accepts
+    one connection at a time and resets overlapping ones. Each slider polled the
+    TV independently, on top of the backlight number, color-tone select, state
+    coordinator and the media_player art poll — so calls collided
+    (`Connection reset by peer` / TLS errors) and entities flapped. All IP
+    Control calls to a given TV are now **serialized through a per-host lock**,
+    which also steadies the pre-existing backlight/color-tone controls.
+  - **Per-model capability.** Some Frames don't implement the per-field
+    `contrastControl`/etc methods and answer `-32601`. The sliders now read all
+    five values in **one shared `getVideoStates` call** (supported everywhere),
+    so their value/availability no longer depend on those methods. Writing on a
+    model that lacks them raises a clear *"not supported on this TV"* message
+    instead of silently flapping.
+
 ## Picture calibration — Contrast / Brightness / Sharpness / Color / Tint are now adjustable (8.3.0b8)
 
 - **The five expert picture settings become settable sliders instead of

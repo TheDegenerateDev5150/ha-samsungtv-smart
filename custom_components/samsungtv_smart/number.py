@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import timedelta
 import logging
 
 from homeassistant.components.number import NumberEntity, NumberMode, RestoreNumber
@@ -23,6 +24,11 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
+    UpdateFailed,
+)
 
 from .api.art import SamsungTVAsyncArt
 from .api.ipcontrol import (
@@ -30,6 +36,8 @@ from .api.ipcontrol import (
     SamsungIPControlAuthError,
     SamsungIPControlError,
     SamsungIPControlModeLockedError,
+    SamsungIPControlTransportError,
+    SamsungIPControlUnsupportedError,
 )
 from .const import (
     CONF_ENABLE_IP_CONTROL,
@@ -69,18 +77,29 @@ async def async_setup_entry(
     device_name = config.get(CONF_NAME) or entry.title or host
 
     if _ip_control_active(entry):
-        ip_control_numbers: list[NumberEntity] = [
-            SamsungTVIPControlBacklightNumber(
-                hass, entry, host, device_name, device_unique_id
-            )
-        ]
-        ip_control_numbers.extend(
+        # Backlight self-polls (single value, its own <field>Control getter that
+        # works on all models); add it with update-before-add.
+        async_add_entities(
+            [
+                SamsungTVIPControlBacklightNumber(
+                    hass, entry, host, device_name, device_unique_id
+                )
+            ],
+            True,
+        )
+        # The five expert picture sliders share one getVideoStates coordinator
+        # so they never open concurrent connections to port 1516.
+        video_coordinator = IPControlVideoCoordinator(hass, entry, host)
+        async_add_entities(
             SamsungTVIPControlPictureNumber(
-                hass, entry, host, device_name, device_unique_id, setting
+                video_coordinator, entry, host, device_name, device_unique_id, setting
             )
             for setting in IP_CONTROL_PICTURE_SETTINGS
         )
-        async_add_entities(ip_control_numbers, True)
+        hass.async_create_background_task(
+            video_coordinator.async_request_refresh(),
+            f"ip_control_video_initial_refresh_{entry.entry_id}",
+        )
         _LOGGER.debug(
             "IP Control number entities created for %s (backlight + %d picture "
             "settings)",
@@ -316,60 +335,46 @@ IP_CONTROL_PICTURE_SETTINGS: tuple[IPControlPictureSetting, ...] = (
 )
 
 
-class SamsungTVIPControlPictureNumber(NumberEntity):
-    """Settable slider for one IP Control expert picture setting."""
+# One shared getVideoStates poll feeds all five sliders (the TV resets
+# overlapping connections, so per-field self-polling flapped their availability).
+IP_CONTROL_VIDEO_SCAN_INTERVAL = timedelta(seconds=30)
 
-    _attr_has_entity_name = True
-    _attr_mode = NumberMode.SLIDER
-    _attr_native_step = 1
+
+class IPControlVideoCoordinator(DataUpdateCoordinator):
+    """Single getVideoStates poll shared by all picture-setting sliders.
+
+    getVideoStates returns contrast/brightness/sharpness/color/tint in ONE call
+    and works on every Frame that speaks IP Control (unlike the per-field
+    ``<field>Control`` getters, which some models reject with -32601). Reading
+    through this coordinator gives each slider a stable value and availability
+    without opening five concurrent connections to port 1516.
+    """
 
     def __init__(
         self,
         hass: HomeAssistant,
         entry: ConfigEntry,
         host: str,
-        device_name: str,
-        device_unique_id: str,
-        setting: IPControlPictureSetting,
     ) -> None:
-        """Initialize the expert picture setting number."""
-        self.hass = hass
-        self._entry_id = entry.entry_id
+        """Initialize the video-state coordinator."""
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=f"IP Control video {entry.title}",
+            update_interval=IP_CONTROL_VIDEO_SCAN_INTERVAL,
+        )
+        self._entry = entry
         self._host = host
-        self._device_name = device_name
-        self._device_unique_id = device_unique_id
-        self._setting = setting
         self._ip_control: SamsungIPControl | None = None
         self._ip_control_token: str | None = None
-        self._attr_unique_id = f"{device_unique_id}_ip_control_{setting.key}"
-        self._attr_name = setting.name
-        self._attr_icon = setting.icon
-        self._attr_native_min_value = setting.min_value
-        self._attr_native_max_value = setting.max_value
-        self._attr_native_value: float | None = None
-        self._attr_available = False
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Link this entity to the TV device."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._device_unique_id)},
-            name=self._device_name,
-        )
-
-    @property
-    def available(self) -> bool:
-        """Available only while IP Control is paired, enabled, and reachable."""
-        entry = self.hass.config_entries.async_get_entry(self._entry_id)
-        return bool(entry and _ip_control_active(entry) and self._attr_available)
 
     def _device_title(self) -> str:
-        entry = self.hass.config_entries.async_get_entry(self._entry_id)
-        return entry.title if entry else (self._device_name or "this Samsung TV")
+        entry = self.hass.config_entries.async_get_entry(self._entry.entry_id)
+        return entry.title if entry else (self._host or "this Samsung TV")
 
-    def _get_ip_control(self) -> SamsungIPControl | None:
-        """Return a live IP Control client if paired AND enabled."""
-        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+    def get_ip_control(self) -> SamsungIPControl | None:
+        """Return a live IP Control client if paired AND enabled (shared)."""
+        entry = self.hass.config_entries.async_get_entry(self._entry.entry_id)
         if entry is None or not _ip_control_active(entry):
             self._ip_control = None
             self._ip_control_token = None
@@ -380,6 +385,103 @@ class SamsungTVIPControlPictureNumber(NumberEntity):
             self._ip_control_token = token
         return self._ip_control
 
+    async def _async_update_data(self) -> dict:
+        """Fetch the getVideoStates snapshot over IP Control."""
+        client = self.get_ip_control()
+        if client is None:
+            raise UpdateFailed("IP Control is not paired or is disabled")
+        try:
+            # Skip while the TV is off: the getters return stale values and a
+            # sleeping Frame drops the connection anyway. An off TV is an
+            # expected condition, not an update failure — return an empty
+            # snapshot (sliders go unavailable) and keep last_update_success.
+            if await client.async_get_power_state() == "powerOff":
+                return {}
+            data = await client.async_get_video_states()
+        except SamsungIPControlAuthError as ex:
+            notify_token_problem(
+                self.hass, self._entry.entry_id, METHOD_IP_CONTROL, self._device_title()
+            )
+            raise UpdateFailed(f"IP Control token rejected: {ex}") from ex
+        except SamsungIPControlTransportError:
+            # Indistinguishable from "TV is simply off" on Frames that leave the
+            # network in standby — no ERROR, just no values.
+            return {}
+        except SamsungIPControlError as ex:
+            raise UpdateFailed(f"IP Control video read failed: {ex}") from ex
+
+        # Full read succeeded → the token is good; clear any prior problem.
+        clear_token_problem(self.hass, self._entry.entry_id, METHOD_IP_CONTROL)
+        return data
+
+
+class SamsungTVIPControlPictureNumber(CoordinatorEntity, NumberEntity):
+    """Settable slider for one IP Control expert picture setting.
+
+    Reads its value from the shared getVideoStates coordinator; writes through
+    the per-field ``<field>Control`` setter. A TV that doesn't implement the
+    setter (-32601) surfaces a clear "unsupported" error instead of flapping.
+    """
+
+    _attr_has_entity_name = True
+    _attr_mode = NumberMode.SLIDER
+    _attr_native_step = 1
+
+    def __init__(
+        self,
+        coordinator: IPControlVideoCoordinator,
+        entry: ConfigEntry,
+        host: str,
+        device_name: str,
+        device_unique_id: str,
+        setting: IPControlPictureSetting,
+    ) -> None:
+        """Initialize the expert picture setting number."""
+        super().__init__(coordinator)
+        self._entry_id = entry.entry_id
+        self._host = host
+        self._device_name = device_name
+        self._device_unique_id = device_unique_id
+        self._setting = setting
+        self._write_unsupported = False
+        self._attr_unique_id = f"{device_unique_id}_ip_control_{setting.key}"
+        self._attr_name = setting.name
+        self._attr_icon = setting.icon
+        self._attr_native_min_value = setting.min_value
+        self._attr_native_max_value = setting.max_value
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Link this entity to the TV device."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._device_unique_id)},
+            name=self._device_name,
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        """Return this setting's current value from the shared snapshot."""
+        raw = (self.coordinator.data or {}).get(self._setting.field)
+        try:
+            return None if raw is None else int(raw)
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def available(self) -> bool:
+        """Available while IP Control is active and a live value is present."""
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        return bool(
+            entry
+            and _ip_control_active(entry)
+            and self.coordinator.last_update_success
+            and self.native_value is not None
+        )
+
+    def _device_title(self) -> str:
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        return entry.title if entry else (self._device_name or "this Samsung TV")
+
     async def async_set_native_value(self, value: float) -> None:
         """Set the picture setting through IP Control."""
         setting = self._setting
@@ -389,28 +491,37 @@ class SamsungTVIPControlPictureNumber(NumberEntity):
                 f"{setting.name} must be between "
                 f"{setting.min_value} and {setting.max_value}."
             )
+        if self._write_unsupported:
+            raise HomeAssistantError(
+                f"Setting {setting.name} over IP Control is not supported on "
+                "this TV model."
+            )
 
-        client = self._get_ip_control()
+        client = self.coordinator.get_ip_control()
         if client is None:
             raise HomeAssistantError(
                 "IP Control is not paired or is disabled for this TV."
             )
 
         try:
-            self._attr_native_value = await client.async_set_video_setting(
-                setting.method, setting.field, target
-            )
-            self._attr_available = True
+            await client.async_set_video_setting(setting.method, setting.field, target)
         except SamsungIPControlModeLockedError as ex:
-            # The write is rejected by the current picture mode; keep the slider
-            # where it was and surface a clear, actionable message.
+            # Rejected by the current picture mode; leave the slider where it is
+            # and surface a clear, actionable message.
             raise HomeAssistantError(
                 f"Cannot set {setting.name}: the TV's current picture mode "
                 "blocks it. Switch to Standard, Movie or Filmmaker mode and "
                 "retry."
             ) from ex
+        except SamsungIPControlUnsupportedError as ex:
+            # Permanent capability gap on this model — remember it so we stop
+            # hitting the TV and give the same clear message immediately.
+            self._write_unsupported = True
+            raise HomeAssistantError(
+                f"Setting {setting.name} over IP Control is not supported on "
+                "this TV model."
+            ) from ex
         except SamsungIPControlAuthError as ex:
-            self._mark_unavailable()
             notify_token_problem(
                 self.hass, self._entry_id, METHOD_IP_CONTROL, self._device_title()
             )
@@ -418,54 +529,13 @@ class SamsungTVIPControlPictureNumber(NumberEntity):
                 f"IP Control token rejected while setting {setting.name}: {ex}"
             ) from ex
         except SamsungIPControlError as ex:
-            self._mark_unavailable()
             raise HomeAssistantError(
                 f"Failed to set {setting.name} via IP Control: {ex}"
             ) from ex
 
         clear_token_problem(self.hass, self._entry_id, METHOD_IP_CONTROL)
-        self.async_write_ha_state()
-
-    async def async_update(self) -> None:
-        """Read the current picture setting from IP Control."""
-        setting = self._setting
-        client = self._get_ip_control()
-        if client is None:
-            self._mark_unavailable()
-            return
-
-        try:
-            self._attr_native_value = await client.async_get_video_setting(
-                setting.method, setting.field
-            )
-            self._attr_available = True
-        except SamsungIPControlAuthError as ex:
-            _LOGGER.warning(
-                "IP Control %s read for %s: token rejected (%s) — "
-                "re-pair via the integration options",
-                setting.field,
-                self._host,
-                ex,
-            )
-            self._mark_unavailable()
-            notify_token_problem(
-                self.hass, self._entry_id, METHOD_IP_CONTROL, self._device_title()
-            )
-        except SamsungIPControlError as ex:
-            _LOGGER.debug(
-                "Could not refresh IP Control %s for %s: %s",
-                setting.field,
-                self._host,
-                ex,
-            )
-            self._mark_unavailable()
-        else:
-            clear_token_problem(self.hass, self._entry_id, METHOD_IP_CONTROL)
-
-    def _mark_unavailable(self) -> None:
-        """Expose no slider value until a live IP Control read succeeds."""
-        self._attr_available = False
-        self._attr_native_value = None
+        # Reflect the new value immediately, then refresh from the TV.
+        await self.coordinator.async_request_refresh()
 
 
 # ══════════════════════════════════════════════════════════════════════════

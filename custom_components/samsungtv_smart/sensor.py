@@ -2410,13 +2410,14 @@ class SmartThingsPowerConsumptionSensor(CoordinatorEntity, SensorEntity):
 
 
 class IPControlStateCoordinator(DataUpdateCoordinator):
-    """Polls getTVStates + getVideoStates over IP Control for the state sensors.
+    """Polls getTVStates over IP Control for the read-only state sensors.
 
-    A single coordinator feeds all 12 read-only sensors, so each cycle issues
-    only two JSON-RPC calls (plus a cheap power-state check) regardless of how
-    many sensors are enabled. The TV is skipped while it is powered off, both
-    to avoid pointless traffic and because the picture-state getters return
-    stale values in standby.
+    A single coordinator feeds all the getTVStates sensors, so each cycle issues
+    one JSON-RPC call (plus a cheap power-state check) regardless of how many
+    sensors are enabled. The TV is skipped while it is powered off, both to
+    avoid pointless traffic and because the state getters return stale values in
+    standby. (The getVideoStates picture fields moved to settable number
+    sliders with their own coordinator — see number.py.)
     """
 
     def __init__(
