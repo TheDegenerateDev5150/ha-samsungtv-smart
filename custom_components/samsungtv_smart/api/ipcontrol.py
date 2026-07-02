@@ -298,6 +298,39 @@ class SamsungIPControl:
             raise SamsungIPControlError(f"unexpected colorTone response: {result!r}")
         return response_value
 
+    async def async_get_video_setting(self, method: str, field: str) -> int:
+        """Return one expert picture setting via its ``<field>Control`` getter.
+
+        Called with no params, ``contrastControl`` / ``brightnessControl`` /
+        ``sharpnessControl`` / ``colorControl`` / ``tintControl`` echo the
+        current integer value (e.g. ``{"contrast": 50}``). Verified on
+        Frame 2024/2025; the read works regardless of picture mode.
+        """
+        result = await self._async_request(method)
+        value = result.get(field)
+        try:
+            return int(value)
+        except (TypeError, ValueError) as ex:
+            raise SamsungIPControlError(
+                f"no {field} in {method} response: {result!r}"
+            ) from ex
+
+    async def async_set_video_setting(self, method: str, field: str, value: int) -> int:
+        """Set one expert picture setting and return the echoed value.
+
+        The write is picture-mode-gated: Standard/Movie/Filmmaker accept it,
+        Dynamic/HDR-dynamic reject it with ``-32002`` (raised as
+        :class:`SamsungIPControlModeLockedError` by the transport).
+        """
+        result = await self._async_request(method, {field: int(value)})
+        response_value = result.get(field, value)
+        try:
+            return int(response_value)
+        except (TypeError, ValueError) as ex:
+            raise SamsungIPControlError(
+                f"invalid {field} response from {method}: {result!r}"
+            ) from ex
+
     async def async_get_mute(self) -> bool:
         """Return whether the TV is currently muted."""
         result = await self._async_request("muteControl")
@@ -365,9 +398,10 @@ class SamsungIPControl:
         """Return the TV's picture-level snapshot (read-only).
 
         ``getVideoStates`` reports ``contrast, sharpness, brightness, color,
-        tint`` on a Frame 2024/2025. As with :meth:`async_get_tv_states`, these
-        are read-only over IP Control on consumer Frames; only ``backlight`` is
-        settable (see :meth:`async_set_backlight`).
+        tint`` on a Frame 2024/2025. These ARE writable via their dedicated
+        ``<field>Control`` methods (see :meth:`async_set_video_setting`) when
+        the picture mode allows it — Dynamic/HDR-dynamic reject the write with
+        ``-32002``. This bulk getter stays available for diagnostics.
         """
         return await self._async_request("getVideoStates")
 

@@ -11,6 +11,7 @@ Art Mode numbers wrap the existing art_api methods and only appear on Frame TVs.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import logging
 
 from homeassistant.components.number import NumberEntity, NumberMode, RestoreNumber
@@ -28,6 +29,7 @@ from .api.ipcontrol import (
     SamsungIPControl,
     SamsungIPControlAuthError,
     SamsungIPControlError,
+    SamsungIPControlModeLockedError,
 )
 from .const import (
     CONF_ENABLE_IP_CONTROL,
@@ -67,15 +69,24 @@ async def async_setup_entry(
     device_name = config.get(CONF_NAME) or entry.title or host
 
     if _ip_control_active(entry):
-        async_add_entities(
-            [
-                SamsungTVIPControlBacklightNumber(
-                    hass, entry, host, device_name, device_unique_id
-                )
-            ],
-            True,
+        ip_control_numbers: list[NumberEntity] = [
+            SamsungTVIPControlBacklightNumber(
+                hass, entry, host, device_name, device_unique_id
+            )
+        ]
+        ip_control_numbers.extend(
+            SamsungTVIPControlPictureNumber(
+                hass, entry, host, device_name, device_unique_id, setting
+            )
+            for setting in IP_CONTROL_PICTURE_SETTINGS
         )
-        _LOGGER.debug("IP Control backlight number entity created for %s", device_name)
+        async_add_entities(ip_control_numbers, True)
+        _LOGGER.debug(
+            "IP Control number entities created for %s (backlight + %d picture "
+            "settings)",
+            device_name,
+            len(IP_CONTROL_PICTURE_SETTINGS),
+        )
 
     session = async_get_clientsession(hass)
 
@@ -247,6 +258,205 @@ class SamsungTVIPControlBacklightNumber(NumberEntity):
         except SamsungIPControlError as ex:
             _LOGGER.debug(
                 "Could not refresh IP Control backlight for %s: %s", self._host, ex
+            )
+            self._mark_unavailable()
+        else:
+            clear_token_problem(self.hass, self._entry_id, METHOD_IP_CONTROL)
+
+    def _mark_unavailable(self) -> None:
+        """Expose no slider value until a live IP Control read succeeds."""
+        self._attr_available = False
+        self._attr_native_value = None
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# IP Control expert picture settings (contrast / brightness / sharpness /
+# color / tint) — writable via their <field>Control methods. Ranges verified
+# empirically on Frame 2024 (QE55LS03D) / 2025 (GQ50LS03F); see
+# notes/QN55LS03FAFXZA/IPCONTROL_DECOMPILED.md. The write is picture-mode
+# gated (Dynamic/HDR-dynamic reject it with -32002 → clear HA error).
+# ══════════════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class IPControlPictureSetting:
+    """Describes one <field>Control expert picture setting."""
+
+    key: str
+    field: str
+    method: str
+    name: str
+    icon: str
+    min_value: int
+    max_value: int
+
+
+IP_CONTROL_PICTURE_SETTINGS: tuple[IPControlPictureSetting, ...] = (
+    IPControlPictureSetting(
+        "contrast", "contrast", "contrastControl", "Contrast", "mdi:contrast-box", 0, 50
+    ),
+    IPControlPictureSetting(
+        "brightness",
+        "brightness",
+        "brightnessControl",
+        "Brightness",
+        "mdi:brightness-6",
+        -5,
+        5,
+    ),
+    IPControlPictureSetting(
+        "sharpness", "sharpness", "sharpnessControl", "Sharpness", "mdi:blur", 0, 20
+    ),
+    IPControlPictureSetting(
+        "color", "color", "colorControl", "Color", "mdi:palette", 0, 50
+    ),
+    IPControlPictureSetting(
+        "tint", "tint", "tintControl", "Tint", "mdi:invert-colors", -15, 15
+    ),
+)
+
+
+class SamsungTVIPControlPictureNumber(NumberEntity):
+    """Settable slider for one IP Control expert picture setting."""
+
+    _attr_has_entity_name = True
+    _attr_mode = NumberMode.SLIDER
+    _attr_native_step = 1
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        host: str,
+        device_name: str,
+        device_unique_id: str,
+        setting: IPControlPictureSetting,
+    ) -> None:
+        """Initialize the expert picture setting number."""
+        self.hass = hass
+        self._entry_id = entry.entry_id
+        self._host = host
+        self._device_name = device_name
+        self._device_unique_id = device_unique_id
+        self._setting = setting
+        self._ip_control: SamsungIPControl | None = None
+        self._ip_control_token: str | None = None
+        self._attr_unique_id = f"{device_unique_id}_ip_control_{setting.key}"
+        self._attr_name = setting.name
+        self._attr_icon = setting.icon
+        self._attr_native_min_value = setting.min_value
+        self._attr_native_max_value = setting.max_value
+        self._attr_native_value: float | None = None
+        self._attr_available = False
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Link this entity to the TV device."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._device_unique_id)},
+            name=self._device_name,
+        )
+
+    @property
+    def available(self) -> bool:
+        """Available only while IP Control is paired, enabled, and reachable."""
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        return bool(entry and _ip_control_active(entry) and self._attr_available)
+
+    def _device_title(self) -> str:
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        return entry.title if entry else (self._device_name or "this Samsung TV")
+
+    def _get_ip_control(self) -> SamsungIPControl | None:
+        """Return a live IP Control client if paired AND enabled."""
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None or not _ip_control_active(entry):
+            self._ip_control = None
+            self._ip_control_token = None
+            return None
+        token = entry.data.get(CONF_IP_CONTROL_TOKEN)
+        if self._ip_control is None or self._ip_control_token != token:
+            self._ip_control = SamsungIPControl(self.hass, self._host, token=token)
+            self._ip_control_token = token
+        return self._ip_control
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Set the picture setting through IP Control."""
+        setting = self._setting
+        target = int(value)
+        if target < setting.min_value or target > setting.max_value:
+            raise HomeAssistantError(
+                f"{setting.name} must be between "
+                f"{setting.min_value} and {setting.max_value}."
+            )
+
+        client = self._get_ip_control()
+        if client is None:
+            raise HomeAssistantError(
+                "IP Control is not paired or is disabled for this TV."
+            )
+
+        try:
+            self._attr_native_value = await client.async_set_video_setting(
+                setting.method, setting.field, target
+            )
+            self._attr_available = True
+        except SamsungIPControlModeLockedError as ex:
+            # The write is rejected by the current picture mode; keep the slider
+            # where it was and surface a clear, actionable message.
+            raise HomeAssistantError(
+                f"Cannot set {setting.name}: the TV's current picture mode "
+                "blocks it. Switch to Standard, Movie or Filmmaker mode and "
+                "retry."
+            ) from ex
+        except SamsungIPControlAuthError as ex:
+            self._mark_unavailable()
+            notify_token_problem(
+                self.hass, self._entry_id, METHOD_IP_CONTROL, self._device_title()
+            )
+            raise HomeAssistantError(
+                f"IP Control token rejected while setting {setting.name}: {ex}"
+            ) from ex
+        except SamsungIPControlError as ex:
+            self._mark_unavailable()
+            raise HomeAssistantError(
+                f"Failed to set {setting.name} via IP Control: {ex}"
+            ) from ex
+
+        clear_token_problem(self.hass, self._entry_id, METHOD_IP_CONTROL)
+        self.async_write_ha_state()
+
+    async def async_update(self) -> None:
+        """Read the current picture setting from IP Control."""
+        setting = self._setting
+        client = self._get_ip_control()
+        if client is None:
+            self._mark_unavailable()
+            return
+
+        try:
+            self._attr_native_value = await client.async_get_video_setting(
+                setting.method, setting.field
+            )
+            self._attr_available = True
+        except SamsungIPControlAuthError as ex:
+            _LOGGER.warning(
+                "IP Control %s read for %s: token rejected (%s) — "
+                "re-pair via the integration options",
+                setting.field,
+                self._host,
+                ex,
+            )
+            self._mark_unavailable()
+            notify_token_problem(
+                self.hass, self._entry_id, METHOD_IP_CONTROL, self._device_title()
+            )
+        except SamsungIPControlError as ex:
+            _LOGGER.debug(
+                "Could not refresh IP Control %s for %s: %s",
+                setting.field,
+                self._host,
+                ex,
             )
             self._mark_unavailable()
         else:
