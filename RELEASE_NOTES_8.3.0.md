@@ -2,6 +2,17 @@
 
 > **Status: pre-release (beta).** 8.3.0 builds on 8.2.0.
 
+## Frame Art — `current.jpg` uses the already-downloaded thumbnail first (8.3.0b5)
+
+- **When the artwork changes, `current.jpg` is now taken from the local copy we
+  already downloaded (personal/store/other) *first*, and the TV is only queried
+  if we don't have it.** Previously the card did the flaky live TV fetch first
+  (which returns `SYSTEM_FAIL` on some Frame models), retried three times over
+  ~8 s, and only *then* fell back to the cached copy — so `current.jpg` could
+  lag ~30–45 s even for artworks whose thumbnail was already on disk. Downloaded
+  thumbnails don't change, so the local copy is both instant and more reliable.
+  Genuinely new artwork (no local copy yet) still falls back to a live fetch.
+
 ## Frame Art — current artwork updates much faster (8.3.0b4)
 
 - **A manual / gallery art change now shows up in the Frame Art sensor and

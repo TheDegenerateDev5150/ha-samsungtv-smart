@@ -1281,6 +1281,14 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         """
         import os
 
+        # Fast path: if this artwork's thumbnail was already downloaded in a
+        # previous cycle (personal/store/other), promote that local copy to
+        # current.jpg straight away and skip the live TV fetch. Downloaded
+        # thumbnails don't change, and the live fetch is flaky (SYSTEM_FAIL on
+        # some Frame models), so the local copy is both faster and more reliable.
+        if await self._restore_current_from_cache(content_id):
+            return
+
         self._log.info("Frame Art: Starting thumbnail fetch for %s", content_id)
 
         # Art Store (SAM-S*) thumbnails only exist once the TV has materialized
@@ -1403,7 +1411,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         # valid — so an earlier copy is a much better fallback than a generic
         # "image unavailable" placeholder.
         # (Fallback approach contributed by @PrestonMcAfee.)
-        if await self._restore_current_from_cache(content_id):
+        if await self._restore_current_from_cache(content_id, after_failure=True):
             return
 
         # Art Store content the TV hasn't materialized yet: the failure is
@@ -1464,12 +1472,16 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             return "store"
         return "other"
 
-    async def _restore_current_from_cache(self, content_id: str) -> bool:
+    async def _restore_current_from_cache(
+        self, content_id: str, after_failure: bool = False
+    ) -> bool:
         """Reuse a previously-downloaded thumbnail as current.jpg.
 
-        When the live thumbnail fetch fails (a transient TV/WebSocket issue),
-        fall back to the copy saved under personal/store/other during an
-        earlier successful download, instead of showing an error placeholder.
+        Used both as the fast path (before any live fetch — a downloaded copy is
+        authoritative and doesn't change) and as the fallback when a live
+        thumbnail fetch fails, instead of showing an error placeholder. The
+        copy lives under personal/store/other from an earlier successful
+        download. ``after_failure`` only tunes the log wording.
 
         Returns True if a cached copy was found and promoted to current.jpg.
         """
@@ -1508,12 +1520,20 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             return False
 
         if promoted:
-            self._log.info(
-                "Frame Art: live thumbnail fetch failed for %s; reused cached "
-                "copy from %s/ as current.jpg",
-                content_id,
-                subdir,
-            )
+            if after_failure:
+                self._log.info(
+                    "Frame Art: live thumbnail fetch failed for %s; reused cached "
+                    "copy from %s/ as current.jpg",
+                    content_id,
+                    subdir,
+                )
+            else:
+                self._log.debug(
+                    "Frame Art: used already-downloaded copy of %s from %s/ as "
+                    "current.jpg (skipped live fetch)",
+                    content_id,
+                    subdir,
+                )
             self._thumbnail_failures = 0
             self._current_thumbnail_content_id = content_id
             self._clear_store_retry(content_id)
