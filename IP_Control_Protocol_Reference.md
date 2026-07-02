@@ -114,7 +114,7 @@ when calling each method with only the `AccessToken` (no extra params):
 | `pictureSizeControl` | ❌ | `pictureSize` | — | Read-only via `getTVStates.pictureSize`. |
 | `soundModeControl` | ❌ | `soundMode` | — | Read-only via `getTVStates.soundMode`. |
 | `speakerSelectControl` | ❌ | `speakerSelect` | — | Read-only via `getTVStates.speakerSelect`. |
-| `contrastControl` / `brightnessControl` / `sharpnessControl` / `colorControl` / `tintControl` | ❌ | numeric value | — | Read-only via `getVideoStates`. |
+| `contrastControl` / `brightnessControl` / `sharpnessControl` / `colorControl` / `tintControl` | ✅ | `<field>`: int | `<field>` | **Writable** (earlier "read-only" was wrong). Get with no params; set with `{"<field>": n}`. Ranges (Frame 2024/2025): contrast 0–50, color 0–50, sharpness 0–20, brightness −5…5, tint −15…15. Write is picture-mode gated → `-32002` in Dynamic/HDR-dynamic; Standard/Movie/Filmmaker accept it. |
 | `directChannelControl` | ❌ | `atvDtv` + `airCable` + `channelNum` | — | Not implemented on Frame 2024 (Frames have no tuner anyway). |
 | `USBSourceControl` / `RVUSourceControl` / `externalSpeakerControl` / `ambientModeControl` | ❌ | — | — | Not implemented on Frame 2024. May exist on other models. |
 

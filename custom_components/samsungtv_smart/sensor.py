@@ -180,9 +180,12 @@ class SamsungIPControlSensorDescription(SensorEntityDescription):
     source: str = "tv"
 
 
-# getTVStates / getVideoStates are READ-ONLY on consumer Frame TVs (the matching
-# setters return -32601 "Method not found"), so these are diagnostic sensors
-# only — setting these values must go through SmartThings / the WebSocket.
+# getTVStates fields exposed as diagnostic sensors. These particular fields
+# (inputSource, pictureMode, soundMode, pictureSize, speakerSelect, mute,
+# volume) mirror media_player / select state and are read-only over IP Control.
+# The getVideoStates fields (contrast/brightness/sharpness/color/tint) are NOT
+# here — they are settable `number` sliders (see number.py), written via their
+# <field>Control methods when the picture mode allows it.
 IP_CONTROL_STATE_SENSORS: tuple[SamsungIPControlSensorDescription, ...] = (
     # getTVStates
     SamsungIPControlSensorDescription(
@@ -235,47 +238,10 @@ IP_CONTROL_STATE_SENSORS: tuple[SamsungIPControlSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
-    # getVideoStates
-    SamsungIPControlSensorDescription(
-        key="contrast",
-        source="video",
-        name="Contrast",
-        icon="mdi:contrast-box",
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    SamsungIPControlSensorDescription(
-        key="brightness",
-        source="video",
-        name="Brightness",
-        icon="mdi:brightness-6",
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    SamsungIPControlSensorDescription(
-        key="sharpness",
-        source="video",
-        name="Sharpness",
-        icon="mdi:blur",
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    SamsungIPControlSensorDescription(
-        key="color",
-        source="video",
-        name="Color",
-        icon="mdi:palette",
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    SamsungIPControlSensorDescription(
-        key="tint",
-        source="video",
-        name="Tint",
-        icon="mdi:invert-colors",
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
+    # NOTE: the getVideoStates fields (contrast, brightness, sharpness, color,
+    # tint) are NOT exposed here as read-only sensors — they are settable
+    # `number` sliders in number.py (SamsungTVIPControlPictureNumber), written
+    # via their <field>Control methods when the picture mode allows it.
 )
 
 # Default scan interval for the plain SmartThings child sensors
@@ -2490,7 +2456,7 @@ class IPControlStateCoordinator(DataUpdateCoordinator):
         return self._ip_control
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Fetch the TV and video state snapshots over IP Control."""
+        """Fetch the getTVStates snapshot over IP Control."""
         client = self._get_ip_control()
         if client is None:
             raise UpdateFailed("IP Control is not paired or is disabled")
@@ -2508,10 +2474,12 @@ class IPControlStateCoordinator(DataUpdateCoordinator):
                 self._log.debug(
                     "IP Control state: TV is powered off, skipping state poll"
                 )
-                return {"tv": {}, "video": {}, "powered_off": True}
+                return {"tv": {}, "powered_off": True}
 
+            # Only getTVStates is consumed now (the getVideoStates fields moved
+            # to settable `number` sliders that read/write directly), so this
+            # coordinator issues a single JSON-RPC call per cycle.
             tv_states = await client.async_get_tv_states()
-            video_states = await client.async_get_video_states()
         except SamsungIPControlAuthError as ex:
             notify_token_problem(
                 self.hass,
@@ -2533,12 +2501,12 @@ class IPControlStateCoordinator(DataUpdateCoordinator):
             self._log.debug(
                 "IP Control state: transport failure (TV likely off): %s", ex
             )
-            return {"tv": {}, "video": {}, "powered_off": True}
+            return {"tv": {}, "powered_off": True}
         except SamsungIPControlError as ex:
             raise UpdateFailed(f"IP Control state read failed: {ex}") from ex
 
         clear_token_problem(self.hass, self._entry.entry_id, METHOD_IP_CONTROL)
-        return {"tv": tv_states, "video": video_states, "powered_off": False}
+        return {"tv": tv_states, "powered_off": False}
 
 
 class IPControlStateSensor(CoordinatorEntity, SensorEntity):
