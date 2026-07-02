@@ -14,7 +14,7 @@ If this project is useful to you, you can support its development:
 > the new `frame_tv_entity` key so the fullscreen-preview buttons work — see the
 > *lightbox buttons* note below.
 
-## Picture calibration — stop the sliders flapping available/unavailable (8.3.0b9)
+## Picture calibration — stop the sliders flapping available/unavailable (8.3.0b10)
 
 - **Fix: the new Contrast/Brightness/Sharpness/Color/Tint sliders kept dropping
   to *unavailable* then back, without any mode change.** Two causes, both fixed:

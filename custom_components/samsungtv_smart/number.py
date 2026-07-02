@@ -524,7 +524,8 @@ class SamsungTVIPControlPictureNumber(CoordinatorEntity, NumberEntity):
             )
         # Guardrail: the picture methods only work in normal viewing. Don't even
         # hit the TV while it is off or in Art Mode — give a clear message.
-        if not _tv_normal_viewing(self.hass, self._entry):
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None or not _tv_normal_viewing(self.hass, entry):
             raise HomeAssistantError(
                 f"Cannot set {setting.name}: the TV must be on and out of Art "
                 "Mode. Picture settings apply to normal viewing only."
