@@ -14,6 +14,18 @@ If this project is useful to you, you can support its development:
 > the new `frame_tv_entity` key so the fullscreen-preview buttons work — see the
 > *lightbox buttons* note below.
 
+## Entities — read-only IP Control diagnostic sensors are now disabled by default (8.3.0b8)
+
+- **The twelve read-only IP Control state sensors** (`Input Source`, `Picture
+  Mode`, `Sound Mode`, `Picture Size`, `Speaker Select`, `Mute`, `Volume`,
+  `Contrast`, `Brightness`, `Sharpness`, `Color`, `Tint`) **no longer appear by
+  default.** They come from `getTVStates`/`getVideoStates` (their setters return
+  `-32601` on consumer Frames, so they're diagnostic-only) and mostly duplicate
+  the `media_player` attributes / the controllable `select`s, cluttering the
+  device page. They're now `entity_registry_enabled_default=False` — still there
+  for debugging, just enable the ones you want under the device's *+N entities
+  not shown*. Existing installs keep whatever is already enabled.
+
 ## SmartThings polling — power sensor uses a fixed 30 s cadence in Art Mode (8.3.0b7)
 
 - **The shared power/energy coordinator no longer follows the (possibly fast)
