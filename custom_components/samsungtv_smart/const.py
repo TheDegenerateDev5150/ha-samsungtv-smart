@@ -53,6 +53,22 @@ CONF_CONTENT_LIST_INTERVAL = "content_list_interval"
 DEFAULT_CONTENT_LIST_INTERVAL = 300
 MIN_CONTENT_LIST_INTERVAL = 30
 MAX_CONTENT_LIST_INTERVAL = 3600
+
+# SmartThings cloud poll cadence (seconds), while the TV is ON. The local
+# WebSocket / UPnP / IP Control are the primary state source (power, app,
+# volume, mute) and keep polling every SCAN_INTERVAL; SmartThings is only
+# hit for cloud-only data (channel name, picture mode, sound mode, power
+# metering) at this slower cadence to cut cloud API usage. While the TV is
+# OFF, SmartThings is throttled to ST_POLL_OFF_INTERVAL regardless.
+CONF_ST_POLL_ON_INTERVAL = "st_poll_on_interval"
+DEFAULT_ST_POLL_ON_INTERVAL = 30
+MIN_ST_POLL_ON_INTERVAL = 5
+MAX_ST_POLL_ON_INTERVAL = 600
+# Fixed SmartThings poll cadence (seconds) while the TV is OFF. A short
+# keepalive so a power-on is still picked up from the cloud as a backup to
+# the local WebSocket, without hammering the API during standby.
+ST_POLL_OFF_INTERVAL = 30
+
 CONF_SLIDESHOW_API = "slideshow_api"  # Persisted: "slideshow" or "auto_rotation"
 LOCAL_LOGO_PATH = "local_logo_path"
 WS_PREFIX = "[Home Assistant]"

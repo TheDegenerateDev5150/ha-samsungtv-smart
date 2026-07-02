@@ -1111,6 +1111,25 @@ class SamsungTVPictureModeSelect(SelectEntity):
                 return entity.entity_id
         return None
 
+    def _tv_powered_off(self) -> bool:
+        """True when the linked TV is off (and not showing Art) — skip ST poll.
+
+        The picture mode cannot change while the TV is off, so there's nothing
+        to fetch from the SmartThings cloud; polling anyway just burns API
+        calls. Read the media_player's already-published HA state instead of
+        issuing our own request (mirrors the art selects / sensors).
+        """
+        mp_id = self._get_media_player_entity_id()
+        if not mp_id:
+            return False  # unknown → don't suppress
+        state = self.hass.states.get(mp_id)
+        if state is None:
+            return False
+        if state.state not in (STATE_OFF, "unavailable"):
+            return False  # TV is on
+        # A Frame showing Art also reports "off" — keep polling in that case.
+        return state.attributes.get("art_mode_status") != "on"
+
     async def async_update(self) -> None:
         """Poll current picture mode from SmartThings."""
         if not self._capability:
@@ -1118,6 +1137,10 @@ class SamsungTVPictureModeSelect(SelectEntity):
 
         # Skip polling briefly after a mode change to let the TV apply it
         if time.time() < self._skip_poll_until:
+            return
+
+        # Local WS is primary: don't hit the ST cloud while the TV is off.
+        if self._tv_powered_off():
             return
 
         data = await self._rest_get_capability_status(self._capability)

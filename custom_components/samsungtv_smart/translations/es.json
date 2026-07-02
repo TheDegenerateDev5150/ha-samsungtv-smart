@@ -150,7 +150,8 @@
           "ext_power_entity": "Entidad de alimentación externa",
           "use_mute_check": "Usar estado de silencio para detectar encendido",
           "dump_apps": "Depuración: exportar lista de aplicaciones",
-          "toggle_art_mode": "Botón de encendido alterna el modo Arte"
+          "toggle_art_mode": "Botón de encendido alterna el modo Arte",
+          "st_poll_on_interval": "Intervalo de sondeo de SmartThings con la TV encendida (segundos)"
         }
       },
       "save_exit": {

@@ -150,7 +150,8 @@
           "ext_power_entity": "Bemeneti érzékelő a bekapcsolási állapot felismeréséhez",
           "use_mute_check": "Hangerőnémítás állapotának használata hamis bekapcsolás észleléséhez",
           "dump_apps": "Az alkalmazások listájának naplófájlba való kiírása induláskor (amennyiben lehetséges)",
-          "toggle_art_mode": "Art módra váltó bekapcsológomb (kizárólag Frame TV esetén)"
+          "toggle_art_mode": "Art módra váltó bekapcsológomb (kizárólag Frame TV esetén)",
+          "st_poll_on_interval": "SmartThings lekérdezési időköz bekapcsolt TV-nél (másodperc)"
         }
       },
       "save_exit": {

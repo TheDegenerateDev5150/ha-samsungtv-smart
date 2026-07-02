@@ -150,7 +150,8 @@
           "ext_power_entity": "Binary sensor usato per aiutare a identificare lo stato",
           "use_mute_check": "Utilizza lo stato di volume muto per identificare false accensioni",
           "dump_apps": "Mostra lista apps nel file di log all'avvio (se possibile)",
-          "toggle_art_mode": "Pulsante di accensione passa a art mode (solo per Frame TV)"
+          "toggle_art_mode": "Pulsante di accensione passa a art mode (solo per Frame TV)",
+          "st_poll_on_interval": "Intervallo di polling SmartThings a TV accesa (secondi)"
         }
       },
       "save_exit": {
