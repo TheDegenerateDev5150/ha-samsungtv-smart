@@ -4,8 +4,11 @@
 [![Version](https://img.shields.io/github/v/release/TheFab21/ha-samsungtv-smart?style=flat&color=blue)](https://github.com/TheFab21/ha-samsungtv-smart/releases/latest)
 [![HA Version](https://img.shields.io/badge/Home%20Assistant-%3E%3D2025.6.0-green.svg)](https://www.home-assistant.io)
 [![License: LGPL v2.1](https://img.shields.io/badge/License-LGPL%20v2.1-yellow.svg)](https://www.gnu.org/licenses/lgpl-2.1)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-support-ffdd00.svg?logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/thefab21)
 
 A custom integration for Home Assistant to control Samsung Smart TVs (Tizen OS), based on the excellent work of [ollo69/ha-samsungtv-smart](https://github.com/ollo69/ha-samsungtv-smart).
+
+If this project is useful to you, you can support its development: [buymeacoffee.com/thefab21](https://buymeacoffee.com/thefab21) ☕
 
 This fork brings improved WebSocket stability, full Samsung Frame TV Art Mode support, picture mode and source selection fixes for 2024 Frame TVs, and OAuth2 authentication for SmartThings.
 
