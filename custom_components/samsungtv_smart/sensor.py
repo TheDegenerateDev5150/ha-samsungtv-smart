@@ -251,8 +251,15 @@ IP_CONTROL_STATE_SENSORS: tuple[SamsungIPControlSensorDescription, ...] = (
     ),
 )
 
-# Update interval for the Frame Art sensor (reduced for faster manual updates)
+# Default scan interval for the plain SmartThings child sensors
+# (illuminance / brightness — they self-throttle to the ST cadence anyway).
 SCAN_INTERVAL = timedelta(seconds=15)
+
+# The Frame Art coordinator polls the (cheap, local) art WebSocket for the
+# current artwork; keep it snappy so a manual/gallery art change shows up fast.
+# The heavier get_content_list call is throttled separately
+# (CONF_CONTENT_LIST_INTERVAL), so this short cadence stays cheap.
+FRAME_ART_SCAN_INTERVAL = timedelta(seconds=5)
 
 
 async def async_setup_entry(
@@ -339,12 +346,17 @@ async def async_setup_entry(
 
         # Create the coordinator
         coordinator = FrameArtCoordinator(hass, art_api, entry)
+
         # Refresh immediately on artwork/matte/slideshow/favorite/rotation
-        # broadcasts instead of waiting up to SCAN_INTERVAL for the change
-        # to be picked up by the next poll.
-        art_api.register_art_content_callback(
-            lambda: hass.async_create_task(coordinator.async_request_refresh())
-        )
+        # broadcasts instead of waiting up to the scan interval for the change
+        # to be picked up by the next poll. The broadcast is a definitive change,
+        # so let that refresh trust a new content_id right away (skip the
+        # two-poll confirmation that only exists to filter spurious glitches).
+        def _on_art_content() -> None:
+            coordinator._trust_next_content_id = True
+            hass.async_create_task(coordinator.async_request_refresh())
+
+        art_api.register_art_content_callback(_on_art_content)
 
         # Add Frame Art sensor
         entities.append(
@@ -585,12 +597,17 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             hass,
             self._log,
             name=f"Frame Art {entry.title}",
-            update_interval=SCAN_INTERVAL,
+            update_interval=FRAME_ART_SCAN_INTERVAL,
         )
         self._art_api = art_api
         self._entry = entry
         self._hass = hass
         self._last_content_id: str | None = None
+        # Set by the art content-event callback (image_selected / matte / etc.):
+        # a WS broadcast is a definitive change, so the next poll may trust a new
+        # content_id immediately instead of waiting for the two-poll confirmation
+        # that guards against spurious get_current_artwork glitches.
+        self._trust_next_content_id = False
         # content_id that the saved current.jpg actually represents. Tracked
         # separately from "does current.jpg exist on disk" so a stale file from
         # a previous artwork cannot masquerade as the current content's
@@ -1047,6 +1064,13 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         if raw_content_id is None:
             # Failed/empty poll: don't disturb the trusted value or pending state.
             return None
+        if self._trust_next_content_id:
+            # This poll was triggered by a definitive WS art broadcast — trust
+            # the reported id immediately, no two-poll confirmation needed.
+            self._trust_next_content_id = False
+            self._confirmed_content_id = raw_content_id
+            self._pending_content_id = None
+            return raw_content_id
         if raw_content_id == self._confirmed_content_id:
             # Steady state: clear any half-seen pending change.
             self._pending_content_id = None

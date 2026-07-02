@@ -2,6 +2,24 @@
 
 > **Status: pre-release (beta).** 8.3.0 builds on 8.2.0.
 
+## Frame Art — current artwork updates much faster (8.3.0b4)
+
+- **A manual / gallery art change now shows up in the Frame Art sensor and
+  `current.jpg` in ~1–2 s instead of up to ~30 s.** Two things caused the lag:
+  the art coordinator polled every 15 s, and a *changed* `content_id` had to be
+  seen on **two consecutive polls** before being trusted (a guard against
+  spurious one-off readings from the TV) — so a change took up to two full
+  intervals to surface.
+  - The art coordinator now polls every **5 s** (the cheap `get_current_artwork`
+    read; the heavier content-list fetch stays throttled separately).
+  - When the change arrives as a **WebSocket art broadcast** (`image_selected`,
+    matte/slideshow/favorite/rotation) — which is definitive, not a glitch — the
+    new `content_id` is **trusted immediately**, skipping the two-poll
+    confirmation. The glitch guard still applies to unsolicited TV-side reads.
+  - Note: a slow `current.jpg` can still occur if the TV itself returns
+    `SYSTEM_FAIL` on the thumbnail request (a firmware issue); the integration
+    retries and falls back to a cached copy.
+
 ## Folder Gallery card — fullscreen-preview buttons work again in lightbox mode (8.3.0b3)
 
 - **Fix: the lightbox buttons (Display on TV / Unfavourite / Delete / Upload)
