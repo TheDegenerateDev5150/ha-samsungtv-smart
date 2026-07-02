@@ -144,6 +144,20 @@ Or manually add the custom repository in HACS:
 
 ### SmartThings Authentication
 
+> ⚠️ **Upcoming SmartThings API pricing change.** Samsung has announced that the
+> SmartThings API will move to paid tiers, with free access phasing out around
+> **October 2026** (a **$4.99/month "Personal" plan** with a monthly call quota
+> for individual/non-commercial developers, plus separate commercial tiers —
+> exact quotas not yet published). All SmartThings features of this integration
+> (picture mode, channel/app info, sound mode, etc.) call the SmartThings API
+> **under your own Samsung account**, so this may eventually apply to you, not
+> just to the project itself. Nothing changes today and no code changes are
+> required yet — this integration still works exactly as before. We're tracking
+> the published quotas and will document any impact (e.g. reducing polling
+> frequency) once Samsung releases the details. See the
+> [SmartThings blog post](https://blog.smartthings.com/smartthings-updates/a-new-enhanced-smartthings-api-experience/)
+> for the announcement.
+
 Three methods are available. Choose **one**.
 
 ---
