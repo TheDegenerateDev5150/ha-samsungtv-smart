@@ -2,6 +2,13 @@
 
 > **Status: pre-release (beta).** 8.2.0 builds on 8.1.0.
 
+## Credits — channel logos source attribution
+
+- The README now credits [jaruba/channel-logos](https://github.com/jaruba/channel-logos)
+  explicitly as the source of the channel logos used by the media-player logo
+  feature (`logo.py` fetches them from `jaruba.github.io/channel-logos`). It was
+  previously only mentioned indirectly as part of the fork lineage.
+
 ## Picture mode select — no longer reverts to the old mode after a change
 
 - **Setting the picture mode (e.g. via `select.select_option` or the Picture

@@ -705,6 +705,8 @@ Once a firmware update reports `artModeControl` correctly again, you can re-enab
 
 This project was a fork of [ollo69/ha-samsungtv-smart](https://github.com/ollo69/ha-samsungtv-smart), itself based on work by [@jaruba](https://github.com/jaruba) and [@screwdgeh](https://github.com/screwdgeh).
 
+Channel logos provided by [jaruba/channel-logos](https://github.com/jaruba/channel-logos) by [@jaruba](https://github.com/jaruba) — used by the media-player logo feature.
+
 Frame Art API based on [xchwarze/samsung-tv-ws-api](https://github.com/xchwarze/samsung-tv-ws-api) (art-updates branch), with contributions from Matthew Garrett and Nick Waterton.
 
 WebSocket library: [websocket-client](https://github.com/websocket-client/websocket-client) / [Xchwarze](https://github.com/Xchwarze).
