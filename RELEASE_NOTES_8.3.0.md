@@ -14,6 +14,22 @@ If this project is useful to you, you can support its development:
 > the new `frame_tv_entity` key so the fullscreen-preview buttons work — see the
 > *lightbox buttons* note below.
 
+## Picture mode — verify the TV applied it, retry via the other capability (8.3.0b11)
+
+- **Fix for picture-mode changes that SmartThings accepts but the TV silently
+  ignores** (issue #116, seen on an S90C and a Frame 2020 under self-published
+  OAuth app clients: `setPictureMode` returns `200 COMPLETED`, the official app
+  and a PAT actuate the panel fine, yet the command from the OAuth client does
+  nothing). Previously the integration fell back from `custom.picturemode` to
+  `samsungvd.pictureMode` only when the HTTP call *errored* — a lying
+  `COMPLETED` meant the fallback never fired. Now, after every accepted send,
+  the integration **reads the mode back (~5 s later) and, if the TV still
+  reports the old mode, re-sends through the other capability**. If neither
+  can be confirmed, a clear warning points at the cloud command channel
+  (a duplicate send of the same mode is harmless on TVs where the first one
+  worked). Verification is skipped rather than retried when the read-back
+  itself fails, so flaky cloud reads can't cause spurious double-sends.
+
 ## Picture calibration — stop the sliders flapping available/unavailable (8.3.0b10)
 
 - **Fix: the new Contrast/Brightness/Sharpness/Color/Tint sliders kept dropping
