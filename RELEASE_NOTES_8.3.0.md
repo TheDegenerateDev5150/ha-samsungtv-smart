@@ -14,6 +14,16 @@ If this project is useful to you, you can support its development:
 > the new `frame_tv_entity` key so the fullscreen-preview buttons work — see the
 > *lightbox buttons* note below.
 
+## Cleanup — ghost "unavailable" diagnostic sensors are removed automatically (8.3.0b14)
+
+- **The old read-only sensors that were replaced by settable controls no longer
+  linger as "unavailable" ghosts.** When `Contrast / Brightness / Sharpness /
+  Color / Tint` (→ sliders, b8) and `Speaker Select` (→ select, b13) were
+  replaced, Home Assistant kept their registry entries and showed them as
+  *Indisponible* next to the working replacements. The integration now removes
+  those stale registry entries automatically at startup — no manual deletion
+  needed.
+
 ## Speaker output — settable select, with your eARC receiver as an option (8.3.0b13)
 
 - **The read-only `Speaker Select` diagnostic sensor becomes a real `select`**,

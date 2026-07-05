@@ -271,6 +271,31 @@ async def async_setup_entry(
 
     session = async_get_clientsession(hass)
 
+    # Clean up registry leftovers of the read-only IP Control sensors that were
+    # replaced by settable entities (contrast/brightness/sharpness/color/tint →
+    # number sliders in 8.3.0b8; speakerSelect → select in 8.3.0b13). A removed
+    # entity otherwise lingers in the registry forever as a "restored" /
+    # unavailable ghost next to its working replacement.
+    from homeassistant.helpers import entity_registry as er
+
+    _replaced_sensor_keys = (
+        "contrast",
+        "brightness",
+        "sharpness",
+        "color",
+        "tint",
+        "speakerSelect",
+    )
+    ent_reg = er.async_get(hass)
+    for _key in _replaced_sensor_keys:
+        _stale_unique_id = f"{device_unique_id}_ip_control_{_key}"
+        if _stale_id := ent_reg.async_get_entity_id("sensor", DOMAIN, _stale_unique_id):
+            ent_reg.async_remove(_stale_id)
+            _LOGGER.debug(
+                "Removed stale registry entry %s (replaced by a settable entity)",
+                _stale_id,
+            )
+
     entities = []
 
     # Reuse the shared Art API instance (created in __init__.py) so all
