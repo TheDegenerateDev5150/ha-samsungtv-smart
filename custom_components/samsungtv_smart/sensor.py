@@ -216,13 +216,9 @@ IP_CONTROL_STATE_SENSORS: tuple[SamsungIPControlSensorDescription, ...] = (
         icon="mdi:aspect-ratio",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
-    SamsungIPControlSensorDescription(
-        key="speakerSelect",
-        source="tv",
-        name="Speaker Select",
-        icon="mdi:speaker",
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
+    # NOTE: speakerSelect is NOT exposed here — it is a settable `select`
+    # entity (SamsungTVIPControlSpeakerSelect / SamsungTVSTMediaOutputSelect in
+    # select.py), switched via speakerSelectControl / externalSpeakerControl.
     SamsungIPControlSensorDescription(
         key="mute",
         source="tv",

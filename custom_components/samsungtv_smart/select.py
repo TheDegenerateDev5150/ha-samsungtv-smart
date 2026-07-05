@@ -86,11 +86,16 @@ async def async_setup_entry(
             [
                 SamsungTVIPControlColorToneSelect(
                     hass, entry, host, device_name, device_unique_id
-                )
+                ),
+                SamsungTVIPControlSpeakerSelect(
+                    hass, entry, host, device_name, device_unique_id
+                ),
             ],
             True,
         )
-        _LOGGER.debug("IP Control color tone select created for %s", device_name)
+        _LOGGER.debug(
+            "IP Control color tone + speaker selects created for %s", device_name
+        )
 
     session = async_get_clientsession(hass)
 
@@ -152,6 +157,22 @@ async def async_setup_entry(
         )
         entities.append(picture_mode_select)
         _LOGGER.debug("Picture Mode select entity created for %s", device_name)
+        # Speaker output via SmartThings (samsungvd.mediaOutput) — cloud
+        # fallback only: when IP Control is paired the local select above
+        # already covers it (with richer options, e.g. eARC receivers).
+        if not _ip_control_active(entry):
+            entities.append(
+                SamsungTVSTMediaOutputSelect(
+                    hass=hass,
+                    entry=entry,
+                    device_name=device_name,
+                    device_unique_id=device_unique_id,
+                    api_key=api_key,
+                    device_id=device_id,
+                    session=session,
+                )
+            )
+            _LOGGER.debug("SmartThings media output select created for %s", device_name)
     else:
         picture_mode_select = None
         _LOGGER.debug(
@@ -579,6 +600,360 @@ class SamsungTVIPControlColorToneSelect(SelectEntity):
         """Expose no selected color tone until a live IP Control read succeeds."""
         self._attr_available = False
         self._attr_current_option = None
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Speaker output select — IP Control primary, SmartThings fallback
+# ══════════════════════════════════════════════════════════════════════════
+
+# speakerSelectControl public targets that are directly selectable (verified on
+# Frame 2024/2025). "External" is only ever REPORTED by the getter; selecting a
+# specific external device goes through externalSpeakerControl with the
+# name/id discovered from its getter.
+_SPEAKER_BASE_OPTIONS = ("Internal", "AudioOut/Optical")
+
+
+class SamsungTVIPControlSpeakerSelect(SelectEntity):
+    """Speaker output select via IP Control (local).
+
+    Options are the two fixed public targets plus every external audio device
+    the TV currently lists (e.g. an HDMI-eARC receiver) — discovered live via
+    ``externalSpeakerControl``, so the receiver only appears while reachable.
+    This is richer than SmartThings, whose app only offers internal/optical.
+    """
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:speaker"
+    _attr_should_poll = True
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        host: str,
+        device_name: str,
+        device_unique_id: str,
+    ) -> None:
+        """Initialize the IP Control speaker output select."""
+        self.hass = hass
+        self._entry_id = entry.entry_id
+        self._host = host
+        self._device_name = device_name
+        self._device_unique_id = device_unique_id
+        self._ip_control: SamsungIPControl | None = None
+        self._ip_control_token: str | None = None
+        self._attr_unique_id = f"{device_unique_id}_ip_control_speaker_select"
+        self._attr_name = "Speaker Select"
+        self._attr_options = list(_SPEAKER_BASE_OPTIONS)
+        self._attr_current_option: str | None = None
+        self._attr_available = False
+        # deviceName -> deviceId of the external speakers currently listed.
+        self._external_devices: dict[str, str] = {}
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Link this entity to the TV device."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._device_unique_id)},
+            name=self._device_name,
+        )
+
+    @property
+    def available(self) -> bool:
+        """Available only while IP Control is paired, enabled, and reachable."""
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        return bool(entry and _ip_control_active(entry) and self._attr_available)
+
+    def _device_title(self) -> str:
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        return entry.title if entry else (self._device_name or "this Samsung TV")
+
+    def _get_ip_control(self) -> SamsungIPControl | None:
+        """Return a live IP Control client if paired AND enabled."""
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None or not _ip_control_active(entry):
+            self._ip_control = None
+            self._ip_control_token = None
+            return None
+        token = entry.data.get(CONF_IP_CONTROL_TOKEN)
+        if self._ip_control is None or self._ip_control_token != token:
+            self._ip_control = SamsungIPControl(self.hass, self._host, token=token)
+            self._ip_control_token = token
+        return self._ip_control
+
+    def _tv_powered_off(self) -> bool:
+        """True when the linked TV is off (not showing Art) — skip the poll."""
+        registry = er.async_get(self.hass)
+        for entity in registry.entities.get_entries_for_config_entry_id(self._entry_id):
+            if entity.domain != "media_player":
+                continue
+            state = self.hass.states.get(entity.entity_id)
+            if state is None:
+                return False
+            if state.state not in (STATE_OFF, "unavailable"):
+                return False
+            return state.attributes.get("art_mode_status") != "on"
+        return False
+
+    def _rebuild_options(self) -> None:
+        """Options = fixed public targets + currently listed external devices."""
+        options = list(_SPEAKER_BASE_OPTIONS)
+        options.extend(self._external_devices)
+        # Keep a plain "External" entry only when the TV reports External but
+        # no device is listed (so the current option always exists in options).
+        if self._attr_current_option == "External" and not self._external_devices:
+            options.append("External")
+        self._attr_options = options
+
+    async def async_select_option(self, option: str) -> None:
+        """Switch the speaker output through IP Control."""
+        client = self._get_ip_control()
+        if client is None:
+            raise HomeAssistantError(
+                "IP Control is not paired or is disabled for this TV."
+            )
+
+        try:
+            if option in self._external_devices:
+                await client.async_set_external_speaker(
+                    option, self._external_devices[option]
+                )
+            elif option in _SPEAKER_BASE_OPTIONS:
+                await client.async_set_speaker_select(option)
+            else:
+                # The bare "External" placeholder (device list empty) — there
+                # is no target to switch to.
+                raise HomeAssistantError(
+                    "No external audio device is currently available — turn "
+                    "the receiver/soundbar on and try again."
+                )
+            self._attr_current_option = option
+            self._attr_available = True
+        except SamsungIPControlAuthError as ex:
+            self._mark_unavailable()
+            notify_token_problem(
+                self.hass, self._entry_id, METHOD_IP_CONTROL, self._device_title()
+            )
+            raise HomeAssistantError(
+                f"IP Control token rejected while setting speaker output: {ex}"
+            ) from ex
+        except SamsungIPControlModeLockedError as ex:
+            # Reversible TV-side condition (e.g. the external device just went
+            # away) — keep the entity available for the next attempt.
+            raise HomeAssistantError(
+                f"Speaker output can't be changed right now: {ex}"
+            ) from ex
+        except SamsungIPControlError as ex:
+            raise HomeAssistantError(
+                f"Failed to set speaker output via IP Control: {ex}"
+            ) from ex
+
+        clear_token_problem(self.hass, self._entry_id, METHOD_IP_CONTROL)
+        self.async_write_ha_state()
+
+    async def async_update(self) -> None:
+        """Read the current speaker output and the external device list."""
+        if self._tv_powered_off():
+            self._mark_unavailable()
+            return
+        client = self._get_ip_control()
+        if client is None:
+            self._mark_unavailable()
+            return
+
+        try:
+            current = await client.async_get_speaker_select()
+            self._external_devices = {
+                dev["deviceName"]: dev["deviceId"]
+                for dev in await client.async_get_external_speakers()
+            }
+        except SamsungIPControlAuthError as ex:
+            _LOGGER.warning(
+                "IP Control speaker read for %s: token rejected (%s) — "
+                "re-pair via the integration options",
+                self._host,
+                ex,
+            )
+            self._mark_unavailable()
+            notify_token_problem(
+                self.hass, self._entry_id, METHOD_IP_CONTROL, self._device_title()
+            )
+            return
+        except SamsungIPControlError as ex:
+            _LOGGER.debug(
+                "Could not refresh IP Control speaker output for %s: %s",
+                self._host,
+                ex,
+            )
+            self._mark_unavailable()
+            return
+
+        # "External" -> show the actual device when exactly one is listed.
+        if current == "External" and len(self._external_devices) == 1:
+            current = next(iter(self._external_devices))
+        self._attr_current_option = current
+        self._rebuild_options()
+        self._attr_available = True
+        clear_token_problem(self.hass, self._entry_id, METHOD_IP_CONTROL)
+
+    def _mark_unavailable(self) -> None:
+        """Expose no speaker output until a live IP Control read succeeds."""
+        self._attr_available = False
+        self._attr_current_option = None
+
+
+class SamsungTVSTMediaOutputSelect(SelectEntity):
+    """Speaker output select via SmartThings ``samsungvd.mediaOutput``.
+
+    Cloud fallback for TVs without IP Control paired. Options/current value
+    come from the capability's ``supportedOutputList`` / ``currentOutput``
+    attributes (the TV populates them on demand — the entity stays unavailable
+    until they appear); switching sends the ``setOutput`` command.
+    """
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:speaker"
+    _attr_should_poll = True
+
+    _CAPABILITY = "samsungvd.mediaOutput"
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        device_name: str,
+        device_unique_id: str,
+        api_key: str,
+        device_id: str,
+        session,
+    ) -> None:
+        """Initialize the SmartThings media output select."""
+        self.hass = hass
+        self._entry = entry
+        self._device_name = device_name
+        self._device_unique_id = device_unique_id
+        self._api_key = api_key
+        self._device_id = device_id
+        self._session = session
+        self._attr_unique_id = f"{device_unique_id}_st_media_output"
+        self._attr_name = "Speaker Select"
+        self._attr_options: list[str] = []
+        self._attr_current_option: str | None = None
+        # Cooldown: skip polls briefly after a change (cloud lags behind).
+        self._skip_poll_until: float = 0
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Link this entity to the TV device."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._device_unique_id)},
+            name=self._device_name,
+        )
+
+    @property
+    def available(self) -> bool:
+        """Only available once the TV has populated the output list."""
+        return len(self._attr_options) > 0
+
+    def _get_api_key(self) -> str:
+        """Get current API key, refreshing from entry data for OAuth."""
+        entry = self.hass.config_entries.async_get_entry(self._entry.entry_id)
+        if entry:
+            oauth_token = entry.data.get(CONF_OAUTH_TOKEN)
+            if isinstance(oauth_token, dict):
+                new_key = oauth_token.get("access_token")
+                if new_key:
+                    self._api_key = new_key
+                    return new_key
+            api_key = entry.data.get(CONF_API_KEY)
+            if api_key:
+                self._api_key = api_key
+        return self._api_key
+
+    def _tv_powered_off(self) -> bool:
+        """True when the linked TV is off (not showing Art) — skip ST poll."""
+        registry = er.async_get(self.hass)
+        for entity in registry.entities.get_entries_for_config_entry_id(
+            self._entry.entry_id
+        ):
+            if entity.domain != "media_player":
+                continue
+            state = self.hass.states.get(entity.entity_id)
+            if state is None:
+                return False
+            if state.state not in (STATE_OFF, "unavailable"):
+                return False
+            return state.attributes.get("art_mode_status") != "on"
+        return False
+
+    async def async_update(self) -> None:
+        """Poll current output + supported list from SmartThings."""
+        if time.time() < self._skip_poll_until:
+            return
+        if self._tv_powered_off():
+            return
+        url = (
+            f"{_API_DEVICES}/{self._device_id}"
+            f"/components/main/capabilities/{self._CAPABILITY}/status"
+        )
+        try:
+            async with self._session.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {self._get_api_key()}",
+                    "Accept": "application/json",
+                },
+            ) as resp:
+                if resp.status != 200:
+                    return
+                data = await resp.json()
+        except Exception as ex:  # pylint: disable=broad-except
+            _LOGGER.debug("Error fetching media output status: %s", ex)
+            return
+
+        supported = data.get("supportedOutputList", {}).get("value")
+        if isinstance(supported, list) and supported:
+            self._attr_options = [str(item) for item in supported]
+        current = data.get("currentOutput", {}).get("value")
+        if current:
+            self._attr_current_option = str(current)
+
+    async def async_select_option(self, option: str) -> None:
+        """Switch the speaker output through SmartThings setOutput."""
+        url = f"{_API_DEVICES}/{self._device_id}/commands"
+        body = {
+            "commands": [
+                {
+                    "component": "main",
+                    "capability": self._CAPABILITY,
+                    "command": "setOutput",
+                    "arguments": [option],
+                }
+            ]
+        }
+        try:
+            async with self._session.post(
+                url,
+                json=body,
+                headers={
+                    "Authorization": f"Bearer {self._get_api_key()}",
+                    "Accept": "application/json",
+                },
+            ) as resp:
+                if resp.status != 200:
+                    raise HomeAssistantError(
+                        f"SmartThings rejected setOutput (status {resp.status})."
+                    )
+        except HomeAssistantError:
+            raise
+        except Exception as ex:  # pylint: disable=broad-except
+            raise HomeAssistantError(
+                f"Failed to set speaker output via SmartThings: {ex}"
+            ) from ex
+        # Optimistic + short poll cooldown: the cloud lags behind the panel.
+        self._attr_current_option = option
+        self._skip_poll_until = time.time() + 10
+        self.async_write_ha_state()
 
 
 # ══════════════════════════════════════════════════════════════════════════

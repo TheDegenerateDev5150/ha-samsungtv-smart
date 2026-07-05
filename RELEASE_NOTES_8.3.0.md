@@ -14,6 +14,26 @@ If this project is useful to you, you can support its development:
 > the new `frame_tv_entity` key so the fullscreen-preview buttons work — see the
 > *lightbox buttons* note below.
 
+## Speaker output — settable select, with your eARC receiver as an option (8.3.0b13)
+
+- **The read-only `Speaker Select` diagnostic sensor becomes a real `select`**,
+  with two paths:
+  - **IP Control (local, primary):** options are **Internal**,
+    **AudioOut/Optical**, plus **every external audio device the TV currently
+    lists** — e.g. an HDMI-eARC receiver appears by name ("CINEMA 60
+    (HDMI-eARC)") while it is reachable, and switching to it goes through the
+    TV's own `externalSpeakerControl` with the device id. This is *richer than
+    the SmartThings app*, which only offers internal/optical. Discovered live:
+    the receiver option comes and goes with the receiver's availability.
+  - **SmartThings (cloud fallback):** on TVs without IP Control paired, a
+    select backed by the `samsungvd.mediaOutput` capability
+    (`supportedOutputList` / `currentOutput` / `setOutput`) is created instead.
+    It stays unavailable until the TV populates the output list.
+- Polling is gated on the TV being on (a Frame in Art Mode keeps its select),
+  and all IP Control calls go through the per-host serialization lock.
+- The protocol reference was corrected: `speakerSelectControl` and
+  `externalSpeakerControl` were wrongly documented as read-only/absent.
+
 ## Picture mode — the working capability is memorized and tried first (8.3.0b12)
 
 - **Once a picture-mode change is *verified applied* through a given SmartThings
