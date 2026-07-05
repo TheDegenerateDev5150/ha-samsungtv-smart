@@ -69,6 +69,15 @@ MAX_ST_POLL_ON_INTERVAL = 600
 # the local WebSocket, without hammering the API during standby.
 ST_POLL_OFF_INTERVAL = 30
 
+# Persisted (entry.data): which SmartThings capability was VERIFIED to actually
+# actuate the panel for setPictureMode ("custom.picturemode" or
+# "samsungvd.pictureMode"). Learned at runtime by the verify-and-fallback logic
+# (some TVs answer 200 COMPLETED on one capability without applying it — issue
+# #116) and prioritized on later changes, surviving HA restarts. The other
+# capability is always kept as fallback. Excluded from the reload fingerprint
+# in __init__.py so persisting it never triggers an integration reload.
+CONF_ST_PICTURE_MODE_CAPABILITY = "st_picture_mode_capability"
+
 CONF_SLIDESHOW_API = "slideshow_api"  # Persisted: "slideshow" or "auto_rotation"
 LOCAL_LOGO_PATH = "local_logo_path"
 WS_PREFIX = "[Home Assistant]"

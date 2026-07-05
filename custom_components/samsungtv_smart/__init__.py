@@ -67,6 +67,7 @@ from .const import (
     CONF_SHOW_CHANNEL_NR,
     CONF_SOURCE_LIST,
     CONF_ST_ENTRY_UNIQUE_ID,
+    CONF_ST_PICTURE_MODE_CAPABILITY,
     CONF_ST_POLL_ON_INTERVAL,
     CONF_SUPPORTS_GET_BRIGHTNESS,
     CONF_SUPPORTS_GET_COLOR_TEMPERATURE,
@@ -1187,11 +1188,17 @@ _RELOAD_OPTIONS = (
     CONF_ST_POLL_ON_INTERVAL,
 )
 
+# entry.data keys persisted at RUNTIME as learned device facts, not connection
+# settings: writing them must NOT reload the integration (a reload would tear
+# down the very clients that just learned the fact — and reloads are exactly
+# what the verify-and-fallback logic runs right after a user action).
+_NO_RELOAD_DATA_KEYS = (CONF_ST_PICTURE_MODE_CAPABILITY,)
+
 
 def _reload_fingerprint(entry: ConfigEntry) -> tuple:
     """Snapshot the parts of an entry whose change requires a reload."""
     return (
-        dict(entry.data),
+        {k: v for k, v in entry.data.items() if k not in _NO_RELOAD_DATA_KEYS},
         tuple(entry.options.get(key) for key in _RELOAD_OPTIONS),
     )
 
