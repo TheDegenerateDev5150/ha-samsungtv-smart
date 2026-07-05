@@ -114,9 +114,27 @@ class SmartThingsTV:
         # (varies by model: some use custom.picturemode, others samsungvd.pictureMode)
         self._picture_mode_capability = None
         self._sound_mode_capability = None
+        # Capability VERIFIED to actually actuate setPictureMode on this panel
+        # (learned by the verify-and-fallback in async_set_picture_mode; some
+        # TVs answer 200 COMPLETED on one capability without applying it).
+        # Seeded from persisted entry data at startup; tried first on every
+        # change, with the other capability kept as fallback.
+        self._verified_picture_mode_capability: str | None = None
+        # Optional callback (set by the media_player) invoked with the verified
+        # capability name so it can be persisted across HA restarts.
+        self.picture_mode_capability_persist_cb: Callable[[str], None] | None = None
 
         self._is_forced_val = False
         self._forced_count = 0
+
+    def set_verified_picture_mode_capability(self, capability: str | None) -> None:
+        """Seed the verified setPictureMode capability (from persisted data)."""
+        if capability in ("custom.picturemode", "samsungvd.pictureMode"):
+            self._verified_picture_mode_capability = capability
+        elif capability is not None:
+            self._log.debug(
+                "Ignoring unknown persisted picture mode capability: %s", capability
+            )
 
     def _get_api_key(self) -> str:
         """Get API key used to connect to SmartThings."""
@@ -945,16 +963,22 @@ class SmartThingsTV:
                 self._picture_mode_list,
             )
 
-        # Try detected capability first, fallback to the other.
-        # custom.picturemode returns 422 on some TVs (Frame 2024) which could
-        # interfere with the session, so we use the detected capability first.
+        # Order of attempts: the capability VERIFIED to actuate this panel (if
+        # already learned, possibly on a previous HA run) comes first, then the
+        # detected capability, then the other one — deduplicated, both always
+        # reachable as fallback. custom.picturemode returns 422 on some TVs
+        # (Frame 2024) which could interfere with the session, so the detected
+        # capability stays ahead of the blind alternative.
         primary = self._picture_mode_capability or "samsungvd.pictureMode"
         fallback = (
             "custom.picturemode"
             if primary == "samsungvd.pictureMode"
             else "samsungvd.pictureMode"
         )
-        capabilities_to_try = [primary, fallback]
+        capabilities_to_try = []
+        for capability in (self._verified_picture_mode_capability, primary, fallback):
+            if capability and capability not in capabilities_to_try:
+                capabilities_to_try.append(capability)
 
         any_sent = False
         for capability in capabilities_to_try:
@@ -991,7 +1015,12 @@ class SmartThingsTV:
             # applied it (see docstring). None = could not verify — assume
             # applied rather than blind-firing the other capability.
             applied = await self._async_verify_picture_mode(mode_id)
-            if applied is not False:
+            if applied:
+                # Confirmed on the panel: remember this capability so later
+                # changes try it first (and persist it across HA restarts).
+                self._remember_picture_mode_capability(capability)
+                return
+            if applied is None:
                 return
             self._log.warning(
                 "setPictureMode via %s was accepted (COMPLETED) but the TV "
@@ -1013,6 +1042,28 @@ class SmartThingsTV:
                 "likely cannot actuate this panel (see issue #116)",
                 mode,
             )
+
+    def _remember_picture_mode_capability(self, capability: str) -> None:
+        """Memorize (and persist) the capability confirmed to actuate the panel.
+
+        Only called after a VERIFIED apply — never on an unverifiable send — so
+        a flaky cloud read can't memorize the wrong capability. If the panel's
+        behaviour ever changes (e.g. a firmware update), a later verified apply
+        through the other capability simply overwrites the memory.
+        """
+        if capability == self._verified_picture_mode_capability:
+            return
+        self._log.debug(
+            "Picture mode capability verified working: %s (was: %s) — memorizing",
+            capability,
+            self._verified_picture_mode_capability,
+        )
+        self._verified_picture_mode_capability = capability
+        if self.picture_mode_capability_persist_cb is not None:
+            try:
+                self.picture_mode_capability_persist_cb(capability)
+            except Exception as err:  # pylint: disable=broad-except
+                self._log.debug("Could not persist picture mode capability: %s", err)
 
     async def _async_verify_picture_mode(self, mode_id: str) -> bool | None:
         """Return whether the TV now reports ``mode_id``, None if unknown.

@@ -14,6 +14,21 @@ If this project is useful to you, you can support its development:
 > the new `frame_tv_entity` key so the fullscreen-preview buttons work — see the
 > *lightbox buttons* note below.
 
+## Picture mode — the working capability is memorized and tried first (8.3.0b12)
+
+- **Once a picture-mode change is *verified applied* through a given SmartThings
+  capability, that capability is memorized and tried first on every later
+  change** — including after an HA restart (persisted in the config entry). So
+  on TVs where `custom.picturemode` returns a lying `COMPLETED` (issue #116),
+  the ~5–10 s verify-and-fallback cost is only paid on the *first* change;
+  subsequent ones go straight through the working `samsungvd.pictureMode`.
+  - The other capability always remains as fallback: if the panel's behaviour
+    ever changes (e.g. firmware update), a later verified apply through the
+    other capability simply overwrites the memory.
+  - Only a **verified** apply is memorized — an unverifiable send (flaky cloud
+    read) never updates the memory, so it can't learn the wrong capability.
+  - Persisting the learned capability does **not** reload the integration.
+
 ## Picture mode — verify the TV applied it, retry via the other capability (8.3.0b11)
 
 - **Fix for picture-mode changes that SmartThings accepts but the TV silently

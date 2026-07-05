@@ -120,6 +120,7 @@ from .const import (
     CONF_SLIDESHOW_API,
     CONF_SOURCE_LIST,
     CONF_ST_ENTRY_UNIQUE_ID,
+    CONF_ST_PICTURE_MODE_CAPABILITY,
     CONF_ST_POLL_ON_INTERVAL,
     CONF_SUPPORTS_GET_BRIGHTNESS,
     CONF_SUPPORTS_GET_COLOR_TEMPERATURE,
@@ -713,6 +714,16 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 api_key_callback=api_key_callback if use_callbck else None,
                 host=self._host,
             )
+            # Seed the setPictureMode capability verified on a previous run
+            # (learned by verify-and-fallback, persisted in entry.data) and
+            # wire the persistence callback so a newly verified capability
+            # survives HA restarts.
+            self._st.set_verified_picture_mode_capability(
+                config.get(CONF_ST_PICTURE_MODE_CAPABILITY)
+            )
+            self._st.picture_mode_capability_persist_cb = (
+                self._persist_st_picture_mode_capability
+            )
 
         self._st_error_count = 0
         self._st_last_exc = None
@@ -880,6 +891,25 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             return
         self.hass.config_entries.async_update_entry(
             entry, data={**entry.data, key: value}
+        )
+
+    def _persist_st_picture_mode_capability(self, capability: str) -> None:
+        """Persist the verified setPictureMode capability to entry.data.
+
+        Called (on the event loop) by the SmartThings API after a picture-mode
+        change was VERIFIED applied on the panel, so later changes — including
+        after an HA restart — try the working capability first (issue #116:
+        some TVs answer 200 COMPLETED on one capability without applying it).
+        The key is excluded from the reload fingerprint in __init__.py, so this
+        write never triggers an integration reload.
+        """
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None or entry.data.get(CONF_ST_PICTURE_MODE_CAPABILITY) == (
+            capability
+        ):
+            return
+        self.hass.config_entries.async_update_entry(
+            entry, data={**entry.data, CONF_ST_PICTURE_MODE_CAPABILITY: capability}
         )
 
     def _persist_art_port(self, port: int) -> None:
