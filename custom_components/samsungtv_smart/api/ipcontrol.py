@@ -60,6 +60,14 @@ def _host_lock(host: str) -> asyncio.Lock:
 DEFAULT_IP_CONTROL_PORT = 1516
 JSONRPC_VERSION = "2.0"
 COLOR_TONE_OPTIONS = ("Cool", "Standard", "Warm1", "Warm2")
+# speakerSelectControl public values (verified on Frame 2024/2025). "External"
+# is REPORTED by the getter when an external device (e.g. HDMI-eARC receiver)
+# is active, but SELECTING a specific external device goes through
+# externalSpeakerControl with the device's name/id from its getter.
+SPEAKER_SELECT_OPTIONS = ("Internal", "External", "AudioOut/Optical")
+# Key under which _sync_request wraps JSON-array results (e.g. the external
+# speaker list) to keep its dict return contract.
+LIST_RESULT_KEY = "_list_result"
 
 CMD_TIMEOUT = 5  # seconds for normal commands
 PAIR_TIMEOUT = 30  # seconds: pairing waits for the on-screen acceptance
@@ -356,6 +364,62 @@ class SamsungIPControl:
                 f"invalid {field} response from {method}: {result!r}"
             ) from ex
 
+    async def async_get_speaker_select(self) -> str:
+        """Return the current speaker output ("Internal", "External", ...).
+
+        ``speakerSelectControl`` called with no params echoes the current
+        output, capitalized ("Internal"/"External") — unlike the mirror field
+        in ``getTVStates`` which reports it lowercase.
+        """
+        result = await self._async_request("speakerSelectControl")
+        value = result.get("speakerSelect")
+        if not isinstance(value, str) or not value:
+            raise SamsungIPControlError(f"no speakerSelect in response: {result!r}")
+        return value
+
+    async def async_set_speaker_select(self, value: str) -> None:
+        """Switch the speaker output to a public target.
+
+        Verified on Frame 2024/2025: "Internal" and "AudioOut/Optical" are
+        accepted; "External" alone is rejected — switching to a specific
+        external device (HDMI-eARC receiver, ...) must go through
+        :meth:`async_set_external_speaker` with the device's name/id.
+        """
+        if value not in SPEAKER_SELECT_OPTIONS:
+            raise SamsungIPControlError(
+                f"speakerSelect must be one of {', '.join(SPEAKER_SELECT_OPTIONS)}"
+            )
+        await self._async_request("speakerSelectControl", {"speakerSelect": value})
+
+    async def async_get_external_speakers(self) -> list[dict[str, str]]:
+        """Return the available external speakers as [{deviceName, deviceId}].
+
+        ``externalSpeakerControl`` called with no params returns a JSON array
+        of the currently available external audio devices (e.g.
+        ``[{"deviceName": "CINEMA 60(HDMI-eARC)", "deviceId": "RCV-1"}]``) —
+        or ``{}`` when none is reachable (receiver powered off).
+        """
+        result = await self._async_request("externalSpeakerControl")
+        devices = result.get(LIST_RESULT_KEY, [])
+        return [
+            dev
+            for dev in devices
+            if isinstance(dev, dict) and dev.get("deviceName") and dev.get("deviceId")
+        ]
+
+    async def async_set_external_speaker(self, name: str, device_id: str) -> None:
+        """Switch the speaker output to a specific external device.
+
+        Requires a device currently listed by
+        :meth:`async_get_external_speakers`; the TV answers ``-32002`` for an
+        unknown/unreachable device (raised as
+        :class:`SamsungIPControlModeLockedError`).
+        """
+        await self._async_request(
+            "externalSpeakerControl",
+            {"deviceName": name, "deviceId": device_id},
+        )
+
     async def async_get_mute(self) -> bool:
         """Return whether the TV is currently muted."""
         result = await self._async_request("muteControl")
@@ -552,6 +616,11 @@ class SamsungIPControl:
             raise SamsungIPControlError(f"TV returned error {code}: {message}")
 
         result = data.get("result")
+        if isinstance(result, list):
+            # A few getters (e.g. externalSpeakerControl) return a JSON array.
+            # Wrap it so the dict return contract holds for every caller;
+            # list-aware callers unwrap via LIST_RESULT_KEY.
+            return {LIST_RESULT_KEY: result}
         if not isinstance(result, dict):
             return {}
         return result
