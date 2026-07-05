@@ -54,6 +54,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_platform
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -2312,6 +2313,27 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             self._local_image_url.get_image_url, media_title, logo_file
         )
 
+    def _speaker_output_is_internal(self) -> bool | None:
+        """Return whether the TV's speaker output is its internal speakers.
+
+        Read from the Speaker Select entity's published state (IP Control or
+        SmartThings variant — whichever this entry created). Returns None when
+        unknown (no such entity, or it is unavailable), so callers keep the
+        default behaviour instead of guessing.
+        """
+        registry = er.async_get(self.hass)
+        for entity in registry.entities.get_entries_for_config_entry_id(self._entry_id):
+            if entity.domain != "select" or not (
+                entity.unique_id.endswith("_ip_control_speaker_select")
+                or entity.unique_id.endswith("_st_media_output")
+            ):
+                continue
+            state = self.hass.states.get(entity.entity_id)
+            if state is None or state.state in ("unavailable", "unknown"):
+                return None
+            return "internal" in state.state.lower()
+        return None
+
     @property
     def supported_features(self) -> int:
         """Flag media player features that are supported."""
@@ -2320,6 +2342,14 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             features |= MediaPlayerEntityFeature.BROWSE_MEDIA
         if self._st:
             features |= MediaPlayerEntityFeature.SELECT_SOUND_MODE
+        # Absolute volume (the slider) only targets the TV's internal volume:
+        # with an external output (HDMI-eARC receiver, optical, BT soundbar)
+        # UPnP/SmartThings setvolume is a no-op, so drop VOLUME_SET to hide the
+        # dead slider. VOLUME_STEP and VOLUME_MUTE are KEPT: the TV relays the
+        # up/down/mute keys to the external device over CEC/ARC (confirmed by a
+        # user with an eARC AVR), and the same relay applies to BT soundbars.
+        if self._speaker_output_is_internal() is False:
+            features &= ~MediaPlayerEntityFeature.VOLUME_SET
         return features
 
     def _smartthings_reports_art(self) -> bool:
@@ -2762,6 +2792,18 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         if self._state != MediaPlayerState.ON:
             return
         if self.volume_level is None:
+            return
+        # Absolute volume only reaches the TV's internal speakers; with an
+        # external output the command is silently ignored by the TV. Warn
+        # (rather than raise, to keep legacy automations from erroring) and
+        # skip the pointless call. Use volume_up/down instead — the TV relays
+        # those to the external device over CEC/ARC.
+        if self._speaker_output_is_internal() is False:
+            self._log.warning(
+                "volume_set ignored: the TV's speaker output is external "
+                "(receiver/soundbar) and absolute volume only targets the "
+                "internal speakers — use volume_up/volume_down instead"
+            )
             return
         if self._st and self._setvolumebyst:
             await self._st.async_send_command("setvolume", int(volume * 100))

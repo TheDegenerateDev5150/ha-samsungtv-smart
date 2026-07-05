@@ -14,6 +14,22 @@ If this project is useful to you, you can support its development:
 > the new `frame_tv_entity` key so the fullscreen-preview buttons work — see the
 > *lightbox buttons* note below.
 
+## Media player — the volume slider hides when audio goes to an external device (8.3.0b15)
+
+- **When the Speaker Select reports an external output** (HDMI-eARC receiver,
+  optical, Bluetooth soundbar), **the media player drops the absolute volume
+  slider (`volume_set`)** — that command only targets the TV's internal
+  speakers and was a silent no-op with an external output.
+- **Volume up/down and mute are kept**: the TV relays those keys to the
+  external device over CEC/ARC (confirmed with an eARC AVR), and the same
+  relay applies to Bluetooth soundbars. So remote-style volume keeps working;
+  only the dead slider disappears.
+- A `volume_set` service call issued anyway (e.g. by an old automation) logs a
+  clear warning instead of failing silently, and legacy automations don't
+  error out.
+- When the speaker output is unknown (no Speaker Select entity, or it is
+  unavailable), the slider stays — no behaviour change.
+
 ## Cleanup — ghost "unavailable" diagnostic sensors are removed automatically (8.3.0b14)
 
 - **The old read-only sensors that were replaced by settable controls no longer
