@@ -681,16 +681,20 @@ class SamsungTVIPControlSpeakerSelect(SelectEntity):
             self._ip_control_token = token
         return self._ip_control
 
-    def _tv_powered_off(self) -> bool:
-        """True when the linked TV is off (not showing Art) — skip the poll."""
+    def _tv_normal_viewing(self) -> bool:
+        """True when the TV is on for normal viewing (not off, not Art Mode).
+
+        The speaker methods answer -32601 while the panel displays Art (same
+        firmware ambiguity as the picture calibration methods), so only poll —
+        and only allow switching — during normal viewing. Field-observed: 50
+        pointless -32601 reads per art session before this gate.
+        """
         registry = er.async_get(self.hass)
         for entity in registry.entities.get_entries_for_config_entry_id(self._entry_id):
             if entity.domain != "media_player":
                 continue
             state = self.hass.states.get(entity.entity_id)
-            if state is None:
-                return False
-            if state.state not in (STATE_OFF, "unavailable"):
+            if state is None or state.state in (STATE_OFF, "unavailable", "unknown"):
                 return False
             return state.attributes.get("art_mode_status") != "on"
         return False
@@ -707,6 +711,13 @@ class SamsungTVIPControlSpeakerSelect(SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         """Switch the speaker output through IP Control."""
+        # Guardrail: the speaker methods answer -32601 while the TV is off or
+        # displaying Art — don't even hit the TV, give a clear message.
+        if not self._tv_normal_viewing():
+            raise HomeAssistantError(
+                "Cannot change the speaker output: the TV must be on and out "
+                "of Art Mode."
+            )
         client = self._get_ip_control()
         if client is None:
             raise HomeAssistantError(
@@ -753,7 +764,7 @@ class SamsungTVIPControlSpeakerSelect(SelectEntity):
 
     async def async_update(self) -> None:
         """Read the current speaker output and the external device list."""
-        if self._tv_powered_off():
+        if not self._tv_normal_viewing():
             self._mark_unavailable()
             return
         client = self._get_ip_control()
