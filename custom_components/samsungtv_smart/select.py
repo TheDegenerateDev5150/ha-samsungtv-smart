@@ -979,7 +979,10 @@ class SamsungTVMatteSelectBase(SelectEntity):
         self._device_unique_id = device_unique_id
         self._attr_options: list[str] = []
         self._attr_current_option: str | None = None
-        self._attr_should_poll = False
+        # Poll (default 30s): async_update reads the Frame Art sensor's
+        # already-published current_matte_id — no extra TV traffic — so a matte
+        # changed on the TV or through the sibling select syncs by itself.
+        self._attr_should_poll = True
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -1007,6 +1010,56 @@ class SamsungTVMatteSelectBase(SelectEntity):
                 self.async_write_ha_state()
         except Exception as ex:
             _LOGGER.debug("Could not refresh current matte: %s", ex)
+
+    async def async_update(self) -> None:
+        """Sync from the Frame Art sensor's published matte (no TV call).
+
+        The Frame Art coordinator already polls get_current_artwork every few
+        seconds and publishes ``current_matte_id`` on its sensor; reading that
+        state keeps both matte selects in step with TV-side changes without
+        issuing any extra request.
+        """
+        state = self._frame_art_sensor_state()
+        if state is None or state.state in ("unavailable", "unknown"):
+            return
+        matte_id = state.attributes.get("current_matte_id")
+        if isinstance(matte_id, str) and matte_id:
+            self._parse_matte_id(matte_id)
+
+    def _frame_art_sensor_state(self):
+        """Return the Frame Art sensor's HA state object, or None."""
+        registry = er.async_get(self.hass)
+        sensor_id = registry.async_get_entity_id(
+            "sensor", DOMAIN, f"{self._entry.entry_id}_frame_art"
+        )
+        return self.hass.states.get(sensor_id) if sensor_id else None
+
+    def _art_is_displaying(self) -> bool:
+        """True when the panel is actively displaying Art Mode.
+
+        The art WebSocket's own cache can be None (invalidated); the Frame Art
+        sensor's state layers every source (IP Control, WS, SmartThings), so
+        trust either signal saying "on".
+        """
+        if self._art_api.art_mode:
+            return True
+        state = self._frame_art_sensor_state()
+        return bool(state and state.state == "on")
+
+    async def _apply_matte(self, content_id: str, new_matte_id: str) -> None:
+        """Send the matte to the TV and force the panel to redisplay it.
+
+        ``change_matte`` alone updates the stored matte but (on 2024 Frames at
+        least) the panel keeps showing the old frame until the artwork is
+        re-selected — so when Art Mode is actively displaying, re-select the
+        same content with ``show=True`` after a short settle delay. When art
+        is NOT being displayed, skip the re-select: ``show=True`` could wake
+        the panel into Art Mode as a side effect.
+        """
+        await self._art_api.change_matte(content_id=content_id, matte_id=new_matte_id)
+        if self._art_is_displaying():
+            await asyncio.sleep(1)
+            await self._art_api.select_image(content_id, show=True)
 
     def _parse_matte_id(self, matte_id: str) -> None:
         """To be implemented by subclass."""
@@ -1043,11 +1096,14 @@ class SamsungTVMatteTypeSelect(SamsungTVMatteSelectBase):
         try:
             current = await self._art_api.get_current()
             if not current:
-                _LOGGER.warning("Cannot change matte type: no current artwork")
-                return
+                raise HomeAssistantError(
+                    "Cannot change the matte: no current artwork (is the TV on?)."
+                )
 
             content_id: str = current.get("content_id", "")
-            existing_matte: str = current.get("matte_id", "none_polar")
+            # The TV may report the matte upper-cased (SHADOWBOX_POLAR);
+            # normalize so the composed id is always lower-case.
+            existing_matte: str = (current.get("matte_id") or "none_polar").lower()
 
             if "_" in existing_matte:
                 color_part = existing_matte.rsplit("_", 1)[1]
@@ -1056,17 +1112,16 @@ class SamsungTVMatteTypeSelect(SamsungTVMatteSelectBase):
 
             new_matte_id = f"{option}_{color_part}" if option != "none" else "none"
 
-            await self._art_api.change_matte(
-                content_id=content_id, matte_id=new_matte_id
-            )
+            await self._apply_matte(content_id, new_matte_id)
             self._attr_current_option = option
             self.async_write_ha_state()
             _LOGGER.debug(
                 "Matte type changed to %s (full id: %s)", option, new_matte_id
             )
-
+        except HomeAssistantError:
+            raise
         except Exception as ex:
-            _LOGGER.error("Error changing matte type: %s", ex)
+            raise HomeAssistantError(f"Error changing matte type: {ex}") from ex
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -1100,30 +1155,38 @@ class SamsungTVMatteColorSelect(SamsungTVMatteSelectBase):
         try:
             current = await self._art_api.get_current()
             if not current:
-                _LOGGER.warning("Cannot change matte color: no current artwork")
-                return
+                raise HomeAssistantError(
+                    "Cannot change the matte: no current artwork (is the TV on?)."
+                )
 
             content_id: str = current.get("content_id", "")
-            existing_matte: str = current.get("matte_id", "none")
+            existing_matte: str = (current.get("matte_id") or "none").lower()
 
             if "_" in existing_matte:
                 type_part = existing_matte.rsplit("_", 1)[0]
             else:
-                type_part = existing_matte or "shadowbox"
+                type_part = existing_matte
+
+            if type_part in ("", "none"):
+                # A color without a frame is meaningless: "none_<color>" is not
+                # a valid matte id. Tell the user instead of sending garbage.
+                raise HomeAssistantError(
+                    "Select a matte type first — the color only applies when a "
+                    "frame (matte type) is set."
+                )
 
             new_matte_id = f"{type_part}_{option}"
 
-            await self._art_api.change_matte(
-                content_id=content_id, matte_id=new_matte_id
-            )
+            await self._apply_matte(content_id, new_matte_id)
             self._attr_current_option = option
             self.async_write_ha_state()
             _LOGGER.debug(
                 "Matte color changed to %s (full id: %s)", option, new_matte_id
             )
-
+        except HomeAssistantError:
+            raise
         except Exception as ex:
-            _LOGGER.error("Error changing matte color: %s", ex)
+            raise HomeAssistantError(f"Error changing matte color: {ex}") from ex
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
