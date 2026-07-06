@@ -4,15 +4,24 @@ If this project is useful to you, you can support its development:
 
 # <a href="https://buymeacoffee.com/thefab21" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-black.png" alt="Buy Me A Coffee" height="41" width="174"></a>
 
-> **Status: pre-release (beta).** 8.3.0 is the next stable line after **8.1.0**.
+> **Status: stable release.** 8.3.0 is the next stable release after **8.1.0**.
 > The 8.2.0 beta was never shipped as a stable release, so **8.3.0 includes
 > everything from 8.2.0 as well** — those changes are listed under
 > *"Also included from the 8.2.0 beta"* at the bottom.
+> Field-validated over several days on two Frame TVs (2024 + 2020, OAuth and
+> PAT) through the 8.3.0b1–b16 beta series.
 
 > ℹ️ **Folder Gallery card users:** after updating, **re-open your card in the
 > visual editor and save once** (re-selecting the Frame TV entity). This writes
 > the new `frame_tv_entity` key so the fullscreen-preview buttons work — see the
 > *lightbox buttons* note below.
+
+## Speaker output — no more pointless polls in Art Mode (8.3.0 final)
+
+- The Speaker Select now skips its IP Control poll (and refuses switching, with
+  a clear message) while the TV is off or displaying Art — the speaker methods
+  answer `-32601` in Art Mode, the same firmware ambiguity as the picture
+  calibration. The select goes cleanly unavailable and recovers on its own.
 
 ## Frame Art — matte selects apply instantly and stay in sync (8.3.0b16)
 
