@@ -208,7 +208,7 @@
   prevented, but normal restarts now recreate the remote entity correctly
   every time.
 
-> **Status: pre-release (beta).** 8.1.0 builds on the stable 8.0.0 three-channel
+> **Status: stable release.** 8.1.0 builds on the stable 8.0.0 three-channel
 > rework with IP Control reliability and observability improvements.
 
 ---

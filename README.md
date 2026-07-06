@@ -264,7 +264,42 @@ After initial setup, click **Configure** on the integration card to access these
 > **IP Control moved.** Pairing and the *Enable IP Control* / *Enable IP Control Art Mode* toggles are no longer in this Options screen — they now live under **Reconfigure → IP Control** (see [Reconfigure](#reconfigure) below).
 
 ---
+### How control works — and what *App launch method* actually does
 
+These are two different layers. Don't confuse the **App launch method** option with how
+the integration *connects* to the TV.
+
+#### App launch method (an option — app launching only)
+
+The **App launch method** option (*Standard / Remote / REST*) only decides which channel is
+used to **launch an application**. It has no effect on power, keys, volume, sources or Art Mode.
+
+| Value | What it does |
+|---|---|
+| **Standard** | `ms.application.start` over the control WebSocket channel (falls back to remote). Recommended. |
+| **Remote** | `ed.apps.launch` over the remote WebSocket channel (same channel as key presses). |
+| **REST** | `POST /api/v2/applications/{id}` over HTTP. Deprecated by Samsung on recent Tizen — often a no-op on 2022+ sets, and the integration reports success even when nothing launched. |
+
+> **Recommendation:** leave this on **Standard**. Switch to **Remote** only if a specific app
+> won't launch. **REST** is mainly relevant to older TVs.
+
+#### Connection layers (the architecture — they coexist)
+
+The integration does **not** pick a single connection mechanism. Three layers run together,
+each with its own job:
+
+| Layer | Transport | Role |
+|---|---|---|
+| **WebSocket** | Local, ports 8001/8002 | Primary control: power, keys, volume, sources, app launching, and Frame Art Mode. |
+| **SmartThings** | Cloud (OAuth2 / PAT) | Status polling (power, input, channel, picture/sound mode) and optional power-on. Read-mostly — not a local command channel. |
+| **IP Control** | Local JSON-RPC, port 1516 | Optional. Reliable power on/off without SmartThings, plus optional Art Mode control. Paired and toggled under [Reconfigure](#reconfigure). |
+
+> The three layers are complementary, not alternatives. *App launch method* sits **on top of**
+> the WebSocket layer (two of its three values are WebSocket channels); it is not a fourth
+> connection mechanism.
+>
+> ---
+> 
 ### Reconfigure
 
 To change connection or credentials after setup, open **Settings → Devices & Services → Samsung TV Smart → Reconfigure**. The flow is split into three clear sections so you only touch what you need:
