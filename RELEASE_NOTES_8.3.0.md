@@ -14,6 +14,29 @@ If this project is useful to you, you can support its development:
 > the new `frame_tv_entity` key so the fullscreen-preview buttons work — see the
 > *lightbox buttons* note below.
 
+## Frame Art — matte selects apply instantly and stay in sync (8.3.0b16)
+
+- **Changing Matte Type / Matte Color now takes effect on the panel
+  immediately** — no helper automation needed anymore. `change_matte` alone
+  updates the stored matte but (on 2024 Frames at least) the panel keeps
+  showing the old frame until the artwork is re-selected; the selects now
+  re-select the current artwork automatically after the change, **only while
+  Art Mode is actively displaying** (so a matte change can't wake a sleeping
+  panel).
+- **The two selects stay in sync with the TV**: they now follow the Frame Art
+  sensor's `current_matte_id` (already refreshed every few seconds by the art
+  coordinator — zero extra TV traffic), so a matte changed on the TV itself or
+  via the other select is reflected within ~30 s. Sync helper automations can
+  be removed.
+- **Correctness fixes**: matte ids reported upper-cased by the TV
+  (`SHADOWBOX_POLAR`) no longer produce mixed-case ids on write; picking a
+  *color* while the matte type is `none` now raises a clear "select a matte
+  type first" error instead of sending an invalid `none_<color>` id; errors
+  surface in the UI instead of being silently logged.
+- If you had an automation like *"apply matte on select change"* (calling
+  `art_change_matte` + `art_select_image`), **delete it** — keeping it would
+  double-apply every change.
+
 ## Media player — the volume slider hides when audio goes to an external device (8.3.0b15)
 
 - **When the Speaker Select reports an external output** (HDMI-eARC receiver,
