@@ -630,13 +630,28 @@ class SamsungTVArtNumberBase(RestoreNumber):
             name=self._device_name,
         )
 
-    def _is_tv_in_art_mode(self) -> bool:
-        """Return True only if the media_player is on and in Art Mode.
+    @property
+    def available(self) -> bool:
+        """Only available while the panel is actually displaying Art Mode.
 
-        Checks the HA state of the media_player entity for this config entry.
-        This avoids hitting the WebSocket Art API when the TV is off/standby,
-        which would cause async_update to block for the full timeout duration
-        and trigger HA's '> 10 seconds' warning.
+        Brightness / color temperature only apply to the art display; outside
+        Art Mode the TV either can't answer or answers with bogus defaults
+        (observed: a standby read returning brightness=10 right after a
+        reload, showing a phantom 100 %). Going unavailable both blocks the
+        dead slider in the UI and keeps the history honest.
+        """
+        return self._is_tv_in_art_mode()
+
+    def _is_tv_in_art_mode(self) -> bool:
+        """Return True only if the TV is actually displaying Art Mode.
+
+        Checks the HA state of the media_player entity for this config entry
+        (avoids hitting the WebSocket Art API when the TV is off/standby),
+        CROSS-CHECKED against the Frame Art sensor: right after a reload the
+        media_player can briefly restore a stale art_mode_status='on' while
+        the art coordinator already knows the TV is powered off — that stale
+        window let a bogus standby read (brightness=10 → phantom 100 %)
+        through. The sensor state must not contradict the attribute.
         """
         if self._media_player_entity_id is None:
             entity_registry = er.async_get(self.hass)
@@ -661,7 +676,7 @@ class SamsungTVArtNumberBase(RestoreNumber):
         # "art_mode_status" attribute set to "on" (HA convention) — so the
         # attribute is the authoritative signal, checked BEFORE the state.
         if state.attributes.get("art_mode_status") == "on":
-            return True
+            return not self._frame_art_sensor_says_off()
 
         if state.state in ("off", "unavailable", "unknown"):
             return False
@@ -670,6 +685,24 @@ class SamsungTVArtNumberBase(RestoreNumber):
         # polling when the attribute is absent entirely (e.g. older firmware
         # or attribute not yet populated) so we don't go permanently blind.
         return "art_mode_status" not in state.attributes
+
+    def _frame_art_sensor_says_off(self) -> bool:
+        """True when the Frame Art sensor explicitly reports art NOT displaying.
+
+        Used only as a veto: when the sensor is missing or unavailable it
+        returns False (no veto), so TVs without the sensor keep the
+        media_player-based behaviour.
+        """
+        registry = er.async_get(self.hass)
+        sensor_id = registry.async_get_entity_id(
+            "sensor", DOMAIN, f"{self._entry.entry_id}_frame_art"
+        )
+        if not sensor_id:
+            return False
+        state = self.hass.states.get(sensor_id)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return False
+        return state.state != "on"
 
 
 # ══════════════════════════════════════════════════════════════════════════
