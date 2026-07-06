@@ -1,0 +1,30 @@
+# Release notes — 8.3.1
+
+If this project is useful to you, you can support its development:
+
+# <a href="https://buymeacoffee.com/thefab21" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-black.png" alt="Buy Me A Coffee" height="41" width="174"></a>
+
+## Art Mode Brightness / Color Temperature — unavailable outside Art Mode (8.3.1b1)
+
+- **The two Art Mode sliders are now *unavailable* whenever the panel is not
+  actually displaying Art Mode**, instead of holding (and graphing) a value
+  that no longer means anything. These settings only apply to the art display;
+  outside Art Mode the TV either can't answer or answers with bogus defaults.
+- **Fixes phantom jumps to 100 %**: debug logs showed a standby read right
+  after an integration reload returning `brightness = 10` (the TV's max) while
+  the panel was off — the slider then displayed 100 % even though nobody set
+  it. The art-mode gate is now cross-checked against the Frame Art sensor
+  (which correctly knew the TV was off during that window), so stale
+  media-player state right after a reload can no longer let a bogus read
+  through.
+- History becomes honest: gaps while the TV is off/normal viewing, real values
+  while art is displayed.
+- ⚠️ **Automations note**: if you have automations that set the Art Mode
+  brightness on a schedule, add a condition that Art Mode is actually on
+  (`art_mode_status == "on"` / the Frame Art switch) — setting the value while
+  the entity is unavailable is pointless (the panel isn't showing art) and may
+  be skipped by Home Assistant.
+- Known Samsung behaviour, unchanged by this release: some 2024 Frames reset
+  the art brightness to maximum on their own after a power cycle. If that
+  bothers you, an opt-in "re-apply last brightness on Art Mode entry" can be
+  added later — open an issue.
