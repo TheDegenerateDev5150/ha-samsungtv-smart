@@ -150,7 +150,8 @@
           "ext_power_entity": "Binary sensor para ajudar a detectar o status de energia",
           "use_mute_check": "Use o status de volume mudo para detectar um falso status de LIGADO",
           "dump_apps": "Despejar a lista de aplicativos no arquivo de log na inicialização (quando possível)",
-          "toggle_art_mode": "Toggle Art Mode on Power"
+          "toggle_art_mode": "Toggle Art Mode on Power",
+          "st_poll_on_interval": "Intervalo de consulta SmartThings com a TV ligada (segundos)"
         }
       },
       "save_exit": {

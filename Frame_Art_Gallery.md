@@ -228,6 +228,44 @@ action:
 > `service:`, or an object-form `tap_action:` — in addition to the legacy
 > `action: { service: ... }` shown above.
 
+### Editing in the UI (visual editor)
+
+You don't have to write YAML: add the card from the dashboard and use the
+visual editor. Besides the basic fields (title, sensor, folder, columns, image
+height) it exposes:
+
+- **Gallery type** — forces the fullscreen-preview buttons for the whole
+  gallery: *Personal* (Select + Delete), *Favorites* (Select + Unfavourite),
+  *Upload* (Upload), or *Auto* (detect per image).
+- **Thumbnails** — a *Server-side thumbnails* checkbox and a *Thumbnail width*
+  field.
+- **Actions** — dropdowns for **single tap / double tap / long press**
+  (*Open preview / Display on TV / Nothing*) plus a *Frame TV entity* field.
+  Picking "Display on TV" builds the `samsungtv_smart.art_select_image` action
+  for you. Anything more advanced can still be done in the code editor.
+
+### Large folders of original photos
+
+Pointing the card at a folder of full-size originals (several MB each, many of
+them) would make the browser download and decode every original just to draw
+the grid. By default the card requests small **server-side resized thumbnails**
+instead (`server_thumbnails: true`), so only kilobytes per tile are sent; the
+full-resolution image is still used for the lightbox and tap/hold actions.
+
+```yaml
+type: custom:folder-gallery-card
+title: Photos
+folder_sensor: sensor.my_photos
+columns: 4
+thumbnail_width: 500        # sharper tiles; lower for less bandwidth
+# server_thumbnails: false  # load full originals instead
+```
+
+Thumbnails are cached on disk under `/config/www/frame_art/.thumb_cache/` and
+regenerated only when the source file changes (keyed by path + width + mtime).
+Requires Pillow (bundled with Home Assistant); if it's unavailable the endpoint
+transparently falls back to the original image.
+
 ### All Configuration Options
 
 | Option | Type | Default | Description |
@@ -242,6 +280,9 @@ action:
 | `border_radius` | string | `8px` | Image border radius |
 | `show_filename` | boolean | `true` | Show filename on hover |
 | `filter` | string | `*` | File filter pattern |
+| `gallery_type` | string | *(auto)* | Forces which action buttons the fullscreen preview shows for the whole gallery: `personal` (Select + Delete), `favorites` (Select + Unfavourite), `upload` (Upload). Omit / `auto` = detect per image from the content-id prefix. |
+| `server_thumbnails` | boolean | `true` | Serve small server-resized thumbnails for the grid instead of the full originals (recommended for folders of large photos). The full-resolution image is still used for the lightbox and actions. Set `false` to load originals. |
+| `thumbnail_width` | number | `400` | Width (px) of the server-generated thumbnails. Raise for sharper tiles, lower for even less bandwidth. |
 | `tap_action` | string/object | - | Action on single tap (e.g. `lightbox`, or a service/perform-action object) |
 | `double_tap_action` | object | - | Action on double tap (e.g. select the artwork directly). When set, a single tap is delayed slightly to detect the double tap. |
 | `hold_action` | object | - | Action on long press |

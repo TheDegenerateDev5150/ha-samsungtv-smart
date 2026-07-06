@@ -54,6 +54,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_platform
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
@@ -120,6 +121,8 @@ from .const import (
     CONF_SLIDESHOW_API,
     CONF_SOURCE_LIST,
     CONF_ST_ENTRY_UNIQUE_ID,
+    CONF_ST_PICTURE_MODE_CAPABILITY,
+    CONF_ST_POLL_ON_INTERVAL,
     CONF_SUPPORTS_GET_BRIGHTNESS,
     CONF_SUPPORTS_GET_COLOR_TEMPERATURE,
     CONF_SYNC_TURN_OFF,
@@ -137,6 +140,7 @@ from .const import (
     DEFAULT_APP,
     DEFAULT_PORT,
     DEFAULT_SOURCE_LIST,
+    DEFAULT_ST_POLL_ON_INTERVAL,
     DEFAULT_TIMEOUT,
     DOMAIN,
     LOCAL_LOGO_PATH,
@@ -163,6 +167,7 @@ from .const import (
     SERVICE_ART_UPLOAD,
     SERVICE_SELECT_PICTURE_MODE,
     SIGNAL_CONFIG_ENTITY,
+    ST_POLL_OFF_INTERVAL,
     STD_APP_LIST,
     WS_PREFIX,
     AppLaunchMethod,
@@ -236,7 +241,6 @@ SUPPORT_SAMSUNGTV_SMART = (
     | MediaPlayerEntityFeature.STOP
 )
 
-MIN_TIME_BETWEEN_ST_UPDATE = timedelta(seconds=10)
 ST_API_KEY_UPDATE_INTERVAL = timedelta(minutes=30)
 OAUTH_TOKEN_REFRESH_BUFFER = 300  # Refresh OAuth token 5 minutes before expiration
 SCAN_INTERVAL = timedelta(seconds=5)
@@ -711,10 +715,26 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
                 api_key_callback=api_key_callback if use_callbck else None,
                 host=self._host,
             )
+            # Seed the setPictureMode capability verified on a previous run
+            # (learned by verify-and-fallback, persisted in entry.data) and
+            # wire the persistence callback so a newly verified capability
+            # survives HA restarts.
+            self._st.set_verified_picture_mode_capability(
+                config.get(CONF_ST_PICTURE_MODE_CAPABILITY)
+            )
+            self._st.picture_mode_capability_persist_cb = (
+                self._persist_st_picture_mode_capability
+            )
 
         self._st_error_count = 0
         self._st_last_exc = None
         self._st_sources_loaded = False
+        # SmartThings poll throttling: the local WebSocket is the primary state
+        # source; SmartThings is only polled for cloud-only data at a slower
+        # cadence (configurable when ON, fixed keepalive when OFF).
+        self._st_last_poll = 0.0
+        self._st_poll_on_interval = DEFAULT_ST_POLL_ON_INTERVAL
+        self._ws_was_connected = False
         self._setvolumebyst = False
 
         # logo control initializzation
@@ -872,6 +892,25 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             return
         self.hass.config_entries.async_update_entry(
             entry, data={**entry.data, key: value}
+        )
+
+    def _persist_st_picture_mode_capability(self, capability: str) -> None:
+        """Persist the verified setPictureMode capability to entry.data.
+
+        Called (on the event loop) by the SmartThings API after a picture-mode
+        change was VERIFIED applied on the panel, so later changes — including
+        after an HA restart — try the working capability first (issue #116:
+        some TVs answer 200 COMPLETED on one capability without applying it).
+        The key is excluded from the reload fingerprint in __init__.py, so this
+        write never triggers an integration reload.
+        """
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None or entry.data.get(CONF_ST_PICTURE_MODE_CAPABILITY) == (
+            capability
+        ):
+            return
+        self.hass.config_entries.async_update_entry(
+            entry, data={**entry.data, CONF_ST_PICTURE_MODE_CAPABILITY: capability}
         )
 
     def _persist_art_port(self, port: int) -> None:
@@ -1079,6 +1118,14 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         """
         self.async_write_ha_state()
         self.hass.async_create_task(self._refresh_ip_art_mode())
+        # Some models (e.g. 2024 Frames where IP Control cannot report the art
+        # state and REST PowerState stays "on" in art mode) only learn about an
+        # art-mode transition from SmartThings. Since the ST poll is throttled,
+        # force it on the next update so entering/leaving Art Mode is reflected
+        # within a couple of seconds instead of waiting up to the ST interval.
+        if self._st:
+            self._st_last_poll = 0.0
+            self.async_schedule_update_ha_state(True)
 
     async def _refresh_ip_art_mode(self, _now=None) -> None:
         """Refresh the cached Art Mode value via IP Control.
@@ -1414,6 +1461,9 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         self._load_tv_lists(first_load)
         self._use_st_status = self._get_option(CONF_USE_ST_STATUS_INFO, True)
         self._use_channel_info = self._get_option(CONF_USE_ST_CHANNEL_INFO, True)
+        self._st_poll_on_interval = self._get_option(
+            CONF_ST_POLL_ON_INTERVAL, DEFAULT_ST_POLL_ON_INTERVAL
+        )
         self._use_mute_check = self._get_option(CONF_USE_MUTE_CHECK, False)
         self._show_channel_number = self._get_option(CONF_SHOW_CHANNEL_NR, False)
         self._ws.update_app_list(self._app_list)
@@ -1869,7 +1919,40 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
         return self._device_info
 
-    @Throttle(MIN_TIME_BETWEEN_ST_UPDATE)
+    def _should_poll_st(self) -> bool:
+        """Decide whether to hit the SmartThings cloud on this cycle.
+
+        The local WebSocket is the primary state source, so SmartThings is
+        polled only for cloud-only data (channel name, picture/sound mode) at a
+        throttled cadence: the configurable interval while the TV is ON, and a
+        fixed keepalive (``ST_POLL_OFF_INTERVAL``) otherwise. Power-on is
+        detected locally: on the *transition* of the local WebSocket to
+        connected, force one immediate poll so cloud-only fields refresh right
+        away instead of lagging by the throttle interval. We key off the
+        transition (not the level) because a Frame showing Art keeps the WS
+        connected while HA still reports state OFF — a level check would then
+        force a poll every cycle and defeat the throttle.
+
+        ``self._state`` still holds the *previous* cycle's power here, because
+        this runs before ``_check_status`` in ``_async_update`` — which is
+        exactly what we want to gate on.
+        """
+        now = time.monotonic()
+        ws_connected = self._ws.is_connected
+        wake_edge = ws_connected and not self._ws_was_connected
+        self._ws_was_connected = ws_connected
+        if wake_edge:
+            self._st_last_poll = now
+            return True
+        if self._state == MediaPlayerState.ON:
+            interval = self._st_poll_on_interval
+        else:
+            interval = ST_POLL_OFF_INTERVAL
+        if now - self._st_last_poll >= interval:
+            self._st_last_poll = now
+            return True
+        return False
+
     async def _async_st_update(self, **kwargs) -> bool | None:
         """Update SmartThings state of device."""
         try:
@@ -1924,9 +2007,11 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         if self._auth_method == AUTH_METHOD_OAUTH:
             await self._async_refresh_oauth_token()
 
-        # Required to get source and media title
+        # Required to get source and media title. SmartThings is the fallback
+        # data source (cloud-only fields), throttled and gated on local power;
+        # skip the cloud call entirely on cycles where the throttle says so.
         st_error: bool | None = None
-        if self._st:
+        if self._st and self._should_poll_st():
             if (st_update := await self._async_st_update()) is not None:
                 st_error = not st_update
 
@@ -2228,6 +2313,27 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             self._local_image_url.get_image_url, media_title, logo_file
         )
 
+    def _speaker_output_is_internal(self) -> bool | None:
+        """Return whether the TV's speaker output is its internal speakers.
+
+        Read from the Speaker Select entity's published state (IP Control or
+        SmartThings variant — whichever this entry created). Returns None when
+        unknown (no such entity, or it is unavailable), so callers keep the
+        default behaviour instead of guessing.
+        """
+        registry = er.async_get(self.hass)
+        for entity in registry.entities.get_entries_for_config_entry_id(self._entry_id):
+            if entity.domain != "select" or not (
+                entity.unique_id.endswith("_ip_control_speaker_select")
+                or entity.unique_id.endswith("_st_media_output")
+            ):
+                continue
+            state = self.hass.states.get(entity.entity_id)
+            if state is None or state.state in ("unavailable", "unknown"):
+                return None
+            return "internal" in state.state.lower()
+        return None
+
     @property
     def supported_features(self) -> int:
         """Flag media player features that are supported."""
@@ -2236,6 +2342,14 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             features |= MediaPlayerEntityFeature.BROWSE_MEDIA
         if self._st:
             features |= MediaPlayerEntityFeature.SELECT_SOUND_MODE
+        # Absolute volume (the slider) only targets the TV's internal volume:
+        # with an external output (HDMI-eARC receiver, optical, BT soundbar)
+        # UPnP/SmartThings setvolume is a no-op, so drop VOLUME_SET to hide the
+        # dead slider. VOLUME_STEP and VOLUME_MUTE are KEPT: the TV relays the
+        # up/down/mute keys to the external device over CEC/ARC (confirmed by a
+        # user with an eARC AVR), and the same relay applies to BT soundbars.
+        if self._speaker_output_is_internal() is False:
+            features &= ~MediaPlayerEntityFeature.VOLUME_SET
         return features
 
     def _smartthings_reports_art(self) -> bool:
@@ -2678,6 +2792,18 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         if self._state != MediaPlayerState.ON:
             return
         if self.volume_level is None:
+            return
+        # Absolute volume only reaches the TV's internal speakers; with an
+        # external output the command is silently ignored by the TV. Warn
+        # (rather than raise, to keep legacy automations from erroring) and
+        # skip the pointless call. Use volume_up/down instead — the TV relays
+        # those to the external device over CEC/ARC.
+        if self._speaker_output_is_internal() is False:
+            self._log.warning(
+                "volume_set ignored: the TV's speaker output is external "
+                "(receiver/soundbar) and absolute volume only targets the "
+                "internal speakers — use volume_up/volume_down instead"
+            )
             return
         if self._st and self._setvolumebyst:
             await self._st.async_send_command("setvolume", int(volume * 100))

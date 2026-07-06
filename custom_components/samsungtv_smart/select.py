@@ -86,11 +86,16 @@ async def async_setup_entry(
             [
                 SamsungTVIPControlColorToneSelect(
                     hass, entry, host, device_name, device_unique_id
-                )
+                ),
+                SamsungTVIPControlSpeakerSelect(
+                    hass, entry, host, device_name, device_unique_id
+                ),
             ],
             True,
         )
-        _LOGGER.debug("IP Control color tone select created for %s", device_name)
+        _LOGGER.debug(
+            "IP Control color tone + speaker selects created for %s", device_name
+        )
 
     session = async_get_clientsession(hass)
 
@@ -152,6 +157,22 @@ async def async_setup_entry(
         )
         entities.append(picture_mode_select)
         _LOGGER.debug("Picture Mode select entity created for %s", device_name)
+        # Speaker output via SmartThings (samsungvd.mediaOutput) — cloud
+        # fallback only: when IP Control is paired the local select above
+        # already covers it (with richer options, e.g. eARC receivers).
+        if not _ip_control_active(entry):
+            entities.append(
+                SamsungTVSTMediaOutputSelect(
+                    hass=hass,
+                    entry=entry,
+                    device_name=device_name,
+                    device_unique_id=device_unique_id,
+                    api_key=api_key,
+                    device_id=device_id,
+                    session=session,
+                )
+            )
+            _LOGGER.debug("SmartThings media output select created for %s", device_name)
     else:
         picture_mode_select = None
         _LOGGER.debug(
@@ -582,6 +603,371 @@ class SamsungTVIPControlColorToneSelect(SelectEntity):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Speaker output select — IP Control primary, SmartThings fallback
+# ══════════════════════════════════════════════════════════════════════════
+
+# speakerSelectControl public targets that are directly selectable (verified on
+# Frame 2024/2025). "External" is only ever REPORTED by the getter; selecting a
+# specific external device goes through externalSpeakerControl with the
+# name/id discovered from its getter.
+_SPEAKER_BASE_OPTIONS = ("Internal", "AudioOut/Optical")
+
+
+class SamsungTVIPControlSpeakerSelect(SelectEntity):
+    """Speaker output select via IP Control (local).
+
+    Options are the two fixed public targets plus every external audio device
+    the TV currently lists (e.g. an HDMI-eARC receiver) — discovered live via
+    ``externalSpeakerControl``, so the receiver only appears while reachable.
+    This is richer than SmartThings, whose app only offers internal/optical.
+    """
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:speaker"
+    _attr_should_poll = True
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        host: str,
+        device_name: str,
+        device_unique_id: str,
+    ) -> None:
+        """Initialize the IP Control speaker output select."""
+        self.hass = hass
+        self._entry_id = entry.entry_id
+        self._host = host
+        self._device_name = device_name
+        self._device_unique_id = device_unique_id
+        self._ip_control: SamsungIPControl | None = None
+        self._ip_control_token: str | None = None
+        self._attr_unique_id = f"{device_unique_id}_ip_control_speaker_select"
+        self._attr_name = "Speaker Select"
+        self._attr_options = list(_SPEAKER_BASE_OPTIONS)
+        self._attr_current_option: str | None = None
+        self._attr_available = False
+        # deviceName -> deviceId of the external speakers currently listed.
+        self._external_devices: dict[str, str] = {}
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Link this entity to the TV device."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._device_unique_id)},
+            name=self._device_name,
+        )
+
+    @property
+    def available(self) -> bool:
+        """Available only while IP Control is paired, enabled, and reachable."""
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        return bool(entry and _ip_control_active(entry) and self._attr_available)
+
+    def _device_title(self) -> str:
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        return entry.title if entry else (self._device_name or "this Samsung TV")
+
+    def _get_ip_control(self) -> SamsungIPControl | None:
+        """Return a live IP Control client if paired AND enabled."""
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None or not _ip_control_active(entry):
+            self._ip_control = None
+            self._ip_control_token = None
+            return None
+        token = entry.data.get(CONF_IP_CONTROL_TOKEN)
+        if self._ip_control is None or self._ip_control_token != token:
+            self._ip_control = SamsungIPControl(self.hass, self._host, token=token)
+            self._ip_control_token = token
+        return self._ip_control
+
+    def _tv_normal_viewing(self) -> bool:
+        """True when the TV is on for normal viewing (not off, not Art Mode).
+
+        The speaker methods answer -32601 while the panel displays Art (same
+        firmware ambiguity as the picture calibration methods), so only poll —
+        and only allow switching — during normal viewing. Field-observed: 50
+        pointless -32601 reads per art session before this gate.
+        """
+        registry = er.async_get(self.hass)
+        for entity in registry.entities.get_entries_for_config_entry_id(self._entry_id):
+            if entity.domain != "media_player":
+                continue
+            state = self.hass.states.get(entity.entity_id)
+            if state is None or state.state in (STATE_OFF, "unavailable", "unknown"):
+                return False
+            return state.attributes.get("art_mode_status") != "on"
+        return False
+
+    def _rebuild_options(self) -> None:
+        """Options = fixed public targets + currently listed external devices."""
+        options = list(_SPEAKER_BASE_OPTIONS)
+        options.extend(self._external_devices)
+        # Keep a plain "External" entry only when the TV reports External but
+        # no device is listed (so the current option always exists in options).
+        if self._attr_current_option == "External" and not self._external_devices:
+            options.append("External")
+        self._attr_options = options
+
+    async def async_select_option(self, option: str) -> None:
+        """Switch the speaker output through IP Control."""
+        # Guardrail: the speaker methods answer -32601 while the TV is off or
+        # displaying Art — don't even hit the TV, give a clear message.
+        if not self._tv_normal_viewing():
+            raise HomeAssistantError(
+                "Cannot change the speaker output: the TV must be on and out "
+                "of Art Mode."
+            )
+        client = self._get_ip_control()
+        if client is None:
+            raise HomeAssistantError(
+                "IP Control is not paired or is disabled for this TV."
+            )
+
+        try:
+            if option in self._external_devices:
+                await client.async_set_external_speaker(
+                    option, self._external_devices[option]
+                )
+            elif option in _SPEAKER_BASE_OPTIONS:
+                await client.async_set_speaker_select(option)
+            else:
+                # The bare "External" placeholder (device list empty) — there
+                # is no target to switch to.
+                raise HomeAssistantError(
+                    "No external audio device is currently available — turn "
+                    "the receiver/soundbar on and try again."
+                )
+            self._attr_current_option = option
+            self._attr_available = True
+        except SamsungIPControlAuthError as ex:
+            self._mark_unavailable()
+            notify_token_problem(
+                self.hass, self._entry_id, METHOD_IP_CONTROL, self._device_title()
+            )
+            raise HomeAssistantError(
+                f"IP Control token rejected while setting speaker output: {ex}"
+            ) from ex
+        except SamsungIPControlModeLockedError as ex:
+            # Reversible TV-side condition (e.g. the external device just went
+            # away) — keep the entity available for the next attempt.
+            raise HomeAssistantError(
+                f"Speaker output can't be changed right now: {ex}"
+            ) from ex
+        except SamsungIPControlError as ex:
+            raise HomeAssistantError(
+                f"Failed to set speaker output via IP Control: {ex}"
+            ) from ex
+
+        clear_token_problem(self.hass, self._entry_id, METHOD_IP_CONTROL)
+        self.async_write_ha_state()
+
+    async def async_update(self) -> None:
+        """Read the current speaker output and the external device list."""
+        if not self._tv_normal_viewing():
+            self._mark_unavailable()
+            return
+        client = self._get_ip_control()
+        if client is None:
+            self._mark_unavailable()
+            return
+
+        try:
+            current = await client.async_get_speaker_select()
+            self._external_devices = {
+                dev["deviceName"]: dev["deviceId"]
+                for dev in await client.async_get_external_speakers()
+            }
+        except SamsungIPControlAuthError as ex:
+            _LOGGER.warning(
+                "IP Control speaker read for %s: token rejected (%s) — "
+                "re-pair via the integration options",
+                self._host,
+                ex,
+            )
+            self._mark_unavailable()
+            notify_token_problem(
+                self.hass, self._entry_id, METHOD_IP_CONTROL, self._device_title()
+            )
+            return
+        except SamsungIPControlError as ex:
+            _LOGGER.debug(
+                "Could not refresh IP Control speaker output for %s: %s",
+                self._host,
+                ex,
+            )
+            self._mark_unavailable()
+            return
+
+        # "External" -> show the actual device when exactly one is listed.
+        if current == "External" and len(self._external_devices) == 1:
+            current = next(iter(self._external_devices))
+        self._attr_current_option = current
+        self._rebuild_options()
+        self._attr_available = True
+        clear_token_problem(self.hass, self._entry_id, METHOD_IP_CONTROL)
+
+    def _mark_unavailable(self) -> None:
+        """Expose no speaker output until a live IP Control read succeeds."""
+        self._attr_available = False
+        self._attr_current_option = None
+
+
+class SamsungTVSTMediaOutputSelect(SelectEntity):
+    """Speaker output select via SmartThings ``samsungvd.mediaOutput``.
+
+    Cloud fallback for TVs without IP Control paired. Options/current value
+    come from the capability's ``supportedOutputList`` / ``currentOutput``
+    attributes (the TV populates them on demand — the entity stays unavailable
+    until they appear); switching sends the ``setOutput`` command.
+    """
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:speaker"
+    _attr_should_poll = True
+
+    _CAPABILITY = "samsungvd.mediaOutput"
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        device_name: str,
+        device_unique_id: str,
+        api_key: str,
+        device_id: str,
+        session,
+    ) -> None:
+        """Initialize the SmartThings media output select."""
+        self.hass = hass
+        self._entry = entry
+        self._device_name = device_name
+        self._device_unique_id = device_unique_id
+        self._api_key = api_key
+        self._device_id = device_id
+        self._session = session
+        self._attr_unique_id = f"{device_unique_id}_st_media_output"
+        self._attr_name = "Speaker Select"
+        self._attr_options: list[str] = []
+        self._attr_current_option: str | None = None
+        # Cooldown: skip polls briefly after a change (cloud lags behind).
+        self._skip_poll_until: float = 0
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Link this entity to the TV device."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._device_unique_id)},
+            name=self._device_name,
+        )
+
+    @property
+    def available(self) -> bool:
+        """Only available once the TV has populated the output list."""
+        return len(self._attr_options) > 0
+
+    def _get_api_key(self) -> str:
+        """Get current API key, refreshing from entry data for OAuth."""
+        entry = self.hass.config_entries.async_get_entry(self._entry.entry_id)
+        if entry:
+            oauth_token = entry.data.get(CONF_OAUTH_TOKEN)
+            if isinstance(oauth_token, dict):
+                new_key = oauth_token.get("access_token")
+                if new_key:
+                    self._api_key = new_key
+                    return new_key
+            api_key = entry.data.get(CONF_API_KEY)
+            if api_key:
+                self._api_key = api_key
+        return self._api_key
+
+    def _tv_powered_off(self) -> bool:
+        """True when the linked TV is off (not showing Art) — skip ST poll."""
+        registry = er.async_get(self.hass)
+        for entity in registry.entities.get_entries_for_config_entry_id(
+            self._entry.entry_id
+        ):
+            if entity.domain != "media_player":
+                continue
+            state = self.hass.states.get(entity.entity_id)
+            if state is None:
+                return False
+            if state.state not in (STATE_OFF, "unavailable"):
+                return False
+            return state.attributes.get("art_mode_status") != "on"
+        return False
+
+    async def async_update(self) -> None:
+        """Poll current output + supported list from SmartThings."""
+        if time.time() < self._skip_poll_until:
+            return
+        if self._tv_powered_off():
+            return
+        url = (
+            f"{_API_DEVICES}/{self._device_id}"
+            f"/components/main/capabilities/{self._CAPABILITY}/status"
+        )
+        try:
+            async with self._session.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {self._get_api_key()}",
+                    "Accept": "application/json",
+                },
+            ) as resp:
+                if resp.status != 200:
+                    return
+                data = await resp.json()
+        except Exception as ex:  # pylint: disable=broad-except
+            _LOGGER.debug("Error fetching media output status: %s", ex)
+            return
+
+        supported = data.get("supportedOutputList", {}).get("value")
+        if isinstance(supported, list) and supported:
+            self._attr_options = [str(item) for item in supported]
+        current = data.get("currentOutput", {}).get("value")
+        if current:
+            self._attr_current_option = str(current)
+
+    async def async_select_option(self, option: str) -> None:
+        """Switch the speaker output through SmartThings setOutput."""
+        url = f"{_API_DEVICES}/{self._device_id}/commands"
+        body = {
+            "commands": [
+                {
+                    "component": "main",
+                    "capability": self._CAPABILITY,
+                    "command": "setOutput",
+                    "arguments": [option],
+                }
+            ]
+        }
+        try:
+            async with self._session.post(
+                url,
+                json=body,
+                headers={
+                    "Authorization": f"Bearer {self._get_api_key()}",
+                    "Accept": "application/json",
+                },
+            ) as resp:
+                if resp.status != 200:
+                    raise HomeAssistantError(
+                        f"SmartThings rejected setOutput (status {resp.status})."
+                    )
+        except HomeAssistantError:
+            raise
+        except Exception as ex:  # pylint: disable=broad-except
+            raise HomeAssistantError(
+                f"Failed to set speaker output via SmartThings: {ex}"
+            ) from ex
+        # Optimistic + short poll cooldown: the cloud lags behind the panel.
+        self._attr_current_option = option
+        self._skip_poll_until = time.time() + 10
+        self.async_write_ha_state()
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Matte select entities (Frame TV only)
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -604,7 +990,10 @@ class SamsungTVMatteSelectBase(SelectEntity):
         self._device_unique_id = device_unique_id
         self._attr_options: list[str] = []
         self._attr_current_option: str | None = None
-        self._attr_should_poll = False
+        # Poll (default 30s): async_update reads the Frame Art sensor's
+        # already-published current_matte_id — no extra TV traffic — so a matte
+        # changed on the TV or through the sibling select syncs by itself.
+        self._attr_should_poll = True
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -632,6 +1021,56 @@ class SamsungTVMatteSelectBase(SelectEntity):
                 self.async_write_ha_state()
         except Exception as ex:
             _LOGGER.debug("Could not refresh current matte: %s", ex)
+
+    async def async_update(self) -> None:
+        """Sync from the Frame Art sensor's published matte (no TV call).
+
+        The Frame Art coordinator already polls get_current_artwork every few
+        seconds and publishes ``current_matte_id`` on its sensor; reading that
+        state keeps both matte selects in step with TV-side changes without
+        issuing any extra request.
+        """
+        state = self._frame_art_sensor_state()
+        if state is None or state.state in ("unavailable", "unknown"):
+            return
+        matte_id = state.attributes.get("current_matte_id")
+        if isinstance(matte_id, str) and matte_id:
+            self._parse_matte_id(matte_id)
+
+    def _frame_art_sensor_state(self):
+        """Return the Frame Art sensor's HA state object, or None."""
+        registry = er.async_get(self.hass)
+        sensor_id = registry.async_get_entity_id(
+            "sensor", DOMAIN, f"{self._entry.entry_id}_frame_art"
+        )
+        return self.hass.states.get(sensor_id) if sensor_id else None
+
+    def _art_is_displaying(self) -> bool:
+        """True when the panel is actively displaying Art Mode.
+
+        The art WebSocket's own cache can be None (invalidated); the Frame Art
+        sensor's state layers every source (IP Control, WS, SmartThings), so
+        trust either signal saying "on".
+        """
+        if self._art_api.art_mode:
+            return True
+        state = self._frame_art_sensor_state()
+        return bool(state and state.state == "on")
+
+    async def _apply_matte(self, content_id: str, new_matte_id: str) -> None:
+        """Send the matte to the TV and force the panel to redisplay it.
+
+        ``change_matte`` alone updates the stored matte but (on 2024 Frames at
+        least) the panel keeps showing the old frame until the artwork is
+        re-selected — so when Art Mode is actively displaying, re-select the
+        same content with ``show=True`` after a short settle delay. When art
+        is NOT being displayed, skip the re-select: ``show=True`` could wake
+        the panel into Art Mode as a side effect.
+        """
+        await self._art_api.change_matte(content_id=content_id, matte_id=new_matte_id)
+        if self._art_is_displaying():
+            await asyncio.sleep(1)
+            await self._art_api.select_image(content_id, show=True)
 
     def _parse_matte_id(self, matte_id: str) -> None:
         """To be implemented by subclass."""
@@ -668,11 +1107,14 @@ class SamsungTVMatteTypeSelect(SamsungTVMatteSelectBase):
         try:
             current = await self._art_api.get_current()
             if not current:
-                _LOGGER.warning("Cannot change matte type: no current artwork")
-                return
+                raise HomeAssistantError(
+                    "Cannot change the matte: no current artwork (is the TV on?)."
+                )
 
             content_id: str = current.get("content_id", "")
-            existing_matte: str = current.get("matte_id", "none_polar")
+            # The TV may report the matte upper-cased (SHADOWBOX_POLAR);
+            # normalize so the composed id is always lower-case.
+            existing_matte: str = (current.get("matte_id") or "none_polar").lower()
 
             if "_" in existing_matte:
                 color_part = existing_matte.rsplit("_", 1)[1]
@@ -681,17 +1123,16 @@ class SamsungTVMatteTypeSelect(SamsungTVMatteSelectBase):
 
             new_matte_id = f"{option}_{color_part}" if option != "none" else "none"
 
-            await self._art_api.change_matte(
-                content_id=content_id, matte_id=new_matte_id
-            )
+            await self._apply_matte(content_id, new_matte_id)
             self._attr_current_option = option
             self.async_write_ha_state()
             _LOGGER.debug(
                 "Matte type changed to %s (full id: %s)", option, new_matte_id
             )
-
+        except HomeAssistantError:
+            raise
         except Exception as ex:
-            _LOGGER.error("Error changing matte type: %s", ex)
+            raise HomeAssistantError(f"Error changing matte type: {ex}") from ex
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -725,30 +1166,38 @@ class SamsungTVMatteColorSelect(SamsungTVMatteSelectBase):
         try:
             current = await self._art_api.get_current()
             if not current:
-                _LOGGER.warning("Cannot change matte color: no current artwork")
-                return
+                raise HomeAssistantError(
+                    "Cannot change the matte: no current artwork (is the TV on?)."
+                )
 
             content_id: str = current.get("content_id", "")
-            existing_matte: str = current.get("matte_id", "none")
+            existing_matte: str = (current.get("matte_id") or "none").lower()
 
             if "_" in existing_matte:
                 type_part = existing_matte.rsplit("_", 1)[0]
             else:
-                type_part = existing_matte or "shadowbox"
+                type_part = existing_matte
+
+            if type_part in ("", "none"):
+                # A color without a frame is meaningless: "none_<color>" is not
+                # a valid matte id. Tell the user instead of sending garbage.
+                raise HomeAssistantError(
+                    "Select a matte type first — the color only applies when a "
+                    "frame (matte type) is set."
+                )
 
             new_matte_id = f"{type_part}_{option}"
 
-            await self._art_api.change_matte(
-                content_id=content_id, matte_id=new_matte_id
-            )
+            await self._apply_matte(content_id, new_matte_id)
             self._attr_current_option = option
             self.async_write_ha_state()
             _LOGGER.debug(
                 "Matte color changed to %s (full id: %s)", option, new_matte_id
             )
-
+        except HomeAssistantError:
+            raise
         except Exception as ex:
-            _LOGGER.error("Error changing matte color: %s", ex)
+            raise HomeAssistantError(f"Error changing matte color: {ex}") from ex
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -944,6 +1393,11 @@ class SamsungTVPictureModeSelect(SelectEntity):
         self._capability: str | None = None
         # Cooldown: skip polls briefly after setting a mode
         self._skip_poll_until: float = 0
+        # After a set, remember the desired mode and hold it until the cloud
+        # confirms it — SmartThings lags ~30-45s, so a plain short skip lets a
+        # stale "old mode" poll revert the selection (issue #116).
+        self._pending_mode: str | None = None
+        self._pending_until: float = 0
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -1082,10 +1536,14 @@ class SamsungTVPictureModeSelect(SelectEntity):
 
             self._attr_current_option = option
             self.async_write_ha_state()
-            # Skip polls for 5 seconds to let the TV apply the change;
-            # without this, the next async_update() reads the OLD mode
-            # from the TV (which hasn't switched yet) and overwrites ours.
-            self._skip_poll_until = time.time() + 5
+            # Short blind skip to let the TV apply the change, then hold the
+            # desired value until SmartThings actually reports it (cloud lag
+            # can be 30-45s). Without the hold, a poll in between reads the OLD
+            # mode and reverts the selection (issue #116).
+            now = time.time()
+            self._skip_poll_until = now + 5
+            self._pending_mode = option
+            self._pending_until = now + 60
 
         except Exception as ex:
             _LOGGER.error("Error setting picture mode to %s: %s", option, ex)
@@ -1102,6 +1560,25 @@ class SamsungTVPictureModeSelect(SelectEntity):
                 return entity.entity_id
         return None
 
+    def _tv_powered_off(self) -> bool:
+        """True when the linked TV is off (and not showing Art) — skip ST poll.
+
+        The picture mode cannot change while the TV is off, so there's nothing
+        to fetch from the SmartThings cloud; polling anyway just burns API
+        calls. Read the media_player's already-published HA state instead of
+        issuing our own request (mirrors the art selects / sensors).
+        """
+        mp_id = self._get_media_player_entity_id()
+        if not mp_id:
+            return False  # unknown → don't suppress
+        state = self.hass.states.get(mp_id)
+        if state is None:
+            return False
+        if state.state not in (STATE_OFF, "unavailable"):
+            return False  # TV is on
+        # A Frame showing Art also reports "off" — keep polling in that case.
+        return state.attributes.get("art_mode_status") != "on"
+
     async def async_update(self) -> None:
         """Poll current picture mode from SmartThings."""
         if not self._capability:
@@ -1109,6 +1586,10 @@ class SamsungTVPictureModeSelect(SelectEntity):
 
         # Skip polling briefly after a mode change to let the TV apply it
         if time.time() < self._skip_poll_until:
+            return
+
+        # Local WS is primary: don't hit the ST cloud while the TV is off.
+        if self._tv_powered_off():
             return
 
         data = await self._rest_get_capability_status(self._capability)
@@ -1136,6 +1617,28 @@ class SamsungTVPictureModeSelect(SelectEntity):
             self._attr_options = [*self._attr_options, new_mode]
             if raw_mode != new_mode:
                 self._mode_map[new_mode] = raw_mode
+
+        # Hold the just-set mode until the cloud confirms it. While a set is
+        # pending: if the cloud now reports our desired mode, it's confirmed;
+        # if it still reports the old value (cloud lag), keep our selection
+        # instead of reverting. After the grace window we accept whatever the
+        # cloud says (covers a genuine change made on the TV itself).
+        if self._pending_mode is not None:
+            if new_mode == self._pending_mode:
+                self._pending_mode = None
+                self._pending_until = 0
+            elif time.time() < self._pending_until:
+                _LOGGER.debug(
+                    "Picture mode: cloud still reports %s, holding pending %s",
+                    new_mode,
+                    self._pending_mode,
+                )
+                return
+            else:
+                # Grace expired without confirmation — give up on the pending
+                # value and accept the cloud's reading below.
+                self._pending_mode = None
+                self._pending_until = 0
 
         if new_mode != self._attr_current_option:
             _LOGGER.debug(

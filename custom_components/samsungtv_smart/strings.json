@@ -193,7 +193,8 @@
           "ext_power_entity": "External Power Entity",
           "use_mute_check": "Use Mute State for Power Detection",
           "dump_apps": "Debug: Dump Applications",
-          "toggle_art_mode": "Toggle Art Mode on Power"
+          "toggle_art_mode": "Toggle Art Mode on Power",
+          "st_poll_on_interval": "SmartThings poll interval when on (seconds)"
         }
       },
       "save_exit": {

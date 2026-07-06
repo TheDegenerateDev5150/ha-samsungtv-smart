@@ -113,10 +113,11 @@ when calling each method with only the `AccessToken` (no extra params):
 | `pictureModeControl` | ❌ | `pictureMode` | — | Read-only via `getTVStates.pictureMode` on Frame 2024. |
 | `pictureSizeControl` | ❌ | `pictureSize` | — | Read-only via `getTVStates.pictureSize`. |
 | `soundModeControl` | ❌ | `soundMode` | — | Read-only via `getTVStates.soundMode`. |
-| `speakerSelectControl` | ❌ | `speakerSelect` | — | Read-only via `getTVStates.speakerSelect`. |
-| `contrastControl` / `brightnessControl` / `sharpnessControl` / `colorControl` / `tintControl` | ❌ | numeric value | — | Read-only via `getVideoStates`. |
+| `speakerSelectControl` | ✅ | `speakerSelect` | `speakerSelect` | **Writable** (earlier "read-only" was wrong). Get with no params → capitalized value (`Internal`/`External`), unlike lowercase `getTVStates.speakerSelect`. Set accepts `Internal`, `AudioOut/Optical`; bare `External` is rejected — use `externalSpeakerControl`. |
+| `externalSpeakerControl` | ✅ | `deviceName` + `deviceId` | JSON **array** of `{deviceName, deviceId}` | Get with no params lists reachable external audio devices (e.g. `[{"deviceName":"CINEMA 60(HDMI-eARC)","deviceId":"RCV-1"}]`; `{}` when the receiver is off). Set with a listed device switches output to it; unknown/unreachable device → `-32002`. |
+| `contrastControl` / `brightnessControl` / `sharpnessControl` / `colorControl` / `tintControl` | ✅ | `<field>`: int | `<field>` | **Writable** (earlier "read-only" was wrong). Get with no params; set with `{"<field>": n}`. Ranges (Frame 2024/2025): contrast 0–50, color 0–50, sharpness 0–20, brightness −5…5, tint −15…15. Write is picture-mode gated → `-32002` in Dynamic/HDR-dynamic; Standard/Movie/Filmmaker accept it. |
 | `directChannelControl` | ❌ | `atvDtv` + `airCable` + `channelNum` | — | Not implemented on Frame 2024 (Frames have no tuner anyway). |
-| `USBSourceControl` / `RVUSourceControl` / `externalSpeakerControl` / `ambientModeControl` | ❌ | — | — | Not implemented on Frame 2024. May exist on other models. |
+| `USBSourceControl` / `RVUSourceControl` / `ambientModeControl` | ❌ | — | — | Not implemented on Frame 2024. May exist on other models. |
 
 ### RemoteKey values (`remoteKeyControl`)
 

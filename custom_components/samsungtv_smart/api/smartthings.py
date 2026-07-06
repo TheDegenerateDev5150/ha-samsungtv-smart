@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from datetime import timedelta
 from enum import Enum
@@ -38,6 +39,13 @@ class _STLoggerAdapter(logging.LoggerAdapter):
 # SmartThings REST API
 API_BASEURL = "https://api.smartthings.com/v1"
 API_DEVICES = f"{API_BASEURL}/devices"
+
+# Seconds to wait after a setPictureMode + refresh before reading the mode
+# back to check the TV actually applied it. Long enough for the refresh to
+# propagate a fresh panel read to the cloud in the common case, short enough
+# that a wrongly-unconfirmed retry (a harmless duplicate send of the same
+# mode via the other capability) doesn't feel laggy.
+PICTURE_MODE_VERIFY_DELAY = 5
 
 # Device types
 DEVICE_TYPE_OCF = "OCF"
@@ -106,9 +114,27 @@ class SmartThingsTV:
         # (varies by model: some use custom.picturemode, others samsungvd.pictureMode)
         self._picture_mode_capability = None
         self._sound_mode_capability = None
+        # Capability VERIFIED to actually actuate setPictureMode on this panel
+        # (learned by the verify-and-fallback in async_set_picture_mode; some
+        # TVs answer 200 COMPLETED on one capability without applying it).
+        # Seeded from persisted entry data at startup; tried first on every
+        # change, with the other capability kept as fallback.
+        self._verified_picture_mode_capability: str | None = None
+        # Optional callback (set by the media_player) invoked with the verified
+        # capability name so it can be persisted across HA restarts.
+        self.picture_mode_capability_persist_cb: Callable[[str], None] | None = None
 
         self._is_forced_val = False
         self._forced_count = 0
+
+    def set_verified_picture_mode_capability(self, capability: str | None) -> None:
+        """Seed the verified setPictureMode capability (from persisted data)."""
+        if capability in ("custom.picturemode", "samsungvd.pictureMode"):
+            self._verified_picture_mode_capability = capability
+        elif capability is not None:
+            self._log.debug(
+                "Ignoring unknown persisted picture mode capability: %s", capability
+            )
 
     def _get_api_key(self) -> str:
         """Get API key used to connect to SmartThings."""
@@ -912,6 +938,14 @@ class SmartThingsTV:
         Tries both capability variants: some Samsung TVs accept commands
         on custom.picturemode but not samsungvd.pictureMode, or vice versa.
         We try the detected capability first, then fall back to the other.
+
+        A successful HTTP send is NOT enough to stop: some TVs answer
+        ``200 COMPLETED`` and then silently drop the command — observed with
+        ``custom.picturemode`` under self-published OAuth app clients (the
+        official app / a PAT actuate the same panel fine, issue #116). So
+        after each accepted send the mode is read back, and if the TV did
+        not apply it the other capability is tried too. A redundant send of
+        the same target mode is harmless.
         """
         if self._state != STStatus.STATE_ON:
             self._log.debug(
@@ -929,17 +963,24 @@ class SmartThingsTV:
                 self._picture_mode_list,
             )
 
-        # Try detected capability first, fallback to the other.
-        # custom.picturemode returns 422 on some TVs (Frame 2024) which could
-        # interfere with the session, so we use the detected capability first.
+        # Order of attempts: the capability VERIFIED to actuate this panel (if
+        # already learned, possibly on a previous HA run) comes first, then the
+        # detected capability, then the other one — deduplicated, both always
+        # reachable as fallback. custom.picturemode returns 422 on some TVs
+        # (Frame 2024) which could interfere with the session, so the detected
+        # capability stays ahead of the blind alternative.
         primary = self._picture_mode_capability or "samsungvd.pictureMode"
         fallback = (
             "custom.picturemode"
             if primary == "samsungvd.pictureMode"
             else "samsungvd.pictureMode"
         )
-        capabilities_to_try = [primary, fallback]
+        capabilities_to_try = []
+        for capability in (self._verified_picture_mode_capability, primary, fallback):
+            if capability and capability not in capabilities_to_try:
+                capabilities_to_try.append(capability)
 
+        any_sent = False
         for capability in capabilities_to_try:
             try:
                 await self._send_rest_command(
@@ -947,29 +988,123 @@ class SmartThingsTV:
                     command="setPictureMode",
                     arguments=[mode_id],
                 )
-                self._log.debug(
-                    "Picture mode '%s' (id: %s) sent via %s",
-                    mode,
-                    mode_id,
-                    capability,
-                )
-                self._picture_mode = mode
-
-                # Send a refresh command to force the TV to update its
-                # cached state in SmartThings cloud. Without this, the API
-                # returns stale values (e.g. always "Standard") until the
-                # SmartThings app is opened. Samsung confirmed this behavior
-                # and recommended the refresh workaround.
-                await self._async_refresh_device_status()
-                return
             except Exception as err:
                 self._log.debug(
                     "setPictureMode via %s failed: %s, trying fallback",
                     capability,
                     err,
                 )
+                continue
+            self._log.debug(
+                "Picture mode '%s' (id: %s) sent via %s",
+                mode,
+                mode_id,
+                capability,
+            )
+            any_sent = True
+            self._picture_mode = mode
 
-        self._log.error("Failed to set picture mode '%s' via both capabilities", mode)
+            # Send a refresh command to force the TV to update its
+            # cached state in SmartThings cloud. Without this, the API
+            # returns stale values (e.g. always "Standard") until the
+            # SmartThings app is opened. Samsung confirmed this behavior
+            # and recommended the refresh workaround.
+            await self._async_refresh_device_status()
+
+            # Read the mode back: COMPLETED does not guarantee the panel
+            # applied it (see docstring). None = could not verify — assume
+            # applied rather than blind-firing the other capability.
+            applied = await self._async_verify_picture_mode(mode_id)
+            if applied:
+                # Confirmed on the panel: remember this capability so later
+                # changes try it first (and persist it across HA restarts).
+                self._remember_picture_mode_capability(capability)
+                return
+            if applied is None:
+                return
+            self._log.warning(
+                "setPictureMode via %s was accepted (COMPLETED) but the TV "
+                "still reports another mode — trying the other capability",
+                capability,
+            )
+
+        if not any_sent:
+            self._log.error(
+                "Failed to set picture mode '%s' via both capabilities", mode
+            )
+        else:
+            # Both accepted-but-unapplied (or the second one unverifiable).
+            # Keep the optimistic value: the select entity holds the pending
+            # mode and reconciles with the cloud on its own grace window.
+            self._log.warning(
+                "Picture mode '%s' could not be confirmed on the TV via any "
+                "capability; if it did not change, the cloud command channel "
+                "likely cannot actuate this panel (see issue #116)",
+                mode,
+            )
+
+    def _remember_picture_mode_capability(self, capability: str) -> None:
+        """Memorize (and persist) the capability confirmed to actuate the panel.
+
+        Only called after a VERIFIED apply — never on an unverifiable send — so
+        a flaky cloud read can't memorize the wrong capability. If the panel's
+        behaviour ever changes (e.g. a firmware update), a later verified apply
+        through the other capability simply overwrites the memory.
+        """
+        if capability == self._verified_picture_mode_capability:
+            return
+        self._log.debug(
+            "Picture mode capability verified working: %s (was: %s) — memorizing",
+            capability,
+            self._verified_picture_mode_capability,
+        )
+        self._verified_picture_mode_capability = capability
+        if self.picture_mode_capability_persist_cb is not None:
+            try:
+                self.picture_mode_capability_persist_cb(capability)
+            except Exception as err:  # pylint: disable=broad-except
+                self._log.debug("Could not persist picture mode capability: %s", err)
+
+    async def _async_verify_picture_mode(self, mode_id: str) -> bool | None:
+        """Return whether the TV now reports ``mode_id``, None if unknown.
+
+        Waits a few seconds after the refresh command so the cloud has a
+        chance to re-read the panel, then GETs the capability status
+        directly. Returns None when the read fails — the caller must not
+        treat that as "not applied".
+        """
+        if not self._device_id or not self._session:
+            return None
+        await asyncio.sleep(PICTURE_MODE_VERIFY_DELAY)
+        capability = self._picture_mode_capability or "samsungvd.pictureMode"
+        url = (
+            f"{API_DEVICES}/{self._device_id}"
+            f"/components/main/capabilities/{capability}/status"
+        )
+        try:
+            async with self._session.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {self._get_api_key()}",
+                    "Accept": "application/json",
+                },
+            ) as resp:
+                if resp.status != 200:
+                    self._log.debug(
+                        "Picture mode verify read failed (status %s)", resp.status
+                    )
+                    return None
+                data = await resp.json()
+        except Exception as err:
+            self._log.debug("Picture mode verify read failed: %s", err)
+            return None
+        raw_mode = data.get("pictureMode", {}).get("value")
+        if not raw_mode:
+            return None
+        self._log.debug(
+            "Picture mode verify: TV reports '%s' (wanted '%s')", raw_mode, mode_id
+        )
+        return raw_mode == mode_id
 
     async def _async_refresh_device_status(self) -> None:
         """Send a 'refresh' command to force SmartThings to re-read TV state.

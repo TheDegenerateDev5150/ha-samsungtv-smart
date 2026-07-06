@@ -55,11 +55,14 @@ from .const import (
     CONF_IS_FRAME_TV,
     CONF_OAUTH_TOKEN,
     CONF_SLIDESHOW_API,
+    CONF_ST_POLL_ON_INTERVAL,
     CONF_WS_NAME,
     DATA_ART_API,
     DATA_CFG,
     DEFAULT_PORT,
+    DEFAULT_ST_POLL_ON_INTERVAL,
     DOMAIN,
+    ST_POLL_OFF_INTERVAL,
     WS_PREFIX,
 )
 from .token_notify import METHOD_IP_CONTROL, clear_token_problem, notify_token_problem
@@ -72,6 +75,86 @@ def _ip_control_active(entry: ConfigEntry) -> bool:
     return bool(entry.data.get(CONF_IP_CONTROL_TOKEN)) and entry.options.get(
         CONF_ENABLE_IP_CONTROL, True
     )
+
+
+def _st_poll_on_interval(entry: ConfigEntry) -> int:
+    """Configured SmartThings poll cadence (seconds) while the TV is ON."""
+    return entry.options.get(CONF_ST_POLL_ON_INTERVAL, DEFAULT_ST_POLL_ON_INTERVAL)
+
+
+def _tv_powered_off(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """True when the TV (media_player) is off and NOT showing Art Mode.
+
+    Used to skip SmartThings cloud polls while the TV is off — the local
+    WebSocket is the primary power source, so there is nothing to fetch from
+    the cloud during standby. A Frame displaying Art also reports state "off"
+    (HA convention: off + ``art_mode_status`` attribute), so keep polling in
+    that case: an art-displaying Frame still draws power and can change picture
+    settings. "unknown"/"unavailable" are NOT treated as off (WS still booting
+    or a transient media_player error) to avoid freezing sensors at startup.
+    """
+    from homeassistant.helpers import entity_registry as er
+
+    try:
+        ent_reg = er.async_get(hass)
+        for ent in ent_reg.entities.get_entries_for_config_entry_id(entry.entry_id):
+            if ent.domain != "media_player":
+                continue
+            state = hass.states.get(ent.entity_id)
+            if state is None:
+                return False
+            if state.state != "off":
+                return False
+            return state.attributes.get("art_mode_status") != "on"
+    except Exception:  # pylint: disable=broad-except
+        return False
+    return False
+
+
+def _tv_in_art_mode(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """True when the TV (media_player) is off but displaying Art Mode.
+
+    A Frame showing Art reports state "off" with ``art_mode_status == "on"``.
+    It still draws power, so power/energy stay worth polling — but only slowly,
+    since the draw barely changes. Callers use this to fall back to a fixed slow
+    cadence instead of the (possibly fast) "when on" interval.
+    """
+    from homeassistant.helpers import entity_registry as er
+
+    try:
+        ent_reg = er.async_get(hass)
+        for ent in ent_reg.entities.get_entries_for_config_entry_id(entry.entry_id):
+            if ent.domain != "media_player":
+                continue
+            state = hass.states.get(ent.entity_id)
+            if state is None:
+                return False
+            return (
+                state.state == "off" and state.attributes.get("art_mode_status") == "on"
+            )
+    except Exception:  # pylint: disable=broad-except
+        return False
+    return False
+
+
+def _st_child_gate(entity) -> bool:
+    """Return True if a per-child ST sensor (illuminance/brightness) may poll now.
+
+    Skips while the TV is off (the local WebSocket is the primary power source
+    and the child readings only feed art-brightness features, which don't apply
+    in standby) and throttles to the configured ST cadence so the child light
+    sensors stop polling every 15 s. ``entity`` must expose ``hass``, ``_entry``
+    and a mutable ``_st_last_poll`` float.
+    """
+    if _tv_powered_off(entity.hass, entity._entry):
+        return False
+    now = time.monotonic()
+    if now - getattr(entity, "_st_last_poll", 0.0) < _st_poll_on_interval(
+        entity._entry
+    ):
+        return False
+    entity._st_last_poll = now
+    return True
 
 
 # Update interval for the read-only IP Control state sensors. Picture/sound
@@ -97,9 +180,12 @@ class SamsungIPControlSensorDescription(SensorEntityDescription):
     source: str = "tv"
 
 
-# getTVStates / getVideoStates are READ-ONLY on consumer Frame TVs (the matching
-# setters return -32601 "Method not found"), so these are diagnostic sensors
-# only — setting these values must go through SmartThings / the WebSocket.
+# getTVStates fields exposed as diagnostic sensors. These particular fields
+# (inputSource, pictureMode, soundMode, pictureSize, speakerSelect, mute,
+# volume) mirror media_player / select state and are read-only over IP Control.
+# The getVideoStates fields (contrast/brightness/sharpness/color/tint) are NOT
+# here — they are settable `number` sliders (see number.py), written via their
+# <field>Control methods when the picture mode allows it.
 IP_CONTROL_STATE_SENSORS: tuple[SamsungIPControlSensorDescription, ...] = (
     # getTVStates
     SamsungIPControlSensorDescription(
@@ -130,13 +216,9 @@ IP_CONTROL_STATE_SENSORS: tuple[SamsungIPControlSensorDescription, ...] = (
         icon="mdi:aspect-ratio",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
-    SamsungIPControlSensorDescription(
-        key="speakerSelect",
-        source="tv",
-        name="Speaker Select",
-        icon="mdi:speaker",
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
+    # NOTE: speakerSelect is NOT exposed here — it is a settable `select`
+    # entity (SamsungTVIPControlSpeakerSelect / SamsungTVSTMediaOutputSelect in
+    # select.py), switched via speakerSelectControl / externalSpeakerControl.
     SamsungIPControlSensorDescription(
         key="mute",
         source="tv",
@@ -152,51 +234,21 @@ IP_CONTROL_STATE_SENSORS: tuple[SamsungIPControlSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
-    # getVideoStates
-    SamsungIPControlSensorDescription(
-        key="contrast",
-        source="video",
-        name="Contrast",
-        icon="mdi:contrast-box",
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    SamsungIPControlSensorDescription(
-        key="brightness",
-        source="video",
-        name="Brightness",
-        icon="mdi:brightness-6",
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    SamsungIPControlSensorDescription(
-        key="sharpness",
-        source="video",
-        name="Sharpness",
-        icon="mdi:blur",
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    SamsungIPControlSensorDescription(
-        key="color",
-        source="video",
-        name="Color",
-        icon="mdi:palette",
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    SamsungIPControlSensorDescription(
-        key="tint",
-        source="video",
-        name="Tint",
-        icon="mdi:invert-colors",
-        state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
+    # NOTE: the getVideoStates fields (contrast, brightness, sharpness, color,
+    # tint) are NOT exposed here as read-only sensors — they are settable
+    # `number` sliders in number.py (SamsungTVIPControlPictureNumber), written
+    # via their <field>Control methods when the picture mode allows it.
 )
 
-# Update interval for the Frame Art sensor (reduced for faster manual updates)
+# Default scan interval for the plain SmartThings child sensors
+# (illuminance / brightness — they self-throttle to the ST cadence anyway).
 SCAN_INTERVAL = timedelta(seconds=15)
+
+# The Frame Art coordinator polls the (cheap, local) art WebSocket for the
+# current artwork; keep it snappy so a manual/gallery art change shows up fast.
+# The heavier get_content_list call is throttled separately
+# (CONF_CONTENT_LIST_INTERVAL), so this short cadence stays cheap.
+FRAME_ART_SCAN_INTERVAL = timedelta(seconds=5)
 
 
 async def async_setup_entry(
@@ -218,6 +270,31 @@ async def async_setup_entry(
     device_name = config.get(CONF_NAME) or entry.title or host
 
     session = async_get_clientsession(hass)
+
+    # Clean up registry leftovers of the read-only IP Control sensors that were
+    # replaced by settable entities (contrast/brightness/sharpness/color/tint →
+    # number sliders in 8.3.0b8; speakerSelect → select in 8.3.0b13). A removed
+    # entity otherwise lingers in the registry forever as a "restored" /
+    # unavailable ghost next to its working replacement.
+    from homeassistant.helpers import entity_registry as er
+
+    _replaced_sensor_keys = (
+        "contrast",
+        "brightness",
+        "sharpness",
+        "color",
+        "tint",
+        "speakerSelect",
+    )
+    ent_reg = er.async_get(hass)
+    for _key in _replaced_sensor_keys:
+        _stale_unique_id = f"{device_unique_id}_ip_control_{_key}"
+        if _stale_id := ent_reg.async_get_entity_id("sensor", DOMAIN, _stale_unique_id):
+            ent_reg.async_remove(_stale_id)
+            _LOGGER.debug(
+                "Removed stale registry entry %s (replaced by a settable entity)",
+                _stale_id,
+            )
 
     entities = []
 
@@ -283,12 +360,17 @@ async def async_setup_entry(
 
         # Create the coordinator
         coordinator = FrameArtCoordinator(hass, art_api, entry)
+
         # Refresh immediately on artwork/matte/slideshow/favorite/rotation
-        # broadcasts instead of waiting up to SCAN_INTERVAL for the change
-        # to be picked up by the next poll.
-        art_api.register_art_content_callback(
-            lambda: hass.async_create_task(coordinator.async_request_refresh())
-        )
+        # broadcasts instead of waiting up to the scan interval for the change
+        # to be picked up by the next poll. The broadcast is a definitive change,
+        # so let that refresh trust a new content_id right away (skip the
+        # two-poll confirmation that only exists to filter spurious glitches).
+        def _on_art_content() -> None:
+            coordinator._trust_next_content_id = True
+            hass.async_create_task(coordinator.async_request_refresh())
+
+        art_api.register_art_content_callback(_on_art_content)
 
         # Add Frame Art sensor
         entities.append(
@@ -347,6 +429,12 @@ async def async_setup_entry(
                 main_status = await st_client.get_device_status(device_id)
                 if "powerConsumptionReport" in main_status.get("main", {}):
                     _LOGGER.info("Adding power consumption sensors for %s", device_name)
+                    # One shared coordinator = one get_device_status per cycle
+                    # for all five fields (was 5× redundant calls), throttled to
+                    # the ST cadence and skipped while the TV is off.
+                    power_coordinator = SmartThingsPowerCoordinator(
+                        hass, entry, session, device_id, device_name
+                    )
                     for measure in (
                         "power",
                         "energy",
@@ -356,15 +444,15 @@ async def async_setup_entry(
                     ):
                         entities.append(
                             SmartThingsPowerConsumptionSensor(
-                                hass=hass,
-                                entry=entry,
-                                session=session,
-                                device_id=device_id,
-                                device_name=device_name,
+                                coordinator=power_coordinator,
                                 parent_device_id=device_unique_id,
                                 measure=measure,
                             )
                         )
+                    hass.async_create_background_task(
+                        power_coordinator.async_request_refresh(),
+                        f"st_power_initial_refresh_{entry.entry_id}",
+                    )
             except Exception as ex:
                 _LOGGER.debug("Could not check power consumption capability: %s", ex)
 
@@ -523,12 +611,17 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             hass,
             self._log,
             name=f"Frame Art {entry.title}",
-            update_interval=SCAN_INTERVAL,
+            update_interval=FRAME_ART_SCAN_INTERVAL,
         )
         self._art_api = art_api
         self._entry = entry
         self._hass = hass
         self._last_content_id: str | None = None
+        # Set by the art content-event callback (image_selected / matte / etc.):
+        # a WS broadcast is a definitive change, so the next poll may trust a new
+        # content_id immediately instead of waiting for the two-poll confirmation
+        # that guards against spurious get_current_artwork glitches.
+        self._trust_next_content_id = False
         # content_id that the saved current.jpg actually represents. Tracked
         # separately from "does current.jpg exist on disk" so a stale file from
         # a previous artwork cannot masquerade as the current content's
@@ -985,6 +1078,13 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         if raw_content_id is None:
             # Failed/empty poll: don't disturb the trusted value or pending state.
             return None
+        if self._trust_next_content_id:
+            # This poll was triggered by a definitive WS art broadcast — trust
+            # the reported id immediately, no two-poll confirmation needed.
+            self._trust_next_content_id = False
+            self._confirmed_content_id = raw_content_id
+            self._pending_content_id = None
+            return raw_content_id
         if raw_content_id == self._confirmed_content_id:
             # Steady state: clear any half-seen pending change.
             self._pending_content_id = None
@@ -1195,6 +1295,14 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         """
         import os
 
+        # Fast path: if this artwork's thumbnail was already downloaded in a
+        # previous cycle (personal/store/other), promote that local copy to
+        # current.jpg straight away and skip the live TV fetch. Downloaded
+        # thumbnails don't change, and the live fetch is flaky (SYSTEM_FAIL on
+        # some Frame models), so the local copy is both faster and more reliable.
+        if await self._restore_current_from_cache(content_id):
+            return
+
         self._log.info("Frame Art: Starting thumbnail fetch for %s", content_id)
 
         # Art Store (SAM-S*) thumbnails only exist once the TV has materialized
@@ -1317,7 +1425,7 @@ class FrameArtCoordinator(DataUpdateCoordinator):
         # valid — so an earlier copy is a much better fallback than a generic
         # "image unavailable" placeholder.
         # (Fallback approach contributed by @PrestonMcAfee.)
-        if await self._restore_current_from_cache(content_id):
+        if await self._restore_current_from_cache(content_id, after_failure=True):
             return
 
         # Art Store content the TV hasn't materialized yet: the failure is
@@ -1378,12 +1486,16 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             return "store"
         return "other"
 
-    async def _restore_current_from_cache(self, content_id: str) -> bool:
+    async def _restore_current_from_cache(
+        self, content_id: str, after_failure: bool = False
+    ) -> bool:
         """Reuse a previously-downloaded thumbnail as current.jpg.
 
-        When the live thumbnail fetch fails (a transient TV/WebSocket issue),
-        fall back to the copy saved under personal/store/other during an
-        earlier successful download, instead of showing an error placeholder.
+        Used both as the fast path (before any live fetch — a downloaded copy is
+        authoritative and doesn't change) and as the fallback when a live
+        thumbnail fetch fails, instead of showing an error placeholder. The
+        copy lives under personal/store/other from an earlier successful
+        download. ``after_failure`` only tunes the log wording.
 
         Returns True if a cached copy was found and promoted to current.jpg.
         """
@@ -1422,12 +1534,20 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             return False
 
         if promoted:
-            self._log.info(
-                "Frame Art: live thumbnail fetch failed for %s; reused cached "
-                "copy from %s/ as current.jpg",
-                content_id,
-                subdir,
-            )
+            if after_failure:
+                self._log.info(
+                    "Frame Art: live thumbnail fetch failed for %s; reused cached "
+                    "copy from %s/ as current.jpg",
+                    content_id,
+                    subdir,
+                )
+            else:
+                self._log.debug(
+                    "Frame Art: used already-downloaded copy of %s from %s/ as "
+                    "current.jpg (skipped live fetch)",
+                    content_id,
+                    subdir,
+                )
             self._thumbnail_failures = 0
             self._current_thumbnail_content_id = content_id
             self._clear_store_retry(content_id)
@@ -1934,6 +2054,7 @@ class SmartThingsIlluminanceSensor(SensorEntity):
         self._parent_device_id = parent_device_id
         self._attr_unique_id = f"{device_id}_illuminance"
         self._attr_native_value = None
+        self._st_last_poll = 0.0
 
     async def _get_st_client(self):
         """Get SmartThings client with current token from config entry."""
@@ -1973,6 +2094,10 @@ class SmartThingsIlluminanceSensor(SensorEntity):
 
     async def async_update(self) -> None:
         """Update the sensor value from SmartThings."""
+        # Local WS is primary: skip while the TV is off and throttle to the
+        # configured ST cadence (instead of the 15 s module scan interval).
+        if not _st_child_gate(self):
+            return
         try:
             st_client = await self._get_st_client()
             if not st_client:
@@ -2028,6 +2153,7 @@ class SmartThingsBrightnessIntensitySensor(SensorEntity):
         self._parent_device_id = parent_device_id
         self._attr_unique_id = f"{device_id}_brightness_intensity"
         self._attr_native_value = None
+        self._st_last_poll = 0.0
 
     async def _get_st_client(self):
         """Get SmartThings client with current token from config entry."""
@@ -2067,6 +2193,10 @@ class SmartThingsBrightnessIntensitySensor(SensorEntity):
 
     async def async_update(self) -> None:
         """Update the sensor value from SmartThings."""
+        # Local WS is primary: skip while the TV is off and throttle to the
+        # configured ST cadence (instead of the 15 s module scan interval).
+        if not _st_child_gate(self):
+            return
         try:
             st_client = await self._get_st_client()
             if not st_client:
@@ -2097,12 +2227,116 @@ class SmartThingsBrightnessIntensitySensor(SensorEntity):
             _LOGGER.warning("Error updating brightness intensity sensor: %s", ex)
 
 
-class SmartThingsPowerConsumptionSensor(SensorEntity):
+class SmartThingsPowerCoordinator(DataUpdateCoordinator):
+    """One SmartThings ``get_device_status`` per cycle for all power sensors.
+
+    Previously each of the five power/energy sensors polled ``get_device_status``
+    on the SAME TV device independently (5× redundant cloud calls every 15 s).
+    This shares a single call, throttles it to the configured ST cadence, and
+    skips it entirely while the TV is off (the local WebSocket is the primary
+    power source), so an idle Frame makes no power calls at all. A Frame showing
+    Art still reports power draw, so ``_tv_powered_off`` keeps polling then.
+    """
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        session,  # aiohttp session
+        device_id: str,
+        device_name: str,
+    ) -> None:
+        """Initialize the power-consumption coordinator."""
+        self._entry = entry
+        self._session = session
+        self.device_id = device_id
+        self._device_name = device_name
+        self._st_last_poll = 0.0
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=f"SmartThings power {entry.title}",
+            update_interval=timedelta(seconds=_st_poll_on_interval(entry)),
+        )
+
+    async def _get_st_client(self):
+        """Get SmartThings client with current token from config entry."""
+        from pysmartthings import SmartThings
+
+        api_key = await async_get_samsungtv_api_key(self.hass, self._entry)
+        if not api_key:
+            config = self.hass.data[DOMAIN][self._entry.entry_id][DATA_CFG]
+            api_key = config.get(CONF_API_KEY)
+            if not api_key:
+                oauth_token = config.get(CONF_OAUTH_TOKEN)
+                if oauth_token and isinstance(oauth_token, dict):
+                    api_key = oauth_token.get("access_token")
+        if not api_key:
+            return None
+        st_client = SmartThings(session=self._session)
+        st_client.authenticate(api_key)
+        return st_client
+
+    # Fields whose value should NOT be frozen while the TV is off: the
+    # instantaneous power draw (W) is ~0 in standby, unlike the cumulative
+    # energy counters (TOTAL_INCREASING) which must keep their last value.
+    _INSTANTANEOUS_FIELDS = ("power",)
+
+    async def _async_update_data(self) -> dict:
+        """Fetch the powerConsumption dict once, or keep last values."""
+        # Local WS is primary: while the TV is truly off (not showing Art),
+        # skip the cloud call and keep the last reported values — except the
+        # instantaneous power draw, which drops to ~0 in standby (don't leave
+        # the last ON wattage frozen on the sensor).
+        if _tv_powered_off(self.hass, self._entry):
+            self.logger.debug(
+                "Power sensors: TV off, skipping SmartThings poll for %s",
+                self._device_name,
+            )
+            data = dict(self.data or {})
+            for field in self._INSTANTANEOUS_FIELDS:
+                if field in data:
+                    data[field] = 0
+            return data
+        # In Art Mode the Frame draws power but the draw barely changes, so poll
+        # at a fixed slow keepalive (ST_POLL_OFF_INTERVAL) rather than the — often
+        # much faster — "when on" cadence used for responsive channel/picture-mode
+        # updates. This decouples the power sensor from the comfort interval.
+        if _tv_in_art_mode(self.hass, self._entry):
+            now = time.monotonic()
+            if now - self._st_last_poll < ST_POLL_OFF_INTERVAL:
+                self.logger.debug(
+                    "Power sensors: Art Mode, throttling SmartThings poll for %s",
+                    self._device_name,
+                )
+                return self.data or {}
+        st_client = await self._get_st_client()
+        if not st_client:
+            return self.data or {}
+        self._st_last_poll = time.monotonic()
+        try:
+            components = await st_client.get_device_status(self.device_id)
+        except Exception as ex:  # pylint: disable=broad-except
+            # Keep last values instead of marking every energy sensor
+            # unavailable on a transient cloud hiccup.
+            self.logger.debug("Power consumption read failed: %s", ex)
+            return self.data or {}
+        main = components.get("main", {})
+        # String capability/attribute names: the dict is keyed that way and it
+        # avoids depending on enum names across pysmartthings versions.
+        report = main.get("powerConsumptionReport", {}).get("powerConsumption")
+        value = getattr(report, "value", None)
+        if isinstance(value, dict):
+            return value
+        return self.data or {}
+
+
+class SmartThingsPowerConsumptionSensor(CoordinatorEntity, SensorEntity):
     """TV power/energy consumption via SmartThings ``powerConsumptionReport``.
 
     SmartThings exposes a single ``powerConsumption`` attribute whose value is a
     dict (``power`` in W, ``energy``/``deltaEnergy`` in Wh, etc.). One instance
-    surfaces one field of that dict as its own sensor.
+    surfaces one field of that dict, all fed by a shared coordinator.
     """
 
     _attr_has_entity_name = True
@@ -2153,22 +2387,13 @@ class SmartThingsPowerConsumptionSensor(SensorEntity):
 
     def __init__(
         self,
-        hass: HomeAssistant,
-        entry: ConfigEntry,
-        session,  # aiohttp session
-        device_id: str,
-        device_name: str,
+        coordinator: SmartThingsPowerCoordinator,
         parent_device_id: str,
         measure: str,
     ) -> None:
         """Initialize the sensor."""
-        self.hass = hass
-        self._entry = entry
-        self._session = session
-        self._device_id = device_id
-        self._device_name = device_name
+        super().__init__(coordinator)
         self._parent_device_id = parent_device_id
-        self._measure = measure
         suffix, friendly, dev_class, state_class, unit, divisor = self._MEASURES[
             measure
         ]
@@ -2181,26 +2406,7 @@ class SmartThingsPowerConsumptionSensor(SensorEntity):
         self._attr_device_class = dev_class
         self._attr_state_class = state_class
         self._attr_native_unit_of_measurement = unit
-        self._attr_unique_id = f"{device_id}_{suffix}"
-        self._attr_native_value = None
-
-    async def _get_st_client(self):
-        """Get SmartThings client with current token from config entry."""
-        from pysmartthings import SmartThings
-
-        api_key = await async_get_samsungtv_api_key(self.hass, self._entry)
-        if not api_key:
-            config = self.hass.data[DOMAIN][self._entry.entry_id][DATA_CFG]
-            api_key = config.get(CONF_API_KEY)
-            if not api_key:
-                oauth_token = config.get(CONF_OAUTH_TOKEN)
-                if oauth_token and isinstance(oauth_token, dict):
-                    api_key = oauth_token.get("access_token")
-        if not api_key:
-            return None
-        st_client = SmartThings(session=self._session)
-        st_client.authenticate(api_key)
-        return st_client
+        self._attr_unique_id = f"{coordinator.device_id}_{suffix}"
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -2212,42 +2418,27 @@ class SmartThingsPowerConsumptionSensor(SensorEntity):
         """Return the name of the sensor."""
         return self._friendly
 
-    async def async_update(self) -> None:
-        """Update the sensor value from SmartThings."""
+    @property
+    def native_value(self):
+        """Return this field's value from the shared coordinator data."""
+        raw = (self.coordinator.data or {}).get(self._field)
+        if raw is None:
+            return None
         try:
-            st_client = await self._get_st_client()
-            if not st_client:
-                return
-            components = await st_client.get_device_status(self._device_id)
-            main = components.get("main", {})
-            # Use string capability/attribute names: the dict is keyed that way
-            # and it avoids depending on enum names across pysmartthings versions.
-            report = main.get("powerConsumptionReport", {}).get("powerConsumption")
-            value = getattr(report, "value", None)
-            if not isinstance(value, dict):
-                return
-            raw = value.get(self._field)
-            if raw is None:
-                return
-            self._attr_native_value = round(raw / self._divisor, 3)
-            _LOGGER.debug(
-                "Updated %s sensor for %s: %s",
-                self._field,
-                self._device_name,
-                self._attr_native_value,
-            )
-        except Exception as ex:
-            _LOGGER.warning("Error updating %s sensor: %s", self._field, ex)
+            return round(raw / self._divisor, 3)
+        except (TypeError, ValueError):
+            return None
 
 
 class IPControlStateCoordinator(DataUpdateCoordinator):
-    """Polls getTVStates + getVideoStates over IP Control for the state sensors.
+    """Polls getTVStates over IP Control for the read-only state sensors.
 
-    A single coordinator feeds all 12 read-only sensors, so each cycle issues
-    only two JSON-RPC calls (plus a cheap power-state check) regardless of how
-    many sensors are enabled. The TV is skipped while it is powered off, both
-    to avoid pointless traffic and because the picture-state getters return
-    stale values in standby.
+    A single coordinator feeds all the getTVStates sensors, so each cycle issues
+    one JSON-RPC call (plus a cheap power-state check) regardless of how many
+    sensors are enabled. The TV is skipped while it is powered off, both to
+    avoid pointless traffic and because the state getters return stale values in
+    standby. (The getVideoStates picture fields moved to settable number
+    sliders with their own coordinator — see number.py.)
     """
 
     def __init__(
@@ -2287,7 +2478,7 @@ class IPControlStateCoordinator(DataUpdateCoordinator):
         return self._ip_control
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Fetch the TV and video state snapshots over IP Control."""
+        """Fetch the getTVStates snapshot over IP Control."""
         client = self._get_ip_control()
         if client is None:
             raise UpdateFailed("IP Control is not paired or is disabled")
@@ -2305,10 +2496,12 @@ class IPControlStateCoordinator(DataUpdateCoordinator):
                 self._log.debug(
                     "IP Control state: TV is powered off, skipping state poll"
                 )
-                return {"tv": {}, "video": {}, "powered_off": True}
+                return {"tv": {}, "powered_off": True}
 
+            # Only getTVStates is consumed now (the getVideoStates fields moved
+            # to settable `number` sliders that read/write directly), so this
+            # coordinator issues a single JSON-RPC call per cycle.
             tv_states = await client.async_get_tv_states()
-            video_states = await client.async_get_video_states()
         except SamsungIPControlAuthError as ex:
             notify_token_problem(
                 self.hass,
@@ -2330,12 +2523,12 @@ class IPControlStateCoordinator(DataUpdateCoordinator):
             self._log.debug(
                 "IP Control state: transport failure (TV likely off): %s", ex
             )
-            return {"tv": {}, "video": {}, "powered_off": True}
+            return {"tv": {}, "powered_off": True}
         except SamsungIPControlError as ex:
             raise UpdateFailed(f"IP Control state read failed: {ex}") from ex
 
         clear_token_problem(self.hass, self._entry.entry_id, METHOD_IP_CONTROL)
-        return {"tv": tv_states, "video": video_states, "powered_off": False}
+        return {"tv": tv_states, "powered_off": False}
 
 
 class IPControlStateSensor(CoordinatorEntity, SensorEntity):

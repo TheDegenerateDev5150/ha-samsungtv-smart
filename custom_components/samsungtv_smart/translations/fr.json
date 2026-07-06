@@ -193,7 +193,8 @@
           "ext_power_entity": "Entité d'alimentation externe",
           "use_mute_check": "Utiliser l'état muet pour détecter l'alimentation",
           "dump_apps": "Debug : exporter la liste des applications",
-          "toggle_art_mode": "Bouton d'alimentation bascule vers le mode Art"
+          "toggle_art_mode": "Bouton d'alimentation bascule vers le mode Art",
+          "st_poll_on_interval": "Intervalle d'interrogation SmartThings quand la TV est allumée (secondes)"
         }
       },
       "save_exit": {

@@ -27,6 +27,7 @@ loads CA certs from disk, which would block the event loop if done at __init__.
 
 from __future__ import annotations
 
+import asyncio
 import http.client
 import json
 import logging
@@ -37,9 +38,36 @@ from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
+# The TV's JSON-RPC server on port 1516 handles one connection at a time and
+# resets ("Connection reset by peer" / TLS handshake failure) any that overlap.
+# Every entity builds its own SamsungIPControl instance, so serialize all calls
+# to a given host through a shared per-host lock — otherwise the media_player
+# art poll, the state coordinators, the backlight/picture number sliders and
+# the color-tone select trample each other. Keyed by host so multiple TVs stay
+# independent. Created lazily on the running loop.
+_HOST_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _host_lock(host: str) -> asyncio.Lock:
+    """Return the shared serialization lock for one TV host."""
+    lock = _HOST_LOCKS.get(host)
+    if lock is None:
+        lock = asyncio.Lock()
+        _HOST_LOCKS[host] = lock
+    return lock
+
+
 DEFAULT_IP_CONTROL_PORT = 1516
 JSONRPC_VERSION = "2.0"
 COLOR_TONE_OPTIONS = ("Cool", "Standard", "Warm1", "Warm2")
+# speakerSelectControl public values (verified on Frame 2024/2025). "External"
+# is REPORTED by the getter when an external device (e.g. HDMI-eARC receiver)
+# is active, but SELECTING a specific external device goes through
+# externalSpeakerControl with the device's name/id from its getter.
+SPEAKER_SELECT_OPTIONS = ("Internal", "External", "AudioOut/Optical")
+# Key under which _sync_request wraps JSON-array results (e.g. the external
+# speaker list) to keep its dict return contract.
+LIST_RESULT_KEY = "_list_result"
 
 CMD_TIMEOUT = 5  # seconds for normal commands
 PAIR_TIMEOUT = 30  # seconds: pairing waits for the on-screen acceptance
@@ -58,6 +86,13 @@ ERROR_PARSE_STALE_TOKEN = -32700
 # accept them. Not a transport or pairing problem: retrying after switching
 # picture mode succeeds.
 ERROR_SERVER = -32002
+# JSON-RPC "Method not found". AMBIGUOUS on Frames: the SAME code is returned
+# both when a method genuinely doesn't exist on the model AND when it exists but
+# isn't available in the current TV state — notably the picture controls while
+# the panel is in Art Mode (calibration applies to normal viewing only). So it
+# must be treated as "not available right now", NOT latched as permanently
+# unsupported.
+ERROR_METHOD_NOT_FOUND = -32601
 
 # Art-mode desync guard: number of consecutive reads where the artModeControl
 # flag claims "on" while getTVStates.pictureMode shows a real (non-art) picture
@@ -81,6 +116,17 @@ class SamsungIPControlModeLockedError(SamsungIPControlError):
     Not a transport, pairing, or capability problem — the same request
     succeeds once the TV is switched to a picture mode that allows manual
     writes (e.g. Standard/Movie/Filmmaker rather than Dynamic/HDR-dynamic).
+    """
+
+
+class SamsungIPControlUnsupportedError(SamsungIPControlError):
+    """The method is not available (code -32601) — "Method not found".
+
+    AMBIGUOUS: the TV returns the same code whether the method genuinely does
+    not exist on this model OR it exists but is unavailable in the current state
+    (e.g. the picture controls while the panel is in Art Mode). Treat it as
+    "not available right now" — surface a clear message but do NOT latch it as
+    permanently unsupported, since it may succeed once the TV leaves Art Mode.
     """
 
 
@@ -298,6 +344,82 @@ class SamsungIPControl:
             raise SamsungIPControlError(f"unexpected colorTone response: {result!r}")
         return response_value
 
+    async def async_set_video_setting(self, method: str, field: str, value: int) -> int:
+        """Set one expert picture setting and return the echoed value.
+
+        Current values are read in bulk via :meth:`async_get_video_states`; this
+        per-field ``<field>Control`` write is used only on user action. The write
+        is picture-mode-gated: Standard/Movie/Filmmaker accept it,
+        Dynamic/HDR-dynamic reject it with ``-32002`` (raised as
+        :class:`SamsungIPControlModeLockedError`), and models that lack the
+        method reject it with ``-32601`` (raised as
+        :class:`SamsungIPControlUnsupportedError`).
+        """
+        result = await self._async_request(method, {field: int(value)})
+        response_value = result.get(field, value)
+        try:
+            return int(response_value)
+        except (TypeError, ValueError) as ex:
+            raise SamsungIPControlError(
+                f"invalid {field} response from {method}: {result!r}"
+            ) from ex
+
+    async def async_get_speaker_select(self) -> str:
+        """Return the current speaker output ("Internal", "External", ...).
+
+        ``speakerSelectControl`` called with no params echoes the current
+        output, capitalized ("Internal"/"External") — unlike the mirror field
+        in ``getTVStates`` which reports it lowercase.
+        """
+        result = await self._async_request("speakerSelectControl")
+        value = result.get("speakerSelect")
+        if not isinstance(value, str) or not value:
+            raise SamsungIPControlError(f"no speakerSelect in response: {result!r}")
+        return value
+
+    async def async_set_speaker_select(self, value: str) -> None:
+        """Switch the speaker output to a public target.
+
+        Verified on Frame 2024/2025: "Internal" and "AudioOut/Optical" are
+        accepted; "External" alone is rejected — switching to a specific
+        external device (HDMI-eARC receiver, ...) must go through
+        :meth:`async_set_external_speaker` with the device's name/id.
+        """
+        if value not in SPEAKER_SELECT_OPTIONS:
+            raise SamsungIPControlError(
+                f"speakerSelect must be one of {', '.join(SPEAKER_SELECT_OPTIONS)}"
+            )
+        await self._async_request("speakerSelectControl", {"speakerSelect": value})
+
+    async def async_get_external_speakers(self) -> list[dict[str, str]]:
+        """Return the available external speakers as [{deviceName, deviceId}].
+
+        ``externalSpeakerControl`` called with no params returns a JSON array
+        of the currently available external audio devices (e.g.
+        ``[{"deviceName": "CINEMA 60(HDMI-eARC)", "deviceId": "RCV-1"}]``) —
+        or ``{}`` when none is reachable (receiver powered off).
+        """
+        result = await self._async_request("externalSpeakerControl")
+        devices = result.get(LIST_RESULT_KEY, [])
+        return [
+            dev
+            for dev in devices
+            if isinstance(dev, dict) and dev.get("deviceName") and dev.get("deviceId")
+        ]
+
+    async def async_set_external_speaker(self, name: str, device_id: str) -> None:
+        """Switch the speaker output to a specific external device.
+
+        Requires a device currently listed by
+        :meth:`async_get_external_speakers`; the TV answers ``-32002`` for an
+        unknown/unreachable device (raised as
+        :class:`SamsungIPControlModeLockedError`).
+        """
+        await self._async_request(
+            "externalSpeakerControl",
+            {"deviceName": name, "deviceId": device_id},
+        )
+
     async def async_get_mute(self) -> bool:
         """Return whether the TV is currently muted."""
         result = await self._async_request("muteControl")
@@ -365,9 +487,10 @@ class SamsungIPControl:
         """Return the TV's picture-level snapshot (read-only).
 
         ``getVideoStates`` reports ``contrast, sharpness, brightness, color,
-        tint`` on a Frame 2024/2025. As with :meth:`async_get_tv_states`, these
-        are read-only over IP Control on consumer Frames; only ``backlight`` is
-        settable (see :meth:`async_set_backlight`).
+        tint`` on a Frame 2024/2025. These ARE writable via their dedicated
+        ``<field>Control`` methods (see :meth:`async_set_video_setting`) when
+        the picture mode allows it — Dynamic/HDR-dynamic reject the write with
+        ``-32002``. This bulk getter stays available for diagnostics.
         """
         return await self._async_request("getVideoStates")
 
@@ -381,10 +504,16 @@ class SamsungIPControl:
         include_token: bool = True,
         timeout: int = CMD_TIMEOUT,
     ) -> dict[str, Any]:
-        """Run a JSON-RPC request in the executor and return the `result` dict."""
-        return await self._hass.async_add_executor_job(
-            self._sync_request, method, params, include_token, timeout
-        )
+        """Run a JSON-RPC request in the executor and return the `result` dict.
+
+        Serialized per host: the TV resets overlapping connections on port 1516,
+        so only one call to a given host runs at a time (across every
+        SamsungIPControl instance).
+        """
+        async with _host_lock(self._host):
+            return await self._hass.async_add_executor_job(
+                self._sync_request, method, params, include_token, timeout
+            )
 
     def _build_ssl_context(self, legacy: bool) -> ssl.SSLContext:
         """Build the SSL context for talking to the TV.
@@ -478,9 +607,20 @@ class SamsungIPControl:
                     "Dynamic/HDR-dynamic); switch to Standard/Movie/"
                     "Filmmaker and retry"
                 )
+            if code == ERROR_METHOD_NOT_FOUND:
+                raise SamsungIPControlUnsupportedError(
+                    f"TV returned error {code}: {message} — this method is not "
+                    "available right now (it may not exist on this model, or the "
+                    "TV may be in Art Mode)"
+                )
             raise SamsungIPControlError(f"TV returned error {code}: {message}")
 
         result = data.get("result")
+        if isinstance(result, list):
+            # A few getters (e.g. externalSpeakerControl) return a JSON array.
+            # Wrap it so the dict return contract holds for every caller;
+            # list-aware callers unwrap via LIST_RESULT_KEY.
+            return {LIST_RESULT_KEY: result}
         if not isinstance(result, dict):
             return {}
         return result

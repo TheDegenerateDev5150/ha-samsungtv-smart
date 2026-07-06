@@ -67,6 +67,8 @@ from .const import (
     CONF_SHOW_CHANNEL_NR,
     CONF_SOURCE_LIST,
     CONF_ST_ENTRY_UNIQUE_ID,
+    CONF_ST_PICTURE_MODE_CAPABILITY,
+    CONF_ST_POLL_ON_INTERVAL,
     CONF_SUPPORTS_GET_BRIGHTNESS,
     CONF_SUPPORTS_GET_COLOR_TEMPERATURE,
     CONF_SYNC_TURN_OFF,
@@ -1052,6 +1054,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # Register folder-gallery-card as Lovelace resource
     await _register_gallery_card(hass)
 
+    # On-demand resized-thumbnail endpoint used by the gallery card so big
+    # folders of full-size originals don't get downloaded at full resolution.
+    try:
+        from .http_thumbnail import SamsungTVThumbnailView
+
+        hass.http.register_view(SamsungTVThumbnailView(hass))
+    except Exception as exc:  # pylint: disable=broad-except
+        _LOGGER.warning("Could not register thumbnail view: %s", exc)
+
     return True
 
 
@@ -1168,13 +1179,26 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 # Options whose change adds/removes platforms or clients and therefore needs a
 # full reload (everything else is applied live via SIGNAL_CONFIG_ENTITY).
-_RELOAD_OPTIONS = (CONF_ENABLE_IP_CONTROL, CONF_IP_CONTROL_ART_MODE)
+# CONF_ST_POLL_ON_INTERVAL is included because the SmartThings power-sensor
+# coordinator fixes its update_interval at creation time; a reload re-creates it
+# with the new cadence (the media_player / selects read it live).
+_RELOAD_OPTIONS = (
+    CONF_ENABLE_IP_CONTROL,
+    CONF_IP_CONTROL_ART_MODE,
+    CONF_ST_POLL_ON_INTERVAL,
+)
+
+# entry.data keys persisted at RUNTIME as learned device facts, not connection
+# settings: writing them must NOT reload the integration (a reload would tear
+# down the very clients that just learned the fact — and reloads are exactly
+# what the verify-and-fallback logic runs right after a user action).
+_NO_RELOAD_DATA_KEYS = (CONF_ST_PICTURE_MODE_CAPABILITY,)
 
 
 def _reload_fingerprint(entry: ConfigEntry) -> tuple:
     """Snapshot the parts of an entry whose change requires a reload."""
     return (
-        dict(entry.data),
+        {k: v for k, v in entry.data.items() if k not in _NO_RELOAD_DATA_KEYS},
         tuple(entry.options.get(key) for key in _RELOAD_OPTIONS),
     )
 
