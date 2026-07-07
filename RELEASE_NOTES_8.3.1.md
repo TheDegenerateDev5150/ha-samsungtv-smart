@@ -4,6 +4,23 @@ If this project is useful to you, you can support its development:
 
 # <a href="https://buymeacoffee.com/thefab21" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-black.png" alt="Buy Me A Coffee" height="41" width="174"></a>
 
+## Picture mode — send the display NAME, not the internal id (8.3.1b2, #116)
+
+- **Root cause of #116 found (credit: @androidnerd's SmartThings CLI
+  forensics): `custom.picturemode:setPictureMode` expects the display NAME
+  (`"Movie"`), not the internal id (`"modeMovie"`).** Sending the id returns
+  `200 COMPLETED` while doing nothing on the panel; sending the name actuates
+  it. This also demystifies the "PAT worked, OAuth didn't" symptom: the legacy
+  PAT-era code sent plain names, and the name→id mapping was introduced
+  together with OAuth support — correlation, not an OAuth block.
+- The integration now tries each capability with the **name first, then the
+  id**, verifying each accepted send as before, and **memorizes the verified
+  (capability + argument form) pair** (persisted across restarts) so the
+  matrix cost is only paid on the first change.
+- Verification now accepts both representations of the target: some models
+  report `pictureMode` as the display name (Frame 2024: `"Dynamique"`), others
+  as the id — both are normalized through the name↔id map.
+
 ## Art Mode Brightness / Color Temperature — unavailable outside Art Mode (8.3.1b1)
 
 - **The two Art Mode sliders are now *unavailable* whenever the panel is not
