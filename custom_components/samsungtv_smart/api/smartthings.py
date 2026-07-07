@@ -128,10 +128,22 @@ class SmartThingsTV:
         self._forced_count = 0
 
     def set_verified_picture_mode_capability(self, capability: str | None) -> None:
-        """Seed the verified setPictureMode capability (from persisted data)."""
-        if capability in ("custom.picturemode", "samsungvd.pictureMode"):
+        """Seed the verified setPictureMode capability (from persisted data).
+
+        Accepts either the legacy bare capability ("custom.picturemode") or the
+        newer "capability|form" pair (form: "name" or "id"), e.g.
+        "custom.picturemode|name".
+        """
+        if capability is None:
+            return
+        cap, _, form = capability.partition("|")
+        if cap in ("custom.picturemode", "samsungvd.pictureMode") and form in (
+            "",
+            "name",
+            "id",
+        ):
             self._verified_picture_mode_capability = capability
-        elif capability is not None:
+        else:
             self._log.debug(
                 "Ignoring unknown persisted picture mode capability: %s", capability
             )
@@ -963,43 +975,68 @@ class SmartThingsTV:
                 self._picture_mode_list,
             )
 
-        # Order of attempts: the capability VERIFIED to actuate this panel (if
-        # already learned, possibly on a previous HA run) comes first, then the
-        # detected capability, then the other one — deduplicated, both always
-        # reachable as fallback. custom.picturemode returns 422 on some TVs
-        # (Frame 2024) which could interfere with the session, so the detected
-        # capability stays ahead of the blind alternative.
+        # Attempt matrix: (capability × argument form). Field testing on #116
+        # proved the argument FORM matters as much as the capability: on an
+        # S90C, custom.picturemode answers 200 COMPLETED for the internal id
+        # ("modeMovie") while doing NOTHING, but actuates the panel when sent
+        # the display NAME ("Movie") — and samsungvd.pictureMode 422s outright.
+        # (This is also why the legacy PAT/REST era "worked": it sent names;
+        # the name->id map landed together with OAuth support.) So each
+        # capability is tried with the NAME first, then the id, each send
+        # verified; the verified (capability, form) pair is memorized.
         primary = self._picture_mode_capability or "samsungvd.pictureMode"
         fallback = (
             "custom.picturemode"
             if primary == "samsungvd.pictureMode"
             else "samsungvd.pictureMode"
         )
-        capabilities_to_try = []
-        for capability in (self._verified_picture_mode_capability, primary, fallback):
-            if capability and capability not in capabilities_to_try:
-                capabilities_to_try.append(capability)
+        forms = {"name": mode, "id": mode_id}
+        attempts: list[tuple[str, str]] = []  # (capability, form)
+
+        def _add(capability: str | None, form: str) -> None:
+            if not capability:
+                return
+            if forms["name"] == forms["id"] and form == "id":
+                return  # no map: both forms identical, one attempt is enough
+            if (capability, form) not in attempts:
+                attempts.append((capability, form))
+
+        verified = self._verified_picture_mode_capability
+        if verified:
+            v_cap, _, v_form = verified.partition("|")
+            if v_form in forms:
+                _add(v_cap, v_form)
+            else:  # legacy memory: bare capability, form unknown
+                _add(v_cap, "name")
+                _add(v_cap, "id")
+        for capability in (primary, fallback):
+            _add(capability, "name")
+            _add(capability, "id")
 
         any_sent = False
-        for capability in capabilities_to_try:
+        for capability, form in attempts:
+            argument = forms[form]
             try:
                 await self._send_rest_command(
                     capability=capability,
                     command="setPictureMode",
-                    arguments=[mode_id],
+                    arguments=[argument],
                 )
             except Exception as err:
                 self._log.debug(
-                    "setPictureMode via %s failed: %s, trying fallback",
+                    "setPictureMode via %s (%s=%s) failed: %s, trying next",
                     capability,
+                    form,
+                    argument,
                     err,
                 )
                 continue
             self._log.debug(
-                "Picture mode '%s' (id: %s) sent via %s",
+                "Picture mode '%s' sent via %s (%s form: %s)",
                 mode,
-                mode_id,
                 capability,
+                form,
+                argument,
             )
             any_sent = True
             self._picture_mode = mode
@@ -1013,33 +1050,34 @@ class SmartThingsTV:
 
             # Read the mode back: COMPLETED does not guarantee the panel
             # applied it (see docstring). None = could not verify — assume
-            # applied rather than blind-firing the other capability.
-            applied = await self._async_verify_picture_mode(mode_id)
+            # applied rather than blind-firing the remaining attempts.
+            applied = await self._async_verify_picture_mode(mode, mode_id)
             if applied:
-                # Confirmed on the panel: remember this capability so later
-                # changes try it first (and persist it across HA restarts).
-                self._remember_picture_mode_capability(capability)
+                # Confirmed on the panel: remember this (capability, form) so
+                # later changes go straight through (persisted across restarts).
+                self._remember_picture_mode_capability(f"{capability}|{form}")
                 return
             if applied is None:
                 return
             self._log.warning(
-                "setPictureMode via %s was accepted (COMPLETED) but the TV "
-                "still reports another mode — trying the other capability",
+                "setPictureMode via %s (%s form) was accepted (COMPLETED) but "
+                "the TV still reports another mode — trying the next variant",
                 capability,
+                form,
             )
 
         if not any_sent:
             self._log.error(
-                "Failed to set picture mode '%s' via both capabilities", mode
+                "Failed to set picture mode '%s' via any capability/form", mode
             )
         else:
-            # Both accepted-but-unapplied (or the second one unverifiable).
+            # All accepted-but-unapplied (or the last one unverifiable).
             # Keep the optimistic value: the select entity holds the pending
             # mode and reconciles with the cloud on its own grace window.
             self._log.warning(
                 "Picture mode '%s' could not be confirmed on the TV via any "
-                "capability; if it did not change, the cloud command channel "
-                "likely cannot actuate this panel (see issue #116)",
+                "capability/argument form; if it did not change, the cloud "
+                "command channel likely cannot actuate this panel (see #116)",
                 mode,
             )
 
@@ -1065,13 +1103,16 @@ class SmartThingsTV:
             except Exception as err:  # pylint: disable=broad-except
                 self._log.debug("Could not persist picture mode capability: %s", err)
 
-    async def _async_verify_picture_mode(self, mode_id: str) -> bool | None:
-        """Return whether the TV now reports ``mode_id``, None if unknown.
+    async def _async_verify_picture_mode(self, mode: str, mode_id: str) -> bool | None:
+        """Return whether the TV now reports the requested mode, None if unknown.
 
         Waits a few seconds after the refresh command so the cloud has a
         chance to re-read the panel, then GETs the capability status
-        directly. Returns None when the read fails — the caller must not
-        treat that as "not applied".
+        directly. The ``pictureMode`` attribute reports the display NAME on
+        some models (Frame 2024: "Dynamique") and the internal id on others —
+        both representations of the target are accepted (normalized through
+        the name<->id map). Returns None when the read fails — the caller
+        must not treat that as "not applied".
         """
         if not self._device_id or not self._session:
             return None
@@ -1102,9 +1143,22 @@ class SmartThingsTV:
         if not raw_mode:
             return None
         self._log.debug(
-            "Picture mode verify: TV reports '%s' (wanted '%s')", raw_mode, mode_id
+            "Picture mode verify: TV reports '%s' (wanted '%s' / id '%s')",
+            raw_mode,
+            mode,
+            mode_id,
         )
-        return raw_mode == mode_id
+        if raw_mode in (mode, mode_id):
+            return True
+        # Normalize through the map: raw may be a name where we hold the id,
+        # or vice versa.
+        if self._picture_mode_map:
+            if self._picture_mode_map.get(raw_mode) == mode_id:
+                return True  # raw is the name of our target id
+            reverse = {v: k for k, v in self._picture_mode_map.items()}
+            if reverse.get(raw_mode) == mode:
+                return True  # raw is the id of our target name
+        return False
 
     async def _async_refresh_device_status(self) -> None:
         """Send a 'refresh' command to force SmartThings to re-read TV state.
