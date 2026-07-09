@@ -44,10 +44,7 @@ from aiohttp import ClientError, ClientSession
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from .const import (
-    ART_CACHE_TTL_HIT,
-    ART_CACHE_TTL_MISS,
-)
+from .const import ART_CACHE_TTL_HIT, ART_CACHE_TTL_MISS
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -152,6 +152,7 @@
           "sync_ent": "Synchronized Entities",
           "init": "Basic Options",
           "adv_opt": "Advanced Options",
+          "art_identify": "Art Identification",
           "save_exit": "Save and Exit"
         }
       },
@@ -199,6 +200,18 @@
       },
       "save_exit": {
         "title": "Save Configuration"
+      },
+      "art_identify": {
+        "title": "Art identification",
+        "description": "Identify the artwork shown on the Frame TV via reverse image search (Google Vision) confirmed by an LLM. All fields are optional except the toggle; leave a key blank to keep the previously saved one.",
+        "data": {
+          "art_identify_enable": "Enable artwork identification",
+          "art_vision_api_key": "Google Cloud Vision API key",
+          "art_llm_provider": "LLM provider",
+          "art_llm_api_key": "LLM API key (Anthropic or OpenAI)",
+          "art_llm_model": "LLM model (blank = provider default)",
+          "art_identify_personal": "Also identify personal photos (usually off)"
+        }
       }
     },
     "error": {
