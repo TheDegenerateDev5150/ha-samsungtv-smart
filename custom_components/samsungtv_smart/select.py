@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import json
 import logging
 import time
@@ -17,12 +18,13 @@ from homeassistant.const import (
     CONF_TOKEN,
     STATE_OFF,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_state_change_event
 
 from .api.art import SamsungTVAsyncArt
 from .api.ipcontrol import (
@@ -1398,6 +1400,47 @@ class SamsungTVPictureModeSelect(SelectEntity):
         # stale "old mode" poll revert the selection (issue #116).
         self._pending_mode: str | None = None
         self._pending_until: float = 0
+        # Subscription to media_player source changes: the picture-mode list is
+        # per-input, so refresh immediately on an input switch instead of
+        # waiting for the next ST poll.
+        self._unsub_source_track: Callable[[], None] | None = None
+        self._tracked_source: str | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to media_player source changes for an instant refresh."""
+        await super().async_added_to_hass()
+        mp_id = self._get_media_player_entity_id()
+        if not mp_id:
+            return
+        state = self.hass.states.get(mp_id)
+        self._tracked_source = state.attributes.get("source") if state else None
+        self._unsub_source_track = async_track_state_change_event(
+            self.hass, [mp_id], self._async_source_changed
+        )
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Drop the source-change subscription."""
+        if self._unsub_source_track is not None:
+            self._unsub_source_track()
+            self._unsub_source_track = None
+
+    @callback
+    def _async_source_changed(self, event) -> None:
+        """Force an immediate picture-mode refresh when the input changed.
+
+        Samsung exposes a different supportedPictureModes per input; the source
+        attribute is the local, instant signal for an input switch, so schedule
+        a forced update rather than waiting up to a full ST poll cycle.
+        """
+        new_state = event.data.get("new_state")
+        new_source = new_state.attributes.get("source") if new_state else None
+        if new_source == self._tracked_source:
+            return
+        self._tracked_source = new_source
+        # Clear any short post-set skip so the refresh isn't swallowed, and let
+        # async_update rebuild the option list from the fresh per-input payload.
+        self._skip_poll_until = 0
+        self.async_schedule_update_ha_state(force_refresh=True)
 
     @property
     def device_info(self) -> DeviceInfo:

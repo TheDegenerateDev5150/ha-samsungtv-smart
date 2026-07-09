@@ -21,7 +21,9 @@ If this project is useful to you, you can support its development:
   flagged as invalid choices for the active input.
 - **The supported-mode list is now rebuilt from the cloud on every poll**
   (the data was already in the same response we fetch for the current mode, so
-  there's no extra API call). When the active input changes, the dropdown
-  follows within one SmartThings poll cycle — matching what the official
-  SmartThings app shows. Stale modes from a previous input are dropped instead
-  of accumulating.
+  there's no extra API call). Stale modes from a previous input are dropped
+  instead of accumulating.
+- **Instant refresh on input switch (8.3.3b2):** the picture-mode select now
+  watches the media player's `source` and forces a refresh the moment the
+  input changes, so the dropdown updates right away instead of waiting for the
+  next SmartThings poll — matching the official SmartThings app.
