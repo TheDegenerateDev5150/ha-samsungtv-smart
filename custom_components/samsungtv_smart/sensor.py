@@ -1593,7 +1593,11 @@ class FrameArtMetadataSensor(SensorEntity):
         self._attr_native_value: str | None = None
         self._attr_extra_state_attributes: dict[str, Any] = {}
         self._frame_art_entity_id: str | None = None
-        self._identified_content_id: str | None = None
+        # content_id already acted on (any outcome) — dedup guard so unrelated
+        # Frame-Art attribute churn can't re-trigger the same identification.
+        self._handled_content_id: str | None = None
+        # one-shot retry flag for the startup thumbnail-not-ready race.
+        self._retried_content_id: str | None = None
         self._pending_content_id: str | None = None
         self._debounce_unsub = None
 
@@ -1639,7 +1643,7 @@ class FrameArtMetadataSensor(SensorEntity):
         content_id = (
             new_state.attributes.get("current_content_id") if new_state else None
         )
-        if not content_id or content_id == self._identified_content_id:
+        if not content_id or content_id == self._handled_content_id:
             return
         self._schedule_identify(content_id)
 
@@ -1666,18 +1670,30 @@ class FrameArtMetadataSensor(SensorEntity):
         entry = self.hass.config_entries.async_get_entry(self._entry_id)
         if entry is None:
             return
+        # Mark handled BEFORE the call so a persistent error (bad key, quota)
+        # can't be retried on every unrelated Frame-Art attribute change — that
+        # would hammer the API. Recovery paths: the artwork changing, or the
+        # manual art_identify service with force: true.
+        self._handled_content_id = content_id
         cache = get_shared_cache(self.hass, self._entry_id)
         result = await async_identify_for_entry(
             self.hass, entry, content_id, cache=cache
         )
-        if result.get("error") or result.get("skipped"):
-            _LOGGER.debug(
-                "Art metadata: %s (content_id=%s)",
-                result.get("error") or result.get("skipped"),
-                content_id,
-            )
+        if result.get("skipped"):
+            _LOGGER.debug("Art metadata skipped: %s", result.get("skipped"))
             return
-        self._identified_content_id = content_id
+        if result.get("error"):
+            _LOGGER.debug("Art metadata error: %s", result.get("error"))
+            # Startup race: current.jpg not downloaded yet — allow ONE delayed
+            # retry for this artwork (no storm: guarded per content_id).
+            if (
+                "thumbnail not available" in result["error"]
+                and self._retried_content_id != content_id
+            ):
+                self._retried_content_id = content_id
+                self._handled_content_id = None
+                self._schedule_identify(content_id)
+            return
         identified = bool(result.get("identified"))
         self._attr_native_value = result.get("title") if identified else "Unidentified"
         self._attr_extra_state_attributes = {
