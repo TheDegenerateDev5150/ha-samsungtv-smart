@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 import json
 import logging
 import time
@@ -17,12 +18,13 @@ from homeassistant.const import (
     CONF_TOKEN,
     STATE_OFF,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_state_change_event
 
 from .api.art import SamsungTVAsyncArt
 from .api.ipcontrol import (
@@ -1398,6 +1400,47 @@ class SamsungTVPictureModeSelect(SelectEntity):
         # stale "old mode" poll revert the selection (issue #116).
         self._pending_mode: str | None = None
         self._pending_until: float = 0
+        # Subscription to media_player source changes: the picture-mode list is
+        # per-input, so refresh immediately on an input switch instead of
+        # waiting for the next ST poll.
+        self._unsub_source_track: Callable[[], None] | None = None
+        self._tracked_source: str | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to media_player source changes for an instant refresh."""
+        await super().async_added_to_hass()
+        mp_id = self._get_media_player_entity_id()
+        if not mp_id:
+            return
+        state = self.hass.states.get(mp_id)
+        self._tracked_source = state.attributes.get("source") if state else None
+        self._unsub_source_track = async_track_state_change_event(
+            self.hass, [mp_id], self._async_source_changed
+        )
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Drop the source-change subscription."""
+        if self._unsub_source_track is not None:
+            self._unsub_source_track()
+            self._unsub_source_track = None
+
+    @callback
+    def _async_source_changed(self, event) -> None:
+        """Force an immediate picture-mode refresh when the input changed.
+
+        Samsung exposes a different supportedPictureModes per input; the source
+        attribute is the local, instant signal for an input switch, so schedule
+        a forced update rather than waiting up to a full ST poll cycle.
+        """
+        new_state = event.data.get("new_state")
+        new_source = new_state.attributes.get("source") if new_state else None
+        if new_source == self._tracked_source:
+            return
+        self._tracked_source = new_source
+        # Clear any short post-set skip so the refresh isn't swallowed, and let
+        # async_update rebuild the option list from the fresh per-input payload.
+        self._skip_poll_until = 0
+        self.async_schedule_update_ha_state(force_refresh=True)
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -1454,6 +1497,36 @@ class SamsungTVPictureModeSelect(SelectEntity):
             _LOGGER.debug("Error fetching picture mode capability: %s", ex)
             return None
 
+    @staticmethod
+    def _parse_supported_modes(
+        data: dict,
+    ) -> tuple[dict[str, str], list[str]] | None:
+        """Extract (name->id map, options list) from a capability status payload.
+
+        Prefers ``supportedPictureModesMap`` (id+name), falls back to
+        ``supportedPictureModes`` (names only, empty map). Returns None when
+        neither is present so callers can keep the previous list.
+        """
+        raw_map = data.get("supportedPictureModesMap", {}).get("value")
+        if raw_map:
+            new_map: dict[str, str] = {}
+            for entry in raw_map:
+                if isinstance(entry, dict):
+                    m_id = entry.get("id", "")
+                    m_name = entry.get("name", m_id)
+                elif isinstance(entry, str):
+                    m_id = m_name = entry
+                else:
+                    continue
+                if m_id:
+                    new_map[m_name] = m_id
+            if new_map:
+                return new_map, list(new_map.keys())
+        raw_list = data.get("supportedPictureModes", {}).get("value")
+        if raw_list and isinstance(raw_list, list):
+            return {}, list(raw_list)
+        return None
+
     async def async_fetch_picture_modes(self) -> None:
         """Fetch picture mode list and current mode from SmartThings REST API."""
         for cap_name in ("samsungvd.pictureMode", "custom.picturemode"):
@@ -1461,31 +1534,10 @@ class SamsungTVPictureModeSelect(SelectEntity):
             if not data:
                 continue
 
-            # Parse supported modes map
-            raw_map = data.get("supportedPictureModesMap", {}).get("value")
-            if raw_map:
-                new_map: dict[str, str] = {}
-                for entry in raw_map:
-                    if isinstance(entry, dict):
-                        m_id = entry.get("id", "")
-                        m_name = entry.get("name", m_id)
-                    elif isinstance(entry, str):
-                        m_id = m_name = entry
-                    else:
-                        continue
-                    if m_id:
-                        new_map[m_name] = m_id
-                if new_map:
-                    self._mode_map = new_map
-                    self._attr_options = list(new_map.keys())
-                    self._capability = cap_name
-
-            # Fallback: supportedPictureModes (names only)
-            if not self._attr_options:
-                raw_list = data.get("supportedPictureModes", {}).get("value")
-                if raw_list and isinstance(raw_list, list):
-                    self._attr_options = raw_list
-                    self._capability = cap_name
+            parsed = self._parse_supported_modes(data)
+            if parsed is not None:
+                self._mode_map, self._attr_options = parsed
+                self._capability = cap_name
 
             # Read current mode
             raw_mode = data.get("pictureMode", {}).get("value")
@@ -1596,6 +1648,26 @@ class SamsungTVPictureModeSelect(SelectEntity):
         if not data:
             return
 
+        # Rebuild the supported-mode list from the SAME response every poll.
+        # Samsung's picture-mode list is PER-INPUT (a PC/Graphic source exposes
+        # only Entertain/Graphic, a normal source exposes Movie/Standard/…), and
+        # the cloud updates supportedPictureModesMap when the active input
+        # changes. Fetching it once at startup left the dropdown stuck on the
+        # previous input's modes — and merely appending the current mode built a
+        # bogus merged list of two source profiles (issue #116 follow-up). So
+        # REPLACE the options from the fresh map whenever it changed.
+        parsed = self._parse_supported_modes(data)
+        if parsed is not None:
+            new_map, new_options = parsed
+            if new_options != self._attr_options or new_map != self._mode_map:
+                _LOGGER.debug(
+                    "Picture mode: supported list changed %s -> %s (input switch?)",
+                    self._attr_options,
+                    new_options,
+                )
+                self._mode_map = new_map
+                self._attr_options = new_options
+
         raw_mode = data.get("pictureMode", {}).get("value")
         if not raw_mode:
             return
@@ -1606,14 +1678,12 @@ class SamsungTVPictureModeSelect(SelectEntity):
         else:
             new_mode = raw_mode
 
-        # If the TV reports a mode we don't know about (e.g. Filmmaker),
-        # add it dynamically to options and map
+        # Safety net: the freshly-fetched list should already contain the
+        # current mode, but if the cloud briefly reports a mode not yet in its
+        # own supported list, keep the entity valid by including it (the next
+        # poll's rebuild reconciles). This no longer accumulates stale modes,
+        # since the list is rebuilt above rather than only appended to.
         if new_mode not in self._attr_options:
-            _LOGGER.info(
-                "Picture mode: discovered new mode '%s' (raw: %s), adding to options",
-                new_mode,
-                raw_mode,
-            )
             self._attr_options = [*self._attr_options, new_mode]
             if raw_mode != new_mode:
                 self._mode_map[new_mode] = raw_mode
