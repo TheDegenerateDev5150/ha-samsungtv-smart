@@ -47,6 +47,7 @@ from . import (
     is_valid_ha_version,
 )
 from .const import (
+    ART_LLM_PROVIDERS,
     ATTR_DEVICE_MAC,
     ATTR_DEVICE_MODEL,
     ATTR_DEVICE_NAME,
@@ -57,6 +58,12 @@ from .const import (
     CONF_APP_LAUNCH_METHOD,
     CONF_APP_LIST,
     CONF_APP_LOAD_METHOD,
+    CONF_ART_IDENTIFY_ENABLE,
+    CONF_ART_IDENTIFY_PERSONAL,
+    CONF_ART_LLM_API_KEY,
+    CONF_ART_LLM_MODEL,
+    CONF_ART_LLM_PROVIDER,
+    CONF_ART_VISION_API_KEY,
     CONF_AUTH_METHOD,
     CONF_CHANNEL_LIST,
     CONF_CONTENT_LIST_INTERVAL,
@@ -1308,8 +1315,77 @@ class OptionsFlowHandler(OptionsFlow):
                 "sync_ent",
                 "init",
                 "adv_opt",
+                "art_identify",
                 "save_exit",
             ],
+        )
+
+    async def async_step_art_identify(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Configure the (opt-in) artwork identification pipeline.
+
+        The API keys are secrets, so — like the ST/IP tokens — they are written
+        to entry.data (not entry.options) via async_update_entry, independently
+        of the options _save_entry path. The enable/personal toggles and the
+        provider/model live there too so a single reload picks everything up.
+        """
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+
+        if user_input is not None:
+            new_data = dict(entry.data)
+            new_data[CONF_ART_IDENTIFY_ENABLE] = user_input.get(
+                CONF_ART_IDENTIFY_ENABLE, False
+            )
+            new_data[CONF_ART_IDENTIFY_PERSONAL] = user_input.get(
+                CONF_ART_IDENTIFY_PERSONAL, False
+            )
+            new_data[CONF_ART_LLM_PROVIDER] = user_input.get(CONF_ART_LLM_PROVIDER)
+            # Keep a previously-saved key when the field is left blank, so the
+            # user doesn't have to re-type secrets to toggle the feature.
+            for key in (
+                CONF_ART_VISION_API_KEY,
+                CONF_ART_LLM_API_KEY,
+                CONF_ART_LLM_MODEL,
+            ):
+                value = (user_input.get(key) or "").strip()
+                if value:
+                    new_data[key] = value
+                elif key == CONF_ART_LLM_MODEL:
+                    new_data.pop(key, None)  # blank model -> fall back to default
+            self.hass.config_entries.async_update_entry(entry, data=new_data)
+            return await self.async_step_menu()
+
+        data = entry.data
+        schema = {
+            vol.Required(
+                CONF_ART_IDENTIFY_ENABLE,
+                default=data.get(CONF_ART_IDENTIFY_ENABLE, False),
+            ): bool,
+            vol.Optional(
+                CONF_ART_VISION_API_KEY,
+                default=data.get(CONF_ART_VISION_API_KEY, ""),
+            ): str,
+            vol.Required(
+                CONF_ART_LLM_PROVIDER,
+                default=data.get(CONF_ART_LLM_PROVIDER, ART_LLM_PROVIDERS[0]),
+            ): SelectSelector(_dict_to_select({p: p for p in ART_LLM_PROVIDERS})),
+            vol.Optional(
+                CONF_ART_LLM_API_KEY,
+                default=data.get(CONF_ART_LLM_API_KEY, ""),
+            ): str,
+            vol.Optional(
+                CONF_ART_LLM_MODEL,
+                default=data.get(CONF_ART_LLM_MODEL, ""),
+            ): str,
+            vol.Required(
+                CONF_ART_IDENTIFY_PERSONAL,
+                default=data.get(CONF_ART_IDENTIFY_PERSONAL, False),
+            ): bool,
+        }
+        return self.async_show_form(
+            step_id="art_identify",
+            data_schema=vol.Schema(schema),
         )
 
     async def async_step_save_exit(self, _) -> ConfigFlowResult:

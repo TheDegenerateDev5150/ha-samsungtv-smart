@@ -78,6 +78,41 @@ ST_POLL_OFF_INTERVAL = 30
 # in __init__.py so persisting it never triggers an integration reload.
 CONF_ST_PICTURE_MODE_CAPABILITY = "st_picture_mode_capability"
 
+# ── Artwork identification (Frame TV, v8.4) ────────────────────────────────
+# Opt-in pipeline: on each artwork change, a reverse image search (Google Cloud
+# Vision Web Detection) produces candidate titles/artists, then an LLM
+# (Anthropic or OpenAI) confirms/enriches against the thumbnail. Results are
+# cached (keyed by the Samsung content_id for Store artworks, by image hash for
+# personal ones) so each artwork is identified only once. Keys live in
+# entry.data (secrets, like the ST/IP tokens).
+CONF_ART_IDENTIFY_ENABLE = "art_identify_enable"
+CONF_ART_VISION_API_KEY = "art_vision_api_key"
+CONF_ART_LLM_PROVIDER = "art_llm_provider"  # "anthropic" | "openai"
+CONF_ART_LLM_API_KEY = "art_llm_api_key"
+CONF_ART_LLM_MODEL = "art_llm_model"
+# Also run on personal uploads (MY-*). Off by default: they are almost never in
+# Vision's art index, so they'd just burn quota returning "not identified".
+CONF_ART_IDENTIFY_PERSONAL = "art_identify_personal"
+
+ART_LLM_PROVIDERS = ("anthropic", "openai", "gemini")
+DEFAULT_ART_LLM_PROVIDER = "anthropic"
+# Sensible current defaults; user-overridable in the options.
+DEFAULT_ART_LLM_MODEL = {
+    "anthropic": "claude-haiku-4-5",
+    "openai": "gpt-4o",
+    "gemini": "gemini-2.5-flash",
+}
+
+# Cache TTLs (seconds). A successful identification never changes, so it is kept
+# effectively forever; a "not identified" result is retried after a couple of
+# weeks (better model / better web indexing since). Transport errors are never
+# cached, so they retry on the next artwork change.
+ART_CACHE_TTL_HIT = 3650 * 86400
+ART_CACHE_TTL_MISS = 14 * 86400
+# Debounce (seconds) after a content_id change before running the pipeline, so a
+# quick slideshow flip-through doesn't fire an identification per frame.
+ART_IDENTIFY_DEBOUNCE = 8
+
 CONF_SLIDESHOW_API = "slideshow_api"  # Persisted: "slideshow" or "auto_rotation"
 LOCAL_LOGO_PATH = "local_logo_path"
 WS_PREFIX = "[Home Assistant]"
@@ -181,6 +216,7 @@ SERVICE_ART_GET_ARTMODE = "art_get_artmode"
 SERVICE_ART_SET_ARTMODE = "art_set_artmode"
 SERVICE_ART_AVAILABLE = "art_available"
 SERVICE_ART_GET_CURRENT = "art_get_current"
+SERVICE_ART_IDENTIFY = "art_identify"
 SERVICE_ART_SELECT_IMAGE = "art_select_image"
 SERVICE_ART_UPLOAD = "art_upload"
 SERVICE_ART_DELETE = "art_delete"

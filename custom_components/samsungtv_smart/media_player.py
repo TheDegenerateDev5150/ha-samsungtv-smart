@@ -49,7 +49,7 @@ from homeassistant.const import (
     STATE_ON,
 )
 from homeassistant.core import DOMAIN as HA_DOMAIN
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, SupportsResponse, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers import config_validation as cv
@@ -103,6 +103,12 @@ from .const import (
     CONF_APP_LAUNCH_METHOD,
     CONF_APP_LIST,
     CONF_APP_LOAD_METHOD,
+    CONF_ART_IDENTIFY_ENABLE,
+    CONF_ART_IDENTIFY_PERSONAL,
+    CONF_ART_LLM_API_KEY,
+    CONF_ART_LLM_MODEL,
+    CONF_ART_LLM_PROVIDER,
+    CONF_ART_VISION_API_KEY,
     CONF_AUTH_METHOD,
     CONF_CHANNEL_LIST,
     CONF_DUMP_APPS,
@@ -138,6 +144,8 @@ from .const import (
     DATA_CFG,
     DATA_OPTIONS,
     DEFAULT_APP,
+    DEFAULT_ART_LLM_MODEL,
+    DEFAULT_ART_LLM_PROVIDER,
     DEFAULT_PORT,
     DEFAULT_SOURCE_LIST,
     DEFAULT_ST_POLL_ON_INTERVAL,
@@ -156,6 +164,7 @@ from .const import (
     SERVICE_ART_GET_PHOTO_FILTER_LIST,
     SERVICE_ART_GET_THUMBNAIL,
     SERVICE_ART_GET_THUMBNAILS_BATCH,
+    SERVICE_ART_IDENTIFY,
     SERVICE_ART_SELECT_IMAGE,
     SERVICE_ART_SET_ARTMODE,
     SERVICE_ART_SET_AUTO_ROTATION,
@@ -332,6 +341,12 @@ async def async_setup_entry(
         "async_art_get_current",
     )
     platform.async_register_entity_service(
+        SERVICE_ART_IDENTIFY,
+        {vol.Optional("force", default=False): cv.boolean},
+        "async_art_identify",
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    platform.async_register_entity_service(
         SERVICE_ART_SELECT_IMAGE,
         {
             vol.Required(ATTR_CONTENT_ID): cv.string,
@@ -458,6 +473,12 @@ async def async_setup_entry(
         },
         "async_art_set_auto_rotation",
     )
+
+
+def _read_file_bytes(path: str) -> bytes:
+    """Read a file's bytes (runs in the executor). Raises OSError if missing."""
+    with open(path, "rb") as handle:
+        return handle.read()
 
 
 def _get_default_app_info(app_id):
@@ -3378,6 +3399,72 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             result = {"service": "art_get_current", "error": str(ex)}
             self._store_art_result(result)
             return result
+
+    async def async_art_identify(self, force: bool = False) -> dict:
+        """Identify the currently displayed artwork (reverse search + LLM).
+
+        Opt-in pipeline (v8.4). Reads the resolved config from entry.data,
+        runs the cache-first identification on the byte-stable current.jpg the
+        Frame Art coordinator downloaded, and returns the result dict (usable
+        via a service ``response_variable``). Manual entry point; the automatic
+        per-artwork trigger arrives in a later slice.
+        """
+        from .art_identify import ArtIdentifyCache, async_identify
+
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None:
+            return {"error": "config entry not found"}
+        data = entry.data
+        if not data.get(CONF_ART_IDENTIFY_ENABLE):
+            return {
+                "error": "Art identification is disabled — enable it in the "
+                "integration options (Configure → Art identification)"
+            }
+        vision_key = data.get(CONF_ART_VISION_API_KEY)
+        llm_key = data.get(CONF_ART_LLM_API_KEY)
+        provider = data.get(CONF_ART_LLM_PROVIDER) or DEFAULT_ART_LLM_PROVIDER
+        model = data.get(CONF_ART_LLM_MODEL) or DEFAULT_ART_LLM_MODEL.get(provider)
+        if not vision_key or not llm_key:
+            return {"error": "Vision and LLM API keys must be set in the options"}
+
+        try:
+            current = await self._art_api.get_current()
+        except Exception as ex:  # noqa: BLE001 — surfaced to the caller
+            return {"error": f"could not read current artwork: {ex}"}
+        content_id = (current or {}).get("content_id")
+
+        is_store = bool(content_id and content_id.startswith("SAM-"))
+        if not is_store and not data.get(CONF_ART_IDENTIFY_PERSONAL):
+            return {
+                "skipped": "personal artwork identification is disabled",
+                "content_id": content_id,
+            }
+
+        path = self.hass.config.path("www", "frame_art", self._entry_id, "current.jpg")
+        try:
+            image_bytes = await self.hass.async_add_executor_job(_read_file_bytes, path)
+        except OSError as ex:
+            return {
+                "error": f"thumbnail not available yet ({ex}); wait for the "
+                "Frame Art sensor to download current.jpg"
+            }
+
+        cache = ArtIdentifyCache(self.hass, self._entry_id)
+        session = async_get_clientsession(self.hass)
+        result = await async_identify(
+            self.hass,
+            session,
+            cache,
+            content_id,
+            image_bytes,
+            vision_key=vision_key,
+            provider=provider,
+            llm_key=llm_key,
+            model=model,
+            force=force,
+        )
+        result["content_id"] = content_id
+        return result
 
     async def _ensure_art_mode_ready(self) -> bool:
         """Ensure TV is on and in Art Mode. Turn it on and activate Art Mode if needed.
