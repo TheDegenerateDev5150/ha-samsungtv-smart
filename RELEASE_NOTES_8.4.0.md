@@ -83,3 +83,19 @@ content: >
 ```
 
 A richer `custom:button-card` / picture-glance version can be built if wanted.
+
+### Troubleshooting (8.4.0b3)
+
+Debug logging now traces the whole pipeline — the gating decision, the
+thumbnail read, the **Vision candidates**, the **raw LLM reply**, cache
+hit/miss, timing, and each sensor trigger. Enable it with:
+
+```yaml
+logger:
+  logs:
+    custom_components.samsungtv_smart.art_identify: debug
+    custom_components.samsungtv_smart.sensor: debug
+```
+
+Typical lines: `Vision candidates best_guess=[…]`, `LLM (anthropic/…) raw
+reply: {…}`, `identified=True title=… in 6.3s`, `cache HIT (…)`.

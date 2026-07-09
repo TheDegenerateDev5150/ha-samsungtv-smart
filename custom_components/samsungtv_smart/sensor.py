@@ -1645,6 +1645,11 @@ class FrameArtMetadataSensor(SensorEntity):
         )
         if not content_id or content_id == self._handled_content_id:
             return
+        _LOGGER.debug(
+            "Art metadata: artwork changed to %s (was %s) — scheduling identify",
+            content_id,
+            self._handled_content_id,
+        )
         self._schedule_identify(content_id)
 
     @callback
@@ -1655,6 +1660,11 @@ class FrameArtMetadataSensor(SensorEntity):
             self._debounce_unsub()
         self._debounce_unsub = async_call_later(
             self.hass, ART_IDENTIFY_DEBOUNCE, self._async_debounce_fire
+        )
+        _LOGGER.debug(
+            "Art metadata: identify for %s debounced %ss",
+            content_id,
+            ART_IDENTIFY_DEBOUNCE,
         )
 
     @callback
@@ -1695,6 +1705,13 @@ class FrameArtMetadataSensor(SensorEntity):
                 self._schedule_identify(content_id)
             return
         identified = bool(result.get("identified"))
+        _LOGGER.debug(
+            "Art metadata updated: %s -> identified=%s title=%s source=%s",
+            content_id,
+            identified,
+            result.get("title"),
+            result.get("source"),
+        )
         self._attr_native_value = result.get("title") if identified else "Unidentified"
         self._attr_extra_state_attributes = {
             "identified": identified,

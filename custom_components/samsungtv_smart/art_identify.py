@@ -354,6 +354,7 @@ async def async_llm_confirm(
         raw = "".join(p.get("text", "") for p in parts)
     else:
         raw = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+    _LOGGER.debug("LLM (%s/%s) raw reply: %s", provider, model, raw[:600])
     parsed = _parse_llm_json(raw)
     # Normalize to the known schema so downstream is predictable.
     return {k: parsed.get(k) for k in RESULT_KEYS}
@@ -382,15 +383,37 @@ async def async_identify(
     key = derive_key(content_id, image_bytes)
 
     if force:
+        _LOGGER.debug("Artwork %s: force=True, bypassing cache", key)
         await cache.async_invalidate(key)
     else:
         hit = cache.get(key)
         if hit is not None:
+            _LOGGER.debug(
+                "Artwork %s: cache HIT (identified=%s title=%s)",
+                key,
+                hit.get("identified"),
+                hit.get("title"),
+            )
             return hit
+    _LOGGER.debug(
+        "Artwork %s: cache miss — running pipeline (%d bytes, %s/%s)",
+        key,
+        len(image_bytes),
+        provider,
+        model,
+    )
 
     img_b64 = base64.b64encode(image_bytes).decode()
+    started = time.monotonic()
     try:
         candidates = await async_vision_web_detection(session, vision_key, img_b64)
+        _LOGGER.debug(
+            "Artwork %s: Vision candidates best_guess=%s | entities=%s | pages=%s",
+            key,
+            candidates.get("best_guess"),
+            candidates.get("entities"),
+            candidates.get("pages"),
+        )
         result = await async_llm_confirm(
             session, provider, llm_key, model, img_b64, candidates
         )
@@ -405,10 +428,13 @@ async def async_identify(
     await cache.async_put(key, result)
     result["source"] = "fresh"
     _LOGGER.debug(
-        "Artwork %s identified=%s title=%s (via %s/%s)",
+        "Artwork %s identified=%s title=%s artist=%s conf=%s in %.1fs (via %s/%s)",
         key,
         result.get("identified"),
         result.get("title"),
+        result.get("artist"),
+        result.get("confidence"),
+        time.monotonic() - started,
         provider,
         model,
     )
@@ -464,6 +490,14 @@ async def async_identify_for_entry(
         return {"error": "Vision and LLM API keys must be set in the options"}
 
     is_store = bool(content_id and content_id.startswith("SAM-"))
+    _LOGGER.debug(
+        "Art identify: content_id=%s store=%s provider=%s model=%s force=%s",
+        content_id,
+        is_store,
+        provider,
+        model,
+        force,
+    )
     if not is_store and not data.get(CONF_ART_IDENTIFY_PERSONAL):
         return {
             "skipped": "personal artwork identification is disabled",
@@ -478,6 +512,7 @@ async def async_identify_for_entry(
             "error": f"thumbnail not available yet ({ex}); wait for the Frame "
             "Art sensor to download current.jpg"
         }
+    _LOGGER.debug("Art identify: read thumbnail %s (%d bytes)", path, len(image_bytes))
 
     session = async_get_clientsession(hass)
     result = await async_identify(
