@@ -41,6 +41,45 @@ Costs are tiny: Google Vision is free under ~1000 requests/month, and — since
 the same few dozen artworks rotate — the cache serves almost everything after a
 short warm-up, so the LLM is rarely called.
 
-_Coming next: automatic identification on every artwork change + a
-`sensor.<tv>_art_metadata` (title as state; artist/date/bio/confidence as
-attributes) + a ready-made Lovelace card._
+## Automatic identification + metadata sensor (8.4.0b2)
+
+When the feature is enabled, a new **`sensor.<tv>_art_metadata`** is created. It
+watches the artwork on screen and, on every change (debounced ~8 s so a fast
+slideshow doesn't fire per frame), runs the pipeline automatically and
+publishes:
+
+- **state** = the artwork title (or `Unidentified`);
+- **attributes** = `artist`, `date`, `artist_biography`, `artwork_description`,
+  `visual_description`, `confidence`, `matched_candidate`,
+  `suggested_search_query`, `source` (`cache`/`fresh`), `content_id`.
+
+The sensor and the manual `art_identify` service share one cache, so a title
+seen once is instant (and free) forever after. Enabling/disabling the feature
+adds/removes this sensor (a reload); editing an API key does not reload.
+
+### Ready-made Lovelace card
+
+A Markdown card that shows the current artwork thumbnail with its title, artist
+and bio underneath (replace `samsung_hacs` with your entity):
+
+```yaml
+type: markdown
+content: >
+  {% set m = 'sensor.samsung_hacs_art_metadata' %}
+  {% set thumb = state_attr('sensor.samsung_hacs_frame_art', 'current_thumbnail_url') %}
+  {% if thumb %}![art]({{ thumb }}){% endif %}
+
+
+  {% if is_state_attr(m, 'identified', true) %}
+  ## {{ states(m) }}
+
+  **{{ state_attr(m, 'artist') }}** · {{ state_attr(m, 'date') }}
+
+
+  {{ state_attr(m, 'artist_biography') }}
+  {% else %}
+  _Artwork not identified_
+  {% endif %}
+```
+
+A richer `custom:button-card` / picture-glance version can be built if wanted.
