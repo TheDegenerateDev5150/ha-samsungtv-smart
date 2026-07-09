@@ -94,12 +94,13 @@ CONF_ART_LLM_MODEL = "art_llm_model"
 # Vision's art index, so they'd just burn quota returning "not identified".
 CONF_ART_IDENTIFY_PERSONAL = "art_identify_personal"
 
-ART_LLM_PROVIDERS = ("anthropic", "openai")
+ART_LLM_PROVIDERS = ("anthropic", "openai", "gemini")
 DEFAULT_ART_LLM_PROVIDER = "anthropic"
 # Sensible current defaults; user-overridable in the options.
 DEFAULT_ART_LLM_MODEL = {
     "anthropic": "claude-haiku-4-5",
     "openai": "gpt-4o",
+    "gemini": "gemini-2.5-flash",
 }
 
 # Cache TTLs (seconds). A successful identification never changes, so it is kept

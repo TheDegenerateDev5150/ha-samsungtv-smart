@@ -12,7 +12,7 @@ Home Assistant can display its title, artist, date and a short artist bio.
 **How it works** — two stages, cache-first:
 1. **Reverse image search** (Google Cloud Vision *Web Detection*) turns the
    thumbnail into concrete candidate titles/artists from the real web.
-2. **LLM confirmation** (Anthropic *or* OpenAI) is handed those candidates and
+2. **LLM confirmation** (Anthropic, OpenAI *or* Gemini) is handed those candidates and
    the image, and confirms only if one genuinely matches what it sees —
    otherwise it returns "not identified". Reverse-search-first is what stops
    the hallucinations a bare vision model produces on obscure works.
@@ -29,8 +29,9 @@ metadata sensor land:
 
 - Configure under **Settings → Devices → the TV → Configure → Art
   Identification**: enable the feature, paste your Google Vision API key, pick
-  the LLM provider (Anthropic/OpenAI), paste its key, optionally set a model
-  (blank = `claude-haiku-4-5` / `gpt-4o`), and choose whether to also identify
+  the LLM provider (Anthropic/OpenAI/Gemini), paste its key, optionally set a
+  model (blank = `claude-haiku-4-5` / `gpt-4o` / `gemini-2.5-flash`), and
+  choose whether to also identify
   personal photos (off by default — they're rarely in the art index). Keys are
   stored in the config entry (never in your YAML/Git).
 - Call **`samsungtv_smart.art_identify`** on the TV entity (a `Response

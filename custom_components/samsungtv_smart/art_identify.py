@@ -7,7 +7,7 @@ Frame TV:
    thumbnail into concrete candidate titles/artists/pages pulled from the real
    web. This is the step a bare LLM cannot do (no vision model performs reverse
    image search; they identify "from memory" and hallucinate on obscure works).
-2. **LLM confirmation** — an LLM (Anthropic or OpenAI) is handed those
+2. **LLM confirmation** — an LLM (Anthropic, OpenAI or Gemini) is handed those
    candidates and the image, and asked to confirm ONLY if a candidate matches
    what it actually sees, otherwise return ``identified: false``. Feeding it
    real candidates collapses the hallucination surface: it verifies concrete
@@ -61,6 +61,10 @@ _VISION_URL = "https://vision.googleapis.com/v1/images:annotate"
 _ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 _ANTHROPIC_VERSION = "2023-06-01"
 _OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+_GEMINI_URL_TMPL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+    "{model}:generateContent?key={key}"
+)
 
 _CACHE_STORE_VERSION = 1
 _HTTP_TIMEOUT = 45  # seconds per external call
@@ -231,8 +235,8 @@ async def async_llm_confirm(
 ) -> dict[str, Any]:
     """Ask the configured LLM to confirm/enrich against the candidates.
 
-    Provider-agnostic wrapper over the Anthropic and OpenAI vision chat APIs.
-    Raises on transport/parse failure (not cached).
+    Provider-agnostic wrapper over the Anthropic, OpenAI and Gemini vision
+    chat APIs. Raises on transport/parse failure (not cached).
     """
     prompt = _build_llm_prompt(candidates)
     if provider == "anthropic":
@@ -286,6 +290,30 @@ async def async_llm_confirm(
             ],
         }
         url = _OPENAI_URL
+    elif provider == "gemini":
+        headers = {"content-type": "application/json"}
+        body = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt},
+                        {
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": img_b64,
+                            }
+                        },
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.1,
+                "maxOutputTokens": 700,
+                "response_mime_type": "application/json",
+            },
+        }
+        # Gemini takes the key as a query param, not a header.
+        url = _GEMINI_URL_TMPL.format(model=model, key=api_key)
     else:
         raise LLMError(f"unknown LLM provider: {provider!r}")
 
@@ -300,6 +328,11 @@ async def async_llm_confirm(
     if provider == "anthropic":
         blocks = data.get("content") or []
         raw = next((b.get("text", "") for b in blocks if b.get("type") == "text"), "")
+    elif provider == "gemini":
+        parts = (
+            (data.get("candidates") or [{}])[0].get("content", {}).get("parts", [{}])
+        )
+        raw = "".join(p.get("text", "") for p in parts)
     else:
         raw = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
     parsed = _parse_llm_json(raw)

@@ -208,7 +208,7 @@
           "art_identify_enable": "Enable artwork identification",
           "art_vision_api_key": "Google Cloud Vision API key",
           "art_llm_provider": "LLM provider",
-          "art_llm_api_key": "LLM API key (Anthropic or OpenAI)",
+          "art_llm_api_key": "LLM API key (Anthropic, OpenAI or Gemini)",
           "art_llm_model": "LLM model (blank = provider default)",
           "art_identify_personal": "Also identify personal photos (usually off)"
         }
