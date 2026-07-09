@@ -1,0 +1,366 @@
+"""Artwork identification pipeline for Samsung Frame TVs (v8.4).
+
+Two-stage, cache-first identification of the artwork currently shown on a
+Frame TV:
+
+1. **Reverse image search** — Google Cloud Vision *Web Detection* turns the
+   thumbnail into concrete candidate titles/artists/pages pulled from the real
+   web. This is the step a bare LLM cannot do (no vision model performs reverse
+   image search; they identify "from memory" and hallucinate on obscure works).
+2. **LLM confirmation** — an LLM (Anthropic or OpenAI) is handed those
+   candidates and the image, and asked to confirm ONLY if a candidate matches
+   what it actually sees, otherwise return ``identified: false``. Feeding it
+   real candidates collapses the hallucination surface: it verifies concrete
+   names instead of guessing.
+
+Everything is cached so the same artwork is never identified twice. The cache
+key is chosen by how much we trust the Samsung id:
+
+* ``SAM-*`` — global Art-Store catalogue id, stable across TV resets → the id
+  is the key.
+* anything else (``MY-*`` personal uploads, blank, unknown) — the id is a
+  recyclable local slot number that a TV reset can re-assign to a different
+  image, so it must NOT key the cache (a stale hit would show the wrong
+  metadata). The key is the image content instead (``IMG-<sha256[:16]>``); the
+  thumbnails we cache are the ones the integration downloaded, so they are
+  byte-stable and hash reliably.
+
+This module is provider-agnostic and free of Home Assistant entity code: it
+takes the image bytes and the resolved config, and returns a plain dict. The
+coordinator / sensor / service wiring lives elsewhere.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import logging
+import time
+from typing import Any
+
+from aiohttp import ClientError, ClientSession
+
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
+
+from .const import (
+    ART_CACHE_TTL_HIT,
+    ART_CACHE_TTL_MISS,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class VisionError(Exception):
+    """Reverse-image-search (Google Vision) call failed."""
+
+
+class LLMError(Exception):
+    """LLM confirmation call failed or returned unparseable output."""
+
+
+_VISION_URL = "https://vision.googleapis.com/v1/images:annotate"
+_ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+_ANTHROPIC_VERSION = "2023-06-01"
+_OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+
+_CACHE_STORE_VERSION = 1
+_HTTP_TIMEOUT = 45  # seconds per external call
+
+# Keys of the identification dict returned to callers / stored in the cache.
+RESULT_KEYS = (
+    "identified",
+    "confidence",
+    "matched_candidate",
+    "title",
+    "artist",
+    "date",
+    "visual_description",
+    "artwork_description",
+    "artist_biography",
+    "suggested_search_query",
+)
+
+
+def derive_key(content_id: str | None, img_bytes: bytes) -> str:
+    """Return the cache key for an artwork.
+
+    ``SAM-*`` ids are global and stable → trusted as the key. Everything else
+    is keyed by image content, so a recycled local id can never yield a stale
+    hit for a different image.
+    """
+    if content_id and content_id.startswith("SAM-"):
+        return content_id
+    return "IMG-" + hashlib.sha256(img_bytes).hexdigest()[:16]
+
+
+class ArtIdentifyCache:
+    """Persistent, TTL'd cache of identification results (one per config entry).
+
+    Backed by Home Assistant's ``Store`` (JSON under ``.storage/``): survives
+    restarts and container updates, needs no extra dependency, and is plenty
+    for the few dozen artworks that actually rotate on a Frame.
+    """
+
+    def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
+        self._store: Store = Store(
+            hass, _CACHE_STORE_VERSION, f"samsungtv_smart_art_cache_{entry_id}"
+        )
+        self._data: dict[str, dict[str, Any]] = {}
+        self._loaded = False
+
+    async def async_load(self) -> None:
+        """Load the cache from disk once."""
+        if self._loaded:
+            return
+        stored = await self._store.async_load()
+        if isinstance(stored, dict):
+            self._data = stored
+        self._loaded = True
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        """Return a non-expired cached result, or None.
+
+        A hit (identified) is kept effectively forever; a miss is retried after
+        ``ART_CACHE_TTL_MISS``. Expired entries return None so the caller
+        re-runs the pipeline.
+        """
+        entry = self._data.get(key)
+        if not entry:
+            return None
+        ttl = ART_CACHE_TTL_HIT if entry.get("identified") else ART_CACHE_TTL_MISS
+        if time.time() - entry.get("_fetched_at", 0) > ttl:
+            return None
+        result = {k: entry.get(k) for k in RESULT_KEYS}
+        result["source"] = "cache"
+        return result
+
+    async def async_put(self, key: str, result: dict[str, Any]) -> None:
+        """Store a fresh result (hit or miss) and persist it. Errors are not cached."""
+        entry = {k: result.get(k) for k in RESULT_KEYS}
+        entry["_fetched_at"] = time.time()
+        self._data[key] = entry
+        await self._store.async_save(self._data)
+
+    async def async_invalidate(self, key: str) -> None:
+        """Drop one entry (used by a forced re-identification)."""
+        if self._data.pop(key, None) is not None:
+            await self._store.async_save(self._data)
+
+
+async def async_vision_web_detection(
+    session: ClientSession, api_key: str, img_b64: str
+) -> dict[str, list[str]]:
+    """Run Google Cloud Vision Web Detection on a base64 image.
+
+    Returns the useful, de-noised bits: the best-guess label(s) (often
+    literally "Title — Artist"), the higher-confidence web entities, and the
+    titles of pages the image appears on (galleries/stock listings usually
+    carry the real title + credit). Raises on transport/API failure so the
+    caller can avoid caching a non-answer.
+    """
+    body = {
+        "requests": [
+            {
+                "image": {"content": img_b64},
+                "features": [{"type": "WEB_DETECTION", "maxResults": 10}],
+            }
+        ]
+    }
+    async with session.post(
+        f"{_VISION_URL}?key={api_key}", json=body, timeout=_HTTP_TIMEOUT
+    ) as resp:
+        if resp.status != 200:
+            text = await resp.text()
+            raise VisionError(f"Vision API {resp.status}: {text[:200]}")
+        data = await resp.json()
+    wd = (data.get("responses") or [{}])[0].get("webDetection", {}) or {}
+    return {
+        "best_guess": [
+            b.get("label") for b in wd.get("bestGuessLabels", []) if b.get("label")
+        ],
+        "entities": [
+            e["description"]
+            for e in wd.get("webEntities", [])
+            if e.get("description") and e.get("score", 0) > 0.5
+        ][:8],
+        "pages": [
+            p.get("pageTitle")
+            for p in wd.get("pagesWithMatchingImages", [])
+            if p.get("pageTitle")
+        ][:5],
+    }
+
+
+def _build_llm_prompt(candidates: dict[str, list[str]]) -> str:
+    """Prompt that hands the reverse-search candidates to the LLM for checking."""
+    return (
+        "This image is the thumbnail of the artwork currently displayed on a "
+        "Samsung The Frame TV. A reverse image search returned these CANDIDATES "
+        "(possibly wrong):\n"
+        f"- Best guess: {' / '.join(candidates.get('best_guess') or []) or '(none)'}\n"
+        f"- Web entities: {', '.join(candidates.get('entities') or []) or '(none)'}\n"
+        f"- Page titles: {' | '.join(candidates.get('pages') or []) or '(none)'}\n\n"
+        "Your task: confirm the identification ONLY if a candidate is consistent "
+        "with what you actually SEE in the image. If none matches, set "
+        '"identified": false and leave title/artist/date/artist_biography null. '
+        "Do NOT invent facts. Separate the visual description from the factual "
+        "identification. confidence is a number from 0 to 1.\n"
+        "Reply with ONLY valid JSON (no prose, no markdown fences), schema:\n"
+        '{"identified": false, "confidence": 0.0, "matched_candidate": null, '
+        '"title": null, "artist": null, "date": null, "visual_description": "", '
+        '"artwork_description": null, "artist_biography": null, '
+        '"suggested_search_query": null}'
+    )
+
+
+def _parse_llm_json(raw: str) -> dict[str, Any]:
+    """Extract the JSON object from an LLM reply, tolerating stray fences/prose."""
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise LLMError(f"no JSON object in LLM reply: {raw[:200]}")
+    return json.loads(raw[start : end + 1])
+
+
+async def async_llm_confirm(
+    session: ClientSession,
+    provider: str,
+    api_key: str,
+    model: str,
+    img_b64: str,
+    candidates: dict[str, list[str]],
+) -> dict[str, Any]:
+    """Ask the configured LLM to confirm/enrich against the candidates.
+
+    Provider-agnostic wrapper over the Anthropic and OpenAI vision chat APIs.
+    Raises on transport/parse failure (not cached).
+    """
+    prompt = _build_llm_prompt(candidates)
+    if provider == "anthropic":
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": _ANTHROPIC_VERSION,
+            "content-type": "application/json",
+        }
+        body = {
+            "model": model,
+            "max_tokens": 700,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": img_b64,
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+        }
+        url = _ANTHROPIC_URL
+    elif provider == "openai":
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "content-type": "application/json",
+        }
+        body = {
+            "model": model,
+            "max_tokens": 700,
+            "temperature": 0.1,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"},
+                        },
+                    ],
+                }
+            ],
+        }
+        url = _OPENAI_URL
+    else:
+        raise LLMError(f"unknown LLM provider: {provider!r}")
+
+    async with session.post(
+        url, json=body, headers=headers, timeout=_HTTP_TIMEOUT
+    ) as resp:
+        if resp.status != 200:
+            text = await resp.text()
+            raise LLMError(f"{provider} API {resp.status}: {text[:200]}")
+        data = await resp.json()
+
+    if provider == "anthropic":
+        blocks = data.get("content") or []
+        raw = next((b.get("text", "") for b in blocks if b.get("type") == "text"), "")
+    else:
+        raw = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+    parsed = _parse_llm_json(raw)
+    # Normalize to the known schema so downstream is predictable.
+    return {k: parsed.get(k) for k in RESULT_KEYS}
+
+
+async def async_identify(
+    hass: HomeAssistant,
+    session: ClientSession,
+    cache: ArtIdentifyCache,
+    content_id: str | None,
+    image_bytes: bytes,
+    *,
+    vision_key: str,
+    provider: str,
+    llm_key: str,
+    model: str,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Identify one artwork, cache-first.
+
+    Returns a dict with the RESULT_KEYS plus ``source`` (``cache`` | ``fresh`` |
+    ``error``). Transport/API errors return ``identified: false`` with
+    ``source: error`` and are NOT cached, so the next artwork change retries.
+    """
+    await cache.async_load()
+    key = derive_key(content_id, image_bytes)
+
+    if force:
+        await cache.async_invalidate(key)
+    else:
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
+
+    img_b64 = base64.b64encode(image_bytes).decode()
+    try:
+        candidates = await async_vision_web_detection(session, vision_key, img_b64)
+        result = await async_llm_confirm(
+            session, provider, llm_key, model, img_b64, candidates
+        )
+    except (VisionError, LLMError, ClientError, TimeoutError, ValueError) as err:
+        _LOGGER.warning("Artwork identification failed for %s: %s", key, err)
+        return {
+            **{k: None for k in RESULT_KEYS},
+            "identified": False,
+            "source": "error",
+        }
+
+    await cache.async_put(key, result)
+    result["source"] = "fresh"
+    _LOGGER.debug(
+        "Artwork %s identified=%s title=%s (via %s/%s)",
+        key,
+        result.get("identified"),
+        result.get("title"),
+        provider,
+        model,
+    )
+    return result
