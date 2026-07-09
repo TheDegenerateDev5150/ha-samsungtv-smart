@@ -271,10 +271,14 @@ async def async_llm_confirm(
             "Authorization": f"Bearer {api_key}",
             "content-type": "application/json",
         }
+        # max_completion_tokens (not the deprecated max_tokens) — the gpt-5 /
+        # o-series models reject max_tokens outright; it works for gpt-4o too.
+        # temperature is intentionally omitted: the reasoning models only
+        # accept the default, and the reverse-search candidates + json_object
+        # already constrain the answer, so determinism isn't needed here.
         body = {
             "model": model,
-            "max_tokens": 700,
-            "temperature": 0.1,
+            "max_completion_tokens": 700,
             "response_format": {"type": "json_object"},
             "messages": [
                 {
