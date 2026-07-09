@@ -41,10 +41,25 @@ from typing import Any
 
 from aiohttp import ClientError, ClientSession
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 
-from .const import ART_CACHE_TTL_HIT, ART_CACHE_TTL_MISS
+from .const import (
+    ART_CACHE_TTL_HIT,
+    ART_CACHE_TTL_MISS,
+    CONF_ART_IDENTIFY_ENABLE,
+    CONF_ART_IDENTIFY_PERSONAL,
+    CONF_ART_LLM_API_KEY,
+    CONF_ART_LLM_MODEL,
+    CONF_ART_LLM_PROVIDER,
+    CONF_ART_VISION_API_KEY,
+    DATA_ART_CACHE,
+    DEFAULT_ART_LLM_MODEL,
+    DEFAULT_ART_LLM_PROVIDER,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -271,10 +286,14 @@ async def async_llm_confirm(
             "Authorization": f"Bearer {api_key}",
             "content-type": "application/json",
         }
+        # max_completion_tokens (not the deprecated max_tokens) — the gpt-5 /
+        # o-series models reject max_tokens outright; it works for gpt-4o too.
+        # temperature is intentionally omitted: the reasoning models only
+        # accept the default, and the reverse-search candidates + json_object
+        # already constrain the answer, so determinism isn't needed here.
         body = {
             "model": model,
-            "max_tokens": 700,
-            "temperature": 0.1,
+            "max_completion_tokens": 700,
             "response_format": {"type": "json_object"},
             "messages": [
                 {
@@ -335,6 +354,7 @@ async def async_llm_confirm(
         raw = "".join(p.get("text", "") for p in parts)
     else:
         raw = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
+    _LOGGER.debug("LLM (%s/%s) raw reply: %s", provider, model, raw[:600])
     parsed = _parse_llm_json(raw)
     # Normalize to the known schema so downstream is predictable.
     return {k: parsed.get(k) for k in RESULT_KEYS}
@@ -363,15 +383,37 @@ async def async_identify(
     key = derive_key(content_id, image_bytes)
 
     if force:
+        _LOGGER.debug("Artwork %s: force=True, bypassing cache", key)
         await cache.async_invalidate(key)
     else:
         hit = cache.get(key)
         if hit is not None:
+            _LOGGER.debug(
+                "Artwork %s: cache HIT (identified=%s title=%s)",
+                key,
+                hit.get("identified"),
+                hit.get("title"),
+            )
             return hit
+    _LOGGER.debug(
+        "Artwork %s: cache miss — running pipeline (%d bytes, %s/%s)",
+        key,
+        len(image_bytes),
+        provider,
+        model,
+    )
 
     img_b64 = base64.b64encode(image_bytes).decode()
+    started = time.monotonic()
     try:
         candidates = await async_vision_web_detection(session, vision_key, img_b64)
+        _LOGGER.debug(
+            "Artwork %s: Vision candidates best_guess=%s | entities=%s | pages=%s",
+            key,
+            candidates.get("best_guess"),
+            candidates.get("entities"),
+            candidates.get("pages"),
+        )
         result = await async_llm_confirm(
             session, provider, llm_key, model, img_b64, candidates
         )
@@ -386,11 +428,104 @@ async def async_identify(
     await cache.async_put(key, result)
     result["source"] = "fresh"
     _LOGGER.debug(
-        "Artwork %s identified=%s title=%s (via %s/%s)",
+        "Artwork %s identified=%s title=%s artist=%s conf=%s in %.1fs (via %s/%s)",
         key,
         result.get("identified"),
         result.get("title"),
+        result.get("artist"),
+        result.get("confidence"),
+        time.monotonic() - started,
         provider,
         model,
     )
+    return result
+
+
+def _read_file_bytes(path: str) -> bytes:
+    """Read a file's bytes (runs in the executor). Raises OSError if missing."""
+    with open(path, "rb") as handle:
+        return handle.read()
+
+
+def get_shared_cache(hass: HomeAssistant, entry_id: str) -> ArtIdentifyCache:
+    """Return the per-entry ArtIdentifyCache, creating it once.
+
+    Shared between the manual service and the metadata sensor so both hit the
+    same in-memory cache within a session.
+    """
+    store = hass.data[DOMAIN][entry_id]
+    cache = store.get(DATA_ART_CACHE)
+    if cache is None:
+        cache = ArtIdentifyCache(hass, entry_id)
+        store[DATA_ART_CACHE] = cache
+    return cache
+
+
+async def async_identify_for_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    content_id: str | None,
+    *,
+    cache: ArtIdentifyCache,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Resolve config + thumbnail for a config entry and run identification.
+
+    The single entry point shared by the ``art_identify`` service and the
+    metadata sensor. Returns the identification dict, or a dict with an
+    ``error`` / ``skipped`` key describing why nothing ran (disabled, missing
+    keys, personal artwork with the toggle off, thumbnail not downloaded yet).
+    """
+    data = entry.data
+    if not data.get(CONF_ART_IDENTIFY_ENABLE):
+        return {
+            "error": "Art identification is disabled — enable it in the "
+            "integration options (Configure → Art Identification)"
+        }
+    vision_key = data.get(CONF_ART_VISION_API_KEY)
+    llm_key = data.get(CONF_ART_LLM_API_KEY)
+    provider = data.get(CONF_ART_LLM_PROVIDER) or DEFAULT_ART_LLM_PROVIDER
+    model = data.get(CONF_ART_LLM_MODEL) or DEFAULT_ART_LLM_MODEL.get(provider)
+    if not vision_key or not llm_key:
+        return {"error": "Vision and LLM API keys must be set in the options"}
+
+    is_store = bool(content_id and content_id.startswith("SAM-"))
+    _LOGGER.debug(
+        "Art identify: content_id=%s store=%s provider=%s model=%s force=%s",
+        content_id,
+        is_store,
+        provider,
+        model,
+        force,
+    )
+    if not is_store and not data.get(CONF_ART_IDENTIFY_PERSONAL):
+        return {
+            "skipped": "personal artwork identification is disabled",
+            "content_id": content_id,
+        }
+
+    path = hass.config.path("www", "frame_art", entry.entry_id, "current.jpg")
+    try:
+        image_bytes = await hass.async_add_executor_job(_read_file_bytes, path)
+    except OSError as ex:
+        return {
+            "error": f"thumbnail not available yet ({ex}); wait for the Frame "
+            "Art sensor to download current.jpg"
+        }
+    _LOGGER.debug("Art identify: read thumbnail %s (%d bytes)", path, len(image_bytes))
+
+    session = async_get_clientsession(hass)
+    result = await async_identify(
+        hass,
+        session,
+        cache,
+        content_id,
+        image_bytes,
+        vision_key=vision_key,
+        provider=provider,
+        llm_key=llm_key,
+        model=model,
+        force=force,
+    )
+    result["content_id"] = content_id
     return result

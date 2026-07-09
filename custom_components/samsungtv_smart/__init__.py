@@ -56,7 +56,6 @@ from .const import (
     AUTH_METHOD_OAUTH,
     AUTH_METHOD_ST_ENTRY,
     CONF_APP_LIST,
-    CONF_ART_IDENTIFY_ENABLE,
     CONF_ART_IDENTIFY_PERSONAL,
     CONF_ART_LLM_API_KEY,
     CONF_ART_LLM_MODEL,
@@ -1200,9 +1199,10 @@ _RELOAD_OPTIONS = (
 # what the verify-and-fallback logic runs right after a user action).
 _NO_RELOAD_DATA_KEYS = (
     CONF_ST_PICTURE_MODE_CAPABILITY,
-    # Art-identification config (keys/toggles/model): read live by the service
-    # and coordinator, so persisting it shouldn't tear the integration down.
-    CONF_ART_IDENTIFY_ENABLE,
+    # Art-identification config read live by the service/sensor: persisting it
+    # shouldn't tear the integration down. NOTE: CONF_ART_IDENTIFY_ENABLE is
+    # deliberately NOT here — toggling it creates/removes the Art Metadata
+    # sensor, which requires a reload.
     CONF_ART_IDENTIFY_PERSONAL,
     CONF_ART_VISION_API_KEY,
     CONF_ART_LLM_PROVIDER,
