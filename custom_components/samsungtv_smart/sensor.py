@@ -1705,26 +1705,34 @@ class FrameArtMetadataSensor(SensorEntity):
                 self._schedule_identify(content_id)
             return
         identified = bool(result.get("identified"))
+        translations = result.get("translations") or {}
+        # Convenience copy in the HA instance language (fallback English) so a
+        # plain Markdown card works; full 'translations' is exposed too so a
+        # frontend card can pick the viewer's own browser/user language.
+        lang = (self.hass.config.language or "en").split("-")[0]
+        local = translations.get(lang) or translations.get("en") or {}
         _LOGGER.debug(
-            "Art metadata updated: %s -> identified=%s title=%s source=%s",
+            "Art metadata updated: %s -> identified=%s title=%s source=%s langs=%s",
             content_id,
             identified,
-            result.get("title"),
+            local.get("title"),
             result.get("source"),
+            list(translations),
         )
-        self._attr_native_value = result.get("title") if identified else "Unidentified"
+        self._attr_native_value = local.get("title") if identified else "Unidentified"
         self._attr_extra_state_attributes = {
             "identified": identified,
             "confidence": result.get("confidence"),
             "artist": result.get("artist"),
             "date": result.get("date"),
-            "artist_biography": result.get("artist_biography"),
-            "artwork_description": result.get("artwork_description"),
-            "visual_description": result.get("visual_description"),
+            "artist_biography": local.get("artist_biography"),
+            "artwork_description": local.get("artwork_description"),
+            "visual_description": local.get("visual_description"),
             "matched_candidate": result.get("matched_candidate"),
             "suggested_search_query": result.get("suggested_search_query"),
             "source": result.get("source"),
             "content_id": content_id,
+            "translations": translations,
         }
         self.async_write_ha_state()
 

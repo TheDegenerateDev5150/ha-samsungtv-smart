@@ -84,19 +84,30 @@ _GEMINI_URL_TMPL = (
 _CACHE_STORE_VERSION = 1
 _HTTP_TIMEOUT = 45  # seconds per external call
 
-# Keys of the identification dict returned to callers / stored in the cache.
-RESULT_KEYS = (
+# Languages the metadata is produced in, so each viewer can be shown the
+# artwork description in their own UI language (the Lovelace card picks by the
+# browser/user language). Keep 'en' first — it's the universal fallback.
+LANGS = ("en", "fr", "es", "it", "pt-BR")
+
+# Language-independent fields (kept once): identity + confidence.
+TOP_LEVEL_KEYS = (
     "identified",
     "confidence",
     "matched_candidate",
-    "title",
     "artist",
     "date",
-    "visual_description",
-    "artwork_description",
-    "artist_biography",
     "suggested_search_query",
 )
+# Fields produced per language (prose + the possibly-translated title).
+TRANSLATED_FIELDS = (
+    "title",
+    "artwork_description",
+    "artist_biography",
+    "visual_description",
+)
+# Full set stored/returned: the top-level keys plus a 'translations' dict
+# {lang: {translated field: value}}.
+RESULT_KEYS = (*TOP_LEVEL_KEYS, "translations")
 
 
 def derive_key(content_id: str | None, img_bytes: bytes) -> str:
@@ -120,8 +131,11 @@ class ArtIdentifyCache:
     """
 
     def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
+        # _v2 = multilingual schema; the old single-language cache file is left
+        # untouched but no longer read, so entries re-identify once into all
+        # languages instead of surfacing a partial (English-only) result.
         self._store: Store = Store(
-            hass, _CACHE_STORE_VERSION, f"samsungtv_smart_art_cache_{entry_id}"
+            hass, _CACHE_STORE_VERSION, f"samsungtv_smart_art_cache_v2_{entry_id}"
         )
         self._data: dict[str, dict[str, Any]] = {}
         self._loaded = False
@@ -210,7 +224,13 @@ async def async_vision_web_detection(
 
 
 def _build_llm_prompt(candidates: dict[str, list[str]]) -> str:
-    """Prompt that hands the reverse-search candidates to the LLM for checking."""
+    """Prompt that hands the reverse-search candidates to the LLM for checking.
+
+    Asks for the descriptive fields in every language of ``LANGS`` so each
+    viewer can be shown the metadata in their own UI language from a single
+    call (cheaper and consistent vs one call per language).
+    """
+    langs = ", ".join(LANGS)
     return (
         "This image is the thumbnail of the artwork currently displayed on a "
         "Samsung The Frame TV. A reverse image search returned these CANDIDATES "
@@ -220,14 +240,21 @@ def _build_llm_prompt(candidates: dict[str, list[str]]) -> str:
         f"- Page titles: {' | '.join(candidates.get('pages') or []) or '(none)'}\n\n"
         "Your task: confirm the identification ONLY if a candidate is consistent "
         "with what you actually SEE in the image. If none matches, set "
-        '"identified": false and leave title/artist/date/artist_biography null. '
+        '"identified": false and leave artist/date null and translations {}. '
         "Do NOT invent facts. Separate the visual description from the factual "
         "identification. confidence is a number from 0 to 1.\n"
+        f"Provide title, artwork_description, artist_biography and "
+        f"visual_description in ALL these languages: {langs}. artist, date and "
+        "suggested_search_query stay in one language (English). Translate the "
+        "prose naturally, don't just transliterate.\n"
         "Reply with ONLY valid JSON (no prose, no markdown fences), schema:\n"
         '{"identified": false, "confidence": 0.0, "matched_candidate": null, '
-        '"title": null, "artist": null, "date": null, "visual_description": "", '
-        '"artwork_description": null, "artist_biography": null, '
-        '"suggested_search_query": null}'
+        '"artist": null, "date": null, "suggested_search_query": null, '
+        '"translations": {"en": {"title": null, "artwork_description": null, '
+        '"artist_biography": null, "visual_description": ""}, '
+        '"fr": {"title": null, "artwork_description": null, '
+        '"artist_biography": null, "visual_description": ""}, '
+        '"es": {...}, "it": {...}, "pt-BR": {...}}}'
     )
 
 
@@ -356,8 +383,29 @@ async def async_llm_confirm(
         raw = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
     _LOGGER.debug("LLM (%s/%s) raw reply: %s", provider, model, raw[:600])
     parsed = _parse_llm_json(raw)
-    # Normalize to the known schema so downstream is predictable.
-    return {k: parsed.get(k) for k in RESULT_KEYS}
+    return _normalize_result(parsed)
+
+
+def _normalize_result(parsed: dict[str, Any]) -> dict[str, Any]:
+    """Coerce an LLM reply to the multilingual schema.
+
+    Guarantees a ``translations`` dict with every ``LANGS`` entry present (each
+    with the ``TRANSLATED_FIELDS`` keys), falling back to English for any
+    language the model omitted so a viewer never gets an empty description.
+    """
+    result = {k: parsed.get(k) for k in TOP_LEVEL_KEYS}
+    raw_tr = parsed.get("translations")
+    if not isinstance(raw_tr, dict):
+        raw_tr = {}
+    en = raw_tr.get("en") if isinstance(raw_tr.get("en"), dict) else {}
+    translations: dict[str, dict[str, Any]] = {}
+    for lang in LANGS:
+        block = raw_tr.get(lang) if isinstance(raw_tr.get(lang), dict) else {}
+        translations[lang] = {
+            field: block.get(field) or en.get(field) for field in TRANSLATED_FIELDS
+        }
+    result["translations"] = translations
+    return result
 
 
 async def async_identify(
@@ -431,7 +479,7 @@ async def async_identify(
         "Artwork %s identified=%s title=%s artist=%s conf=%s in %.1fs (via %s/%s)",
         key,
         result.get("identified"),
-        result.get("title"),
+        (result.get("translations") or {}).get("en", {}).get("title"),
         result.get("artist"),
         result.get("confidence"),
         time.monotonic() - started,

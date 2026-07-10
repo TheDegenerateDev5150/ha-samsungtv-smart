@@ -424,12 +424,24 @@ class FrameArtModeSwitch(SwitchEntity):
                 )
                 return
 
-            # Wait for TV to be ready
+            # Wait for TV to be ready. If it never becomes reachable within the
+            # window, it did not respond to power-on — it is off the network
+            # (deep standby / dropped Wi-Fi), not merely cold-booting. Bail out
+            # instead of "trying anyway": the following 8s stabilise wait plus
+            # the 5x art-mode retry loop would otherwise thrash for ~60s against
+            # a TV that cannot answer (observed after a spurious art-mode-on
+            # command on an off Salon TV — issue #116 follow-up).
             tv_was_off = True
             if not await self._wait_for_tv_ready(max_wait=20):
                 self._log.warning(
-                    "TV may not be fully ready, attempting Art Mode anyway..."
+                    "Art Mode ON aborted for %s: TV did not become reachable "
+                    "after power-on (likely off the network) — not retrying",
+                    self._device_name,
                 )
+                self._set_optimistic(False)
+                self._available = True
+                self.async_write_ha_state()
+                return
 
             # Additional delay for TV Art subsystem to stabilize after boot.
             # supported() returns True quickly (WebSocket reachable) but

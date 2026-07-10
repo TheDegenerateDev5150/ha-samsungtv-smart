@@ -41,6 +41,50 @@ Costs are tiny: Google Vision is free under ~1000 requests/month, and — since
 the same few dozen artworks rotate — the cache serves almost everything after a
 short warm-up, so the LLM is rarely called.
 
+## Multilingual metadata + off-network art-mode guard (8.4.0b4)
+
+- **The metadata is now produced in 5 languages** (`en`, `fr`, `es`, `it`,
+  `pt-BR`) in a single LLM call. The `sensor.<tv>_art_metadata` exposes the
+  descriptive fields (`title`, `artwork_description`, `artist_biography`,
+  `visual_description`) in the Home Assistant instance language for a plain
+  card, **plus a full `translations` attribute** `{lang: {…}}` so a frontend
+  card can show each viewer the description **in their own browser/UI
+  language** — a FR user and an EN user looking at the same dashboard each read
+  it in their language. `artist`/`date`/`confidence` stay language-independent.
+  (The cache is rebuilt once — old English-only entries re-identify into all
+  languages.)
+- **Art-mode switch: stop thrashing an off-network TV.** When `switch.…_art_mode`
+  is turned on while the TV is off and the TV never becomes reachable after the
+  power-on (deep standby / dropped Wi-Fi), the switch now **aborts instead of
+  running the 8s stabilise wait + 5× retry loop** (~60s of futile hammering).
+  This tames the "art mode went haywire" episodes triggered by an automation
+  commanding art-on on an off Salon TV.
+
+### Per-viewer language Lovelace card
+
+`custom:button-card` reads the viewer's language from `hass` and picks the
+matching translation (replace `samsung_hacs`):
+
+```yaml
+type: custom:button-card
+entity: sensor.samsung_hacs_art_metadata
+show_icon: false
+show_entity_picture: true
+entity_picture: >
+  [[[ return states['sensor.samsung_hacs_frame_art'].attributes.current_thumbnail_url ]]]
+name: |
+  [[[
+    const a = entity.attributes;
+    if (!a.identified) return 'Artwork not identified';
+    const lang = (hass.language || 'en').split('-')[0];
+    const t = (a.translations && (a.translations[lang] || a.translations.en)) || {};
+    return `${t.title}\n${a.artist} · ${a.date}\n\n${t.artist_biography || ''}`;
+  ]]]
+styles:
+  card: [{ padding: 12px }]
+  name: [{ white-space: pre-line }, { font-size: 13px }]
+```
+
 ## Automatic identification + metadata sensor (8.4.0b2)
 
 When the feature is enabled, a new **`sensor.<tv>_art_metadata`** is created. It
