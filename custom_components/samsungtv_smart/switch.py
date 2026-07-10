@@ -220,6 +220,12 @@ class FrameArtModeSwitch(SwitchEntity):
         self._media_player_entity_id: str | None = None
         self._ip_control: SamsungIPControl | None = None
         self._ip_control_token: str | None = None
+        # Set when an Art Mode ON was requested but the TV was off and never
+        # became reachable (off the network). We don't hammer it; instead we
+        # re-apply once the media_player reports the TV back online. Cleared by
+        # a successful turn-on, or by an explicit turn-off (art no longer
+        # wanted).
+        self._pending_art_on = False
 
     def _get_ip_control(self) -> SamsungIPControl | None:
         """Return an IP Control client if paired AND enabled, else None.
@@ -393,6 +399,8 @@ class FrameArtModeSwitch(SwitchEntity):
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn Art Mode on."""
         self._log.debug("Turning Art Mode ON for %s", self._device_name)
+        # A fresh explicit attempt supersedes any earlier deferred one.
+        self._pending_art_on = False
 
         # Short-circuit: if already in Art Mode, nothing to do.
         # Avoids useless set_artmode(True) calls that the TV may silently
@@ -435,9 +443,13 @@ class FrameArtModeSwitch(SwitchEntity):
             if not await self._wait_for_tv_ready(max_wait=20):
                 self._log.warning(
                     "Art Mode ON aborted for %s: TV did not become reachable "
-                    "after power-on (likely off the network) — not retrying",
+                    "after power-on (likely off the network) — will re-apply "
+                    "when the TV comes back online",
                     self._device_name,
                 )
+                # Defer instead of hammering: re-apply once the media_player
+                # reports the TV reachable again (handled in the state listener).
+                self._pending_art_on = True
                 self._set_optimistic(False)
                 self._available = True
                 self.async_write_ha_state()
@@ -541,6 +553,8 @@ class FrameArtModeSwitch(SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn Art Mode off (switch to normal TV mode)."""
         self._log.debug("Turning Art Mode OFF for %s", self._device_name)
+        # Art no longer wanted — drop any deferred re-apply.
+        self._pending_art_on = False
 
         # Check if TV is on
         tv_is_on = await self._is_tv_on()
@@ -727,6 +741,25 @@ class FrameArtModeSwitch(SwitchEntity):
         if new_state is None:
             return
         art_status = new_state.attributes.get("art_mode_status")
+
+        # Deferred re-apply: a previous Art Mode ON was aborted because the TV
+        # was off the network. Re-apply now that it is reachable again — but
+        # only on a real edge to avoid loops. If art is already on, the request
+        # is already satisfied.
+        if self._pending_art_on:
+            if art_status == "on":
+                self._pending_art_on = False
+            elif new_state.state not in (STATE_OFF, "unavailable", "unknown"):
+                self._pending_art_on = False
+                self._log.info(
+                    "TV %s back online — re-applying deferred Art Mode ON",
+                    self._device_name,
+                )
+                self._hass.async_create_background_task(
+                    self.async_turn_on(),
+                    f"art_mode_deferred_on_{self._entry.entry_id}",
+                )
+                return
         if art_status in ("on", "off"):
             # Mirror the media_player's authoritative art_mode_status directly,
             # including when the TV is ON but no longer in Art Mode (e.g. an app

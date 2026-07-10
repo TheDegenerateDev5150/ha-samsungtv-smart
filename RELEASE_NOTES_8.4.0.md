@@ -53,12 +53,16 @@ short warm-up, so the LLM is rarely called.
   it in their language. `artist`/`date`/`confidence` stay language-independent.
   (The cache is rebuilt once — old English-only entries re-identify into all
   languages.)
-- **Art-mode switch: stop thrashing an off-network TV.** When `switch.…_art_mode`
-  is turned on while the TV is off and the TV never becomes reachable after the
-  power-on (deep standby / dropped Wi-Fi), the switch now **aborts instead of
-  running the 8s stabilise wait + 5× retry loop** (~60s of futile hammering).
-  This tames the "art mode went haywire" episodes triggered by an automation
-  commanding art-on on an off Salon TV.
+- **Art-mode switch: stop thrashing an off-network TV, re-apply when it's
+  back.** When `switch.…_art_mode` is turned on while the TV is off and it never
+  becomes reachable after the power-on (deep standby / dropped Wi-Fi), the
+  switch now **aborts instead of running the 8s stabilise wait + 5× retry
+  loop** (~60s of futile hammering). The request is **not lost**: it is
+  remembered and **re-applied automatically the moment the media_player reports
+  the TV back online** (no reliance on an automation re-firing). The deferred
+  request is dropped if Art Mode is turned off in the meantime, or superseded
+  by a new explicit turn-on. This tames the "art mode went haywire" episodes an
+  automation commanding art-on on an off Salon TV used to trigger.
 
 ### Per-viewer language Lovelace card
 
