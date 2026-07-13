@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from datetime import datetime
+import io
 import json
 import logging
 import os
@@ -28,8 +29,34 @@ from typing import Any
 import uuid
 
 import aiohttp
+from PIL import Image
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _map_format_to_wire(pil_format: str | None) -> str | None:
+    """Map a PIL image format to the Samsung wire file_type."""
+    if not pil_format:
+        return None
+    fmt = pil_format.upper()
+    if fmt in ("JPEG", "JPG", "MPO"):
+        return "jpg"
+    if fmt == "PNG":
+        return "png"
+    return fmt.lower()
+
+
+def _detect_wire_type(data: bytes, hint: str | None = None) -> str:
+    """Detect the real image format from bytes; fall back to the caller hint."""
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            wire = _map_format_to_wire(img.format)
+            if wire:
+                return wire
+    except Exception:  # noqa: BLE001 - detection is best-effort; fall back to hint
+        pass
+    normalized = (hint or "png").lower()
+    return "jpg" if normalized in ("jpg", "jpeg", "mpo") else normalized
 
 
 class _DeviceLoggerAdapter(logging.LoggerAdapter):
@@ -1764,8 +1791,7 @@ class SamsungTVAsyncArt:
                 return None
 
         file_size = len(file)
-        if file_type == "jpeg":
-            file_type = "jpg"
+        file_type = _detect_wire_type(file, hint=file_type)
 
         self._log.debug(
             "Art API: Upload - file_size=%d, file_type=%s, matte=%s",
