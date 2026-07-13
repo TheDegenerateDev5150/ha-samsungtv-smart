@@ -28,8 +28,8 @@ import time
 from typing import Any
 import uuid
 
-import aiohttp
 from PIL import Image
+import aiohttp
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -87,6 +87,12 @@ ART_WS_HEARTBEAT = 20
 # unreachable TV never turns into a hot reconnect loop.
 _KEEPALIVE_INTERVAL = 60.0  # idle ping cadence: keep a quiet-but-live WS open
 _MAX_BACKOFF = 60.0  # hard cap on the per-attempt reconnect delay (seconds)
+
+# Circuit breaker: consecutive request timeouts on a live socket before the
+# channel is declared wedged (TV art APP dead while its network stack keeps
+# the WS open and answering PINGs — heartbeat can't catch that) and the socket
+# is force-closed to hand recovery to the auto-reconnect path (issue #153).
+ART_WS_TIMEOUT_TRIP = 3
 
 # Art-app error codes returned in {"event": "error", "error_code": N} replies,
 # per the decompiled firmware (notes/QN55LS03FAFXZA/ART_MODE_DECOMPILED.md).
@@ -187,6 +193,9 @@ class SamsungTVAsyncArt:
         self._max_connection_failures = 3  # Start backoff after 3 failures
         self._backoff_until: float | None = None
         self._last_connection_attempt: float = 0
+        # Circuit breaker: consecutive request timeouts on a live socket
+        # (zombie art app detection — see _note_request_timeout).
+        self._timeout_streak = 0
 
         # Connection lock to prevent concurrent connection attempts (v6.3.5)
         self._connection_lock = asyncio.Lock()
@@ -609,13 +618,9 @@ class SamsungTVAsyncArt:
         for attempt in range(max_attempts):
             await asyncio.sleep(self._backoff_delay(attempt))
             if await self.open():
-                self._log.debug(
-                    "Art API: reconnected after %d attempt(s)", attempt + 1
-                )
+                self._log.debug("Art API: reconnected after %d attempt(s)", attempt + 1)
                 return True
-        self._log.warning(
-            "Art API: reconnect gave up after %d attempts", max_attempts
-        )
+        self._log.warning("Art API: reconnect gave up after %d attempts", max_attempts)
         return False
 
     async def _keepalive(self) -> None:
@@ -824,14 +829,63 @@ class SamsungTVAsyncArt:
                 self._pending_requests[request_key],
                 timeout=timeout,
             )
+            # A real answer proves the art app is alive — reset the breaker.
+            self._timeout_streak = 0
             return result
         except asyncio.TimeoutError:
             self._log.debug("Art API: Timeout waiting for '%s'", request_key)
+            self._note_request_timeout()
             return None
         except asyncio.CancelledError:
+            # Channel teardown cancelled the future — the receive loop is
+            # already handling recovery; not a zombie-app signal.
             return None
         finally:
             self._pending_requests.pop(request_key, None)
+
+    def _note_request_timeout(self) -> None:
+        """Circuit breaker for a zombie art channel (app dead, socket alive).
+
+        The TV's art APP can crash while its network stack keeps the WebSocket
+        open and answering PINGs: the aiohttp heartbeat sees a healthy socket,
+        the receive loop never exits, and every request just times out forever
+        — the integration stays wedged until a reload (issue #153). Detect it
+        by counting CONSECUTIVE request timeouts (any real answer resets the
+        count); at the threshold, force-close the socket so the receive loop
+        exits through its normal unintentional-drop path, which cleans up and
+        starts the bounded-backoff auto-reconnect.
+
+        Occasional single timeouts (e.g. the capability probes on TVs that
+        don't implement a request) don't trip it: interleaved successful
+        requests keep resetting the streak.
+        """
+        self._timeout_streak += 1
+        if self._timeout_streak < ART_WS_TIMEOUT_TRIP:
+            return
+        if not self._connected or not self._ws or self._ws.closed:
+            # Already disconnected — lazy open()/auto-reconnect owns recovery.
+            self._timeout_streak = 0
+            return
+        self._log.warning(
+            "Art API: %d consecutive request timeouts on a live socket — "
+            "art channel looks wedged, forcing reconnect",
+            self._timeout_streak,
+        )
+        self._timeout_streak = 0
+        # Close from a task: _ws.close() makes the receive loop's `async for`
+        # terminate (CLOSED), and its cleanup/auto-reconnect machinery takes
+        # over — one recovery path for every kind of dead channel.
+        asyncio.create_task(self._force_close_ws())
+
+    async def _force_close_ws(self) -> None:
+        """Close the current WS to trigger the receive-loop recovery path."""
+        ws = self._ws
+        if ws is None or ws.closed:
+            return
+        try:
+            await ws.close()
+        except Exception as ex:  # noqa: BLE001 - best effort; loop will notice
+            self._log.debug("Art API: force-close failed: %s", ex)
 
     async def _send_art_request(
         self,
