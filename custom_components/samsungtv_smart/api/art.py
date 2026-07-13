@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from datetime import datetime
+import io
 import json
 import logging
 import os
@@ -28,8 +29,34 @@ from typing import Any
 import uuid
 
 import aiohttp
+from PIL import Image
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _map_format_to_wire(pil_format: str | None) -> str | None:
+    """Map a PIL image format to the Samsung wire file_type."""
+    if not pil_format:
+        return None
+    fmt = pil_format.upper()
+    if fmt in ("JPEG", "JPG", "MPO"):
+        return "jpg"
+    if fmt == "PNG":
+        return "png"
+    return fmt.lower()
+
+
+def _detect_wire_type(data: bytes, hint: str | None = None) -> str:
+    """Detect the real image format from bytes; fall back to the caller hint."""
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            wire = _map_format_to_wire(img.format)
+            if wire:
+                return wire
+    except Exception:  # noqa: BLE001 - detection is best-effort; fall back to hint
+        pass
+    normalized = (hint or "png").lower()
+    return "jpg" if normalized in ("jpg", "jpeg", "mpo") else normalized
 
 
 class _DeviceLoggerAdapter(logging.LoggerAdapter):
@@ -808,6 +835,16 @@ class SamsungTVAsyncArt:
         """Check if currently in art mode."""
         return await self.on() and self.art_mode is True
 
+    async def in_artmode(self) -> bool:
+        """Authoritative art-mode check.
+
+        Trust the Art WebSocket (get_artmode_status), not REST PowerState:
+        2025 Frames report PowerState="standby" while Art Mode is ON.
+        """
+        if await self.on():
+            return True
+        return (await self.get_artmode()) == "on"
+
     # ==================== Art API Methods ====================
 
     async def get_api_version(self) -> str | None:
@@ -1289,8 +1326,8 @@ class SamsungTVAsyncArt:
     async def get_artmode(self) -> str | None:
         """Get current art mode status."""
         data = await self._send_art_request({"request": "get_artmode_status"})
-        if data:
-            value = data.get("value")
+        if data is not None:
+            value = data.get("value", data.get("status", "off"))
             self.art_mode = value == "on"
             return value
         return None
@@ -1395,7 +1432,7 @@ class SamsungTVAsyncArt:
         """Get list of available matte types."""
         data = await self._send_art_request({"request": "get_matte_list"})
         if data:
-            matte_types = data.get("matte_type_list", "[]")
+            matte_types = data.get("matte_list", data.get("matte_type_list", "[]"))
             if isinstance(matte_types, str):
                 try:
                     matte_types = json.loads(matte_types)
@@ -1754,8 +1791,7 @@ class SamsungTVAsyncArt:
                 return None
 
         file_size = len(file)
-        if file_type == "jpeg":
-            file_type = "jpg"
+        file_type = _detect_wire_type(file, hint=file_type)
 
         self._log.debug(
             "Art API: Upload - file_size=%d, file_type=%s, matte=%s",
