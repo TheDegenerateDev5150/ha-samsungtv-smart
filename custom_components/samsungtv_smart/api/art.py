@@ -1299,8 +1299,8 @@ class SamsungTVAsyncArt:
     async def get_artmode(self) -> str | None:
         """Get current art mode status."""
         data = await self._send_art_request({"request": "get_artmode_status"})
-        if data:
-            value = data.get("value")
+        if data is not None:
+            value = data.get("value", data.get("status", "off"))
             self.art_mode = value == "on"
             return value
         return None
