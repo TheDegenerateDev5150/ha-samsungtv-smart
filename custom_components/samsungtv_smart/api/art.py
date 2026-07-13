@@ -1405,7 +1405,7 @@ class SamsungTVAsyncArt:
         """Get list of available matte types."""
         data = await self._send_art_request({"request": "get_matte_list"})
         if data:
-            matte_types = data.get("matte_type_list", "[]")
+            matte_types = data.get("matte_list", data.get("matte_type_list", "[]"))
             if isinstance(matte_types, str):
                 try:
                     matte_types = json.loads(matte_types)
