@@ -79,6 +79,15 @@ MS_CHANNEL_READY_EVENT = "ms.channel.ready"
 # genuinely live-but-quiet channel is not torn down unnecessarily.
 ART_WS_HEARTBEAT = 20
 
+# Auto-reconnect / keepalive (P4). When the Art WS receive loop exits because
+# the TV dropped the socket mid-session (standby, network blip, missed
+# heartbeat PONG on a zombie socket), we schedule a bounded exponential-backoff
+# reconnect so the channel self-heals without waiting for the next lazy
+# _send_art_request or an HA restart. Backoff is CAPPED so a persistently
+# unreachable TV never turns into a hot reconnect loop.
+_KEEPALIVE_INTERVAL = 60.0  # idle ping cadence: keep a quiet-but-live WS open
+_MAX_BACKOFF = 60.0  # hard cap on the per-attempt reconnect delay (seconds)
+
 # Art-app error codes returned in {"event": "error", "error_code": N} replies,
 # per the decompiled firmware (notes/QN55LS03FAFXZA/ART_MODE_DECOMPILED.md).
 # Logged alongside the raw code so e.g. a thumbnail failure reads as
@@ -165,6 +174,13 @@ class SamsungTVAsyncArt:
         self._art_mode_broadcast_waiters: list[asyncio.Future] = []
         self._recv_task: asyncio.Task | None = None
         self._connected = False
+
+        # Auto-reconnect / keepalive tasks (P4). _keepalive_task pings an idle
+        # channel; _reconnect_task runs the backoff loop after an unexpected
+        # drop. Both are cancelled in close() so an intentional teardown never
+        # races against a reconnect that could re-open the socket behind us.
+        self._keepalive_task: asyncio.Task | None = None
+        self._reconnect_task: asyncio.Task | None = None
 
         # Connection failure tracking for exponential backoff (v6.3.5)
         self._connection_failures = 0
@@ -520,6 +536,10 @@ class SamsungTVAsyncArt:
 
             # Start the receive loop
             self._recv_task = asyncio.create_task(self._receive_loop())
+            # Start the idle keepalive so a quiet-but-live channel is not
+            # dropped by the TV. Cancelled in close() and on an unexpected
+            # receive-loop exit (a fresh one starts on the next connect).
+            self._keepalive_task = asyncio.create_task(self._keepalive())
 
             self._log.debug("Art API: Connected and listening on port %d", port)
             return True
@@ -533,6 +553,21 @@ class SamsungTVAsyncArt:
     async def close(self) -> None:
         """Close the connection."""
         self._connected = False
+
+        # Cancel the reconnect loop first: setting _connected = False above
+        # marks this as an intentional teardown, but a reconnect task already
+        # in flight would otherwise re-open the socket right after we close it.
+        if self._reconnect_task and not self._reconnect_task.done():
+            self._reconnect_task.cancel()
+        self._reconnect_task = None
+
+        if self._keepalive_task:
+            self._keepalive_task.cancel()
+            try:
+                await self._keepalive_task
+            except asyncio.CancelledError:
+                pass
+            self._keepalive_task = None
 
         if self._recv_task:
             self._recv_task.cancel()
@@ -556,6 +591,45 @@ class SamsungTVAsyncArt:
         if self._session and not self._external_session:
             await self._session.close()
             self._session = None
+
+    @staticmethod
+    def _backoff_delay(attempt: int) -> float:
+        """Exponential backoff (1, 2, 4, ...) capped at _MAX_BACKOFF seconds."""
+        return float(min(2**attempt, int(_MAX_BACKOFF)))
+
+    async def _reconnect_with_backoff(self, max_attempts: int = 6) -> bool:
+        """Try to reopen the WS with bounded exponential backoff.
+
+        Returns True as soon as open() succeeds. Each attempt sleeps a capped
+        delay first (so we never hammer a TV that's simply off), and open()
+        applies its own 5s rate-limit + failure backoff on top, so this can
+        never become a hot loop. Gives up after max_attempts; the next lazy
+        _send_art_request will retry open() later if the TV comes back.
+        """
+        for attempt in range(max_attempts):
+            await asyncio.sleep(self._backoff_delay(attempt))
+            if await self.open():
+                self._log.debug(
+                    "Art API: reconnected after %d attempt(s)", attempt + 1
+                )
+                return True
+        self._log.warning(
+            "Art API: reconnect gave up after %d attempts", max_attempts
+        )
+        return False
+
+    async def _keepalive(self) -> None:
+        """Emit a periodic ping so an idle Art WS session is not dropped."""
+        try:
+            while self._connected and self._ws and not self._ws.closed:
+                await asyncio.sleep(_KEEPALIVE_INTERVAL)
+                if self._ws and not self._ws.closed:
+                    await self._ws.ping()
+        except asyncio.CancelledError:
+            # Normal on close()/reconnect teardown — exit quietly.
+            pass
+        except Exception:  # noqa: BLE001 - a failed ping must not crash the task
+            self._log.debug("Art API: keepalive ping failed", exc_info=True)
 
     async def _receive_loop(self) -> None:
         """Background task to receive and process WebSocket messages.
@@ -631,6 +705,23 @@ class SamsungTVAsyncArt:
                     if not future.done():
                         future.cancel()
                 self._pending_requests.clear()
+                # Cancel the now-orphaned keepalive (it pinged THIS dead
+                # socket); a fresh one is started by the next successful
+                # connect, so we never end up with two pinging in parallel.
+                if self._keepalive_task and not self._keepalive_task.done():
+                    self._keepalive_task.cancel()
+                self._keepalive_task = None
+                # Schedule a bounded backoff reconnect so the Art channel
+                # self-heals without waiting for the next lazy
+                # _send_art_request or an HA restart. Fire-and-forget, but
+                # tracked on self so close() can cancel it — that prevents an
+                # intentional teardown from racing a reconnect. Skip if one is
+                # already running (a reconnect that opened a socket which then
+                # dropped again handles its own retries).
+                if self._reconnect_task is None or self._reconnect_task.done():
+                    self._reconnect_task = asyncio.create_task(
+                        self._reconnect_with_backoff()
+                    )
 
     async def _process_event(self, event: str, response: dict) -> None:
         """Process incoming WebSocket events."""
