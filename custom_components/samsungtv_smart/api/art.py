@@ -808,6 +808,16 @@ class SamsungTVAsyncArt:
         """Check if currently in art mode."""
         return await self.on() and self.art_mode is True
 
+    async def in_artmode(self) -> bool:
+        """Authoritative art-mode check.
+
+        Trust the Art WebSocket (get_artmode_status), not REST PowerState:
+        2025 Frames report PowerState="standby" while Art Mode is ON.
+        """
+        if await self.on():
+            return True
+        return (await self.get_artmode()) == "on"
+
     # ==================== Art API Methods ====================
 
     async def get_api_version(self) -> str | None:
