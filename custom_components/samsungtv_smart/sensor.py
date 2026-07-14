@@ -144,18 +144,21 @@ def _tv_in_art_mode(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 def _st_child_gate(entity) -> bool:
     """Return True if a per-child ST sensor (illuminance/brightness) may poll now.
 
-    Skips while the TV is off (the local WebSocket is the primary power source
-    and the child readings only feed art-brightness features, which don't apply
-    in standby) and throttles to the configured ST cadence so the child light
-    sensors stop polling every 15 s. ``entity`` must expose ``hass``, ``_entry``
-    and a mutable ``_st_last_poll`` float.
+    The Frame's ambient LIGHT sensor is active independently of TV power — it
+    drives the panel's art auto-dimming and is genuinely useful for room-light
+    automations — and SmartThings keeps publishing it while the TV is off. So
+    do NOT stop polling in standby (that froze the light sensor at its last
+    value / left it unavailable after a restart while the TV was off); instead
+    fall back to the slow OFF keepalive cadence. When the TV is on, throttle to
+    the configured ST cadence rather than the 15 s module scan interval.
+    ``entity`` must expose ``hass``, ``_entry`` and a mutable ``_st_last_poll``.
     """
     if _tv_powered_off(entity.hass, entity._entry):
-        return False
+        interval = ST_POLL_OFF_INTERVAL
+    else:
+        interval = _st_poll_on_interval(entity._entry)
     now = time.monotonic()
-    if now - getattr(entity, "_st_last_poll", 0.0) < _st_poll_on_interval(
-        entity._entry
-    ):
+    if now - getattr(entity, "_st_last_poll", 0.0) < interval:
         return False
     entity._st_last_poll = now
     return True
