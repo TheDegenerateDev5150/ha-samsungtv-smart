@@ -3,6 +3,7 @@
 
 def test_backoff_delay_grows_and_caps(art_client):
     import art
+
     assert art.SamsungTVAsyncArt._backoff_delay(0) == 1.0
     assert art.SamsungTVAsyncArt._backoff_delay(1) == 2.0
     assert art.SamsungTVAsyncArt._backoff_delay(2) == 4.0
@@ -22,6 +23,7 @@ async def test_receive_loop_reconnects_on_close(art_client, monkeypatch):
         return None
 
     import asyncio
+
     monkeypatch.setattr(asyncio, "sleep", no_sleep)
     monkeypatch.setattr(art_client, "open", fake_open)
 
