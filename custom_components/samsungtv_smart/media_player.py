@@ -49,7 +49,7 @@ from homeassistant.const import (
     STATE_ON,
 )
 from homeassistant.core import DOMAIN as HA_DOMAIN
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant, SupportsResponse, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers import config_validation as cv
@@ -165,6 +165,7 @@ from .const import (
     SERVICE_ART_SET_PHOTO_FILTER,
     SERVICE_ART_SET_SLIDESHOW,
     SERVICE_ART_UPLOAD,
+    SERVICE_ART_UPLOAD_BATCH,
     SERVICE_SELECT_PICTURE_MODE,
     SIGNAL_CONFIG_ENTITY,
     ST_POLL_OFF_INTERVAL,
@@ -348,6 +349,19 @@ async def async_setup_entry(
             vol.Optional(ATTR_FILE_TYPE, default="jpg"): cv.string,
         },
         "async_art_upload",
+    )
+    platform.async_register_entity_service(
+        SERVICE_ART_UPLOAD_BATCH,
+        {
+            vol.Required("folder"): cv.string,
+            vol.Optional(ATTR_MATTE_ID, default="shadowbox_polar"): cv.string,
+            vol.Optional("throttle", default=2.0): vol.All(
+                vol.Coerce(float), vol.Range(min=0, max=30)
+            ),
+            vol.Optional("skip_unchanged", default=True): cv.boolean,
+        },
+        "async_art_upload_batch",
+        supports_response=SupportsResponse.OPTIONAL,
     )
     platform.async_register_entity_service(
         SERVICE_ART_DELETE,
@@ -3615,6 +3629,65 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
 
             self._log.debug("Frame Art: Upload traceback: %s", traceback.format_exc())
             return {"error": str(ex)}
+
+    async def async_art_upload_batch(
+        self,
+        folder: str,
+        matte_id: str = "shadowbox_polar",
+        throttle: float = 2.0,
+        skip_unchanged: bool = True,
+    ) -> dict:
+        """Upload every image in a folder, cheaply and idempotently.
+
+        Re-running the same folder uploads only new/changed files (a per-folder
+        sidecar tracks what was uploaded), and uploads are throttled so large
+        batches complete instead of failing partway through.
+        """
+        import os
+
+        self._log.info("Frame Art: batch upload from %s", folder)
+
+        if not await self._ensure_frame_tv_check():
+            return {"error": "Frame TV not supported"}
+        if not await self._ensure_art_mode_ready():
+            return {"error": "Failed to turn on TV"}
+
+        from .api._upload_sidecar import list_images
+
+        is_dir = await self.hass.async_add_executor_job(os.path.isdir, folder)
+        if not is_dir:
+            return {"error": f"Folder not found: {folder}"}
+        files = await self.hass.async_add_executor_job(list_images, folder)
+        if not files:
+            return {"uploaded": [], "skipped": 0, "failed": [], "note": "no images"}
+
+        # Per-folder sidecar (hidden; excluded from the *.jpg gallery filter).
+        sidecar_path = (
+            os.path.join(folder, ".samsungtv_upload.json") if skip_unchanged else None
+        )
+
+        result = await self._art_api.upload_batch(
+            files,
+            matte=matte_id,
+            hass=self.hass,
+            throttle=throttle,
+            sidecar_path=sidecar_path,
+        )
+
+        # Reflect the new art and fetch the (delayed) TV-side thumbnails.
+        if result.get("uploaded"):
+            await self._force_art_coordinator_refresh()
+            for content_id in result["uploaded"]:
+                self.hass.async_create_task(self._retry_new_thumbnail(content_id))
+
+        self._log.info(
+            "Frame Art: batch upload from %s — %d uploaded, %d skipped, %d failed",
+            folder,
+            len(result.get("uploaded", [])),
+            result.get("skipped", 0),
+            len(result.get("failed", [])),
+        )
+        return result
 
     async def _retry_new_thumbnail(self, content_id: str) -> None:
         """Fetch a just-uploaded image's thumbnail once the TV has built it.

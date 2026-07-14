@@ -2075,6 +2075,71 @@ class SamsungTVAsyncArt:
             self._log.debug("Art API: Upload traceback: %s", traceback.format_exc())
             return None
 
+    async def upload_batch(
+        self,
+        files: list[str],
+        *,
+        matte: str = "shadowbox_polar",
+        hass=None,
+        throttle: float = 2.0,
+        sidecar_path: str | None = None,
+    ) -> dict:
+        """Upload a list of image files, cheaply and idempotently.
+
+        - **Skip-unchanged**: with a ``sidecar_path``, files whose mtime is
+          unchanged since the last run are skipped, so re-running a folder
+          uploads 0 files instead of duplicating everything on the TV.
+        - **Throttle**: uploads are spaced ``throttle`` seconds apart. Large
+          batches (>~25) reliably fail partway through without this pacing.
+
+        All filesystem access runs in the executor. Returns
+        ``{"uploaded": [content_id, ...], "skipped": n, "failed": [path, ...]}``.
+        """
+        from . import _upload_sidecar as sc
+
+        sidecar: dict = {}
+        if sidecar_path and hass is not None:
+            sidecar = await hass.async_add_executor_job(sc.load_sidecar, sidecar_path)
+
+        uploaded: list[str] = []
+        failed: list[str] = []
+        skipped = 0
+        did_upload = False
+
+        for path in files:
+            name = os.path.basename(path)
+            mtime = (
+                await hass.async_add_executor_job(sc.safe_mtime, path)
+                if hass is not None
+                else 0.0
+            )
+            if sidecar_path and not sc.needs_upload(name, mtime, sidecar):
+                skipped += 1
+                continue
+
+            # Space out real uploads only (skips are free).
+            if did_upload and throttle > 0:
+                await asyncio.sleep(throttle)
+            did_upload = True
+
+            content_id = await self.upload(path, matte=matte, hass=hass)
+            if content_id:
+                uploaded.append(content_id)
+                sidecar[name] = {"content_id": content_id, "modified": mtime}
+            else:
+                failed.append(path)
+
+        if sidecar_path and hass is not None:
+            await hass.async_add_executor_job(sc.save_sidecar, sidecar_path, sidecar)
+
+        self._log.info(
+            "Art API: batch upload done — %d uploaded, %d skipped, %d failed",
+            len(uploaded),
+            skipped,
+            len(failed),
+        )
+        return {"uploaded": uploaded, "skipped": skipped, "failed": failed}
+
     async def delete(self, content_id: str) -> bool:
         """Delete an uploaded piece of art."""
         return await self.delete_list([content_id])

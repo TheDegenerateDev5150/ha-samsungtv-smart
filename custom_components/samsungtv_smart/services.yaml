@@ -121,6 +121,52 @@ art_upload:
             - "jpg"
             - "png"
 
+art_upload_batch:
+  name: Batch Upload Artwork
+  description: >-
+    Upload every image (jpg/png) in a folder to the Frame TV. Re-running the
+    same folder uploads only new/changed files (a hidden per-folder sidecar
+    tracks what was uploaded), and uploads are throttled so large batches don't
+    fail partway through. Returns the uploaded content_ids (use a response
+    variable).
+  target:
+    entity:
+      integration: samsungtv_smart
+  fields:
+    folder:
+      name: Folder
+      description: Absolute path to the folder of images to upload.
+      required: true
+      example: "/config/www/frame_upload"
+      selector:
+        text:
+    matte_id:
+      name: Matte Style
+      description: "Matte style (format: type_color, e.g., modern_apricot, shadowbox_polar)."
+      required: false
+      default: "shadowbox_polar"
+      example: "modern_apricot"
+      selector:
+        text:
+    throttle:
+      name: Throttle (seconds)
+      description: Delay between uploads. Large batches fail without spacing.
+      required: false
+      default: 2.0
+      selector:
+        number:
+          min: 0
+          max: 30
+          step: 0.5
+          unit_of_measurement: s
+    skip_unchanged:
+      name: Skip unchanged files
+      description: Skip files already uploaded and unchanged since the last run.
+      required: false
+      default: true
+      selector:
+        boolean:
+
 art_delete:
   name: Delete Artwork
   description: Delete an uploaded artwork from the TV. Only user-uploaded content (MY-* or MY_*) can be deleted.
