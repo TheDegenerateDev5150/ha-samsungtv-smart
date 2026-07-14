@@ -28,7 +28,6 @@ import time
 from typing import Any
 import uuid
 
-from PIL import Image
 import aiohttp
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,8 +46,17 @@ def _map_format_to_wire(pil_format: str | None) -> str | None:
 
 
 def _detect_wire_type(data: bytes, hint: str | None = None) -> str:
-    """Detect the real image format from bytes; fall back to the caller hint."""
+    """Detect the real image format from bytes; fall back to the caller hint.
+
+    Pillow is imported lazily here (not at module scope) so a missing or
+    broken Pillow only degrades this best-effort upload-type detection — it
+    must never break importing this module, which would take the whole
+    integration (media_player, remote, buttons, ...) down with it. Every other
+    PIL use in this repo is lazy for the same reason.
+    """
     try:
+        from PIL import Image  # noqa: PLC0415 - lazy: keep PIL out of import path
+
         with Image.open(io.BytesIO(data)) as img:
             wire = _map_format_to_wire(img.format)
             if wire:
