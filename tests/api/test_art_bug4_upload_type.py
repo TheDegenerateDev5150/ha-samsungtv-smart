@@ -1,4 +1,5 @@
 """Bug 4: detect real image format via PIL; send 'jpg' (not 'jpeg') on the wire."""
+
 import io
 
 import pytest
@@ -27,16 +28,19 @@ def _mpo_bytes():
 
 def test_detect_jpeg(art_client):
     import art
+
     assert art._detect_wire_type(_jpeg_bytes(), hint="png") == "jpg"
 
 
 def test_detect_png(art_client):
     import art
+
     assert art._detect_wire_type(_png_bytes(), hint="jpeg") == "png"
 
 
 def test_detect_maps_mpo_and_jpeg_family_to_jpg(art_client):
     import art
+
     # format-string mapping is the load-bearing rule for MPO/JPEG family
     assert art._map_format_to_wire("MPO") == "jpg"
     assert art._map_format_to_wire("JPEG") == "jpg"
@@ -45,5 +49,6 @@ def test_detect_maps_mpo_and_jpeg_family_to_jpg(art_client):
 
 def test_wrong_caller_hint_overridden(art_client):
     import art
+
     # Caller lied and said png, bytes are really JPEG -> detection wins.
     assert art._detect_wire_type(_jpeg_bytes(), hint="png") == "jpg"

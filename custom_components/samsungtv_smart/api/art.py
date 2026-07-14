@@ -2083,17 +2083,24 @@ class SamsungTVAsyncArt:
         hass=None,
         throttle: float = 2.0,
         sidecar_path: str | None = None,
+        dedup_dir: str | None = None,
     ) -> dict:
         """Upload a list of image files, cheaply and idempotently.
 
         - **Skip-unchanged**: with a ``sidecar_path``, files whose mtime is
           unchanged since the last run are skipped, so re-running a folder
           uploads 0 files instead of duplicating everything on the TV.
+        - **Perceptual dedup (opt-in)**: with a ``dedup_dir`` (the already
+          downloaded TV thumbnails), a candidate that is a confident near-match
+          of an image already on the TV is skipped — robust to the TV's
+          re-encode. Strict threshold + "can't fingerprint → never skip" keep
+          false skips (a photo silently never uploading) out.
         - **Throttle**: uploads are spaced ``throttle`` seconds apart. Large
           batches (>~25) reliably fail partway through without this pacing.
 
         All filesystem access runs in the executor. Returns
-        ``{"uploaded": [content_id, ...], "skipped": n, "failed": [path, ...]}``.
+        ``{"uploaded": [...], "skipped": n, "skipped_duplicate": n,
+        "failed": [...]}``.
         """
         from . import _upload_sidecar as sc
 
@@ -2101,9 +2108,19 @@ class SamsungTVAsyncArt:
         if sidecar_path and hass is not None:
             sidecar = await hass.async_add_executor_job(sc.load_sidecar, sidecar_path)
 
+        # Reference fingerprints of what is already on the TV (opt-in). New
+        # uploads are appended so near-identical files within THIS batch are
+        # also caught.
+        ref_hashes: list[int] = []
+        if dedup_dir and hass is not None:
+            ref_hashes = await hass.async_add_executor_job(
+                sc.fingerprint_dir, dedup_dir
+            )
+
         uploaded: list[str] = []
         failed: list[str] = []
         skipped = 0
+        skipped_dup = 0
         did_upload = False
 
         for path in files:
@@ -2117,6 +2134,18 @@ class SamsungTVAsyncArt:
                 skipped += 1
                 continue
 
+            candidate_hash = None
+            if dedup_dir and hass is not None:
+                candidate_hash = await hass.async_add_executor_job(sc.hash_file, path)
+                if sc.is_duplicate_hash(candidate_hash, ref_hashes):
+                    self._log.info(
+                        "Art API: batch upload skipping %s — perceptual "
+                        "duplicate of art already on the TV",
+                        name,
+                    )
+                    skipped_dup += 1
+                    continue
+
             # Space out real uploads only (skips are free).
             if did_upload and throttle > 0:
                 await asyncio.sleep(throttle)
@@ -2126,6 +2155,8 @@ class SamsungTVAsyncArt:
             if content_id:
                 uploaded.append(content_id)
                 sidecar[name] = {"content_id": content_id, "modified": mtime}
+                if candidate_hash is not None:
+                    ref_hashes.append(candidate_hash)  # catch within-batch dupes
             else:
                 failed.append(path)
 
@@ -2133,12 +2164,19 @@ class SamsungTVAsyncArt:
             await hass.async_add_executor_job(sc.save_sidecar, sidecar_path, sidecar)
 
         self._log.info(
-            "Art API: batch upload done — %d uploaded, %d skipped, %d failed",
+            "Art API: batch upload done — %d uploaded, %d skipped, "
+            "%d duplicate, %d failed",
             len(uploaded),
             skipped,
+            skipped_dup,
             len(failed),
         )
-        return {"uploaded": uploaded, "skipped": skipped, "failed": failed}
+        return {
+            "uploaded": uploaded,
+            "skipped": skipped,
+            "skipped_duplicate": skipped_dup,
+            "failed": failed,
+        }
 
     async def delete(self, content_id: str) -> bool:
         """Delete an uploaded piece of art."""

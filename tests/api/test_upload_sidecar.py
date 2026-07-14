@@ -1,4 +1,5 @@
 """Upload sidecar: skip-unchanged bookkeeping for batch uploads."""
+
 import json
 import os
 
@@ -35,3 +36,62 @@ def test_sidecar_roundtrip_and_bad_file(tmp_path):
 
     (tmp_path / "corrupt.json").write_text("{not json")
     assert sc.load_sidecar(str(tmp_path / "corrupt.json")) == {}  # unreadable -> {}
+
+
+def _png(color, size=(64, 64)):
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", size, color).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_dhash_matches_reencoded_same_image():
+    from custom_components.samsungtv_smart.api import _upload_sidecar as sc
+
+    # Same gradient content, different size/format (mimics the TV re-encode).
+    import io
+
+    from PIL import Image, ImageDraw
+
+    def gradient(size):
+        im = Image.new("L", size)
+        d = ImageDraw.Draw(im)
+        for x in range(size[0]):
+            d.line([(x, 0), (x, size[1])], fill=int(255 * x / size[0]))
+        buf = io.BytesIO()
+        im.convert("RGB").save(buf, format="JPEG" if size[0] > 100 else "PNG")
+        return buf.getvalue()
+
+    full = sc.dhash(gradient((400, 300)))
+    thumb = sc.dhash(gradient((160, 120)))
+    assert full is not None and thumb is not None
+    assert sc.is_duplicate_hash(full, [thumb]) is True
+
+
+def test_dhash_distinguishes_different_images():
+    from custom_components.samsungtv_smart.api import _upload_sidecar as sc
+
+    a = sc.dhash(_png((0, 0, 0)))
+    # A very different picture must NOT be treated as a duplicate.
+    import io
+
+    from PIL import Image, ImageDraw
+
+    im = Image.new("RGB", (64, 64), (255, 255, 255))
+    d = ImageDraw.Draw(im)
+    d.rectangle([10, 10, 50, 50], fill=(0, 0, 0))
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    b = sc.dhash(buf.getvalue())
+    assert sc.is_duplicate_hash(a, [b]) is False
+
+
+def test_bad_bytes_never_a_duplicate():
+    from custom_components.samsungtv_smart.api import _upload_sidecar as sc
+
+    assert sc.dhash(b"not an image") is None
+    # None candidate must never be skipped (anti-false-skip).
+    assert sc.is_duplicate_hash(None, [123, 456]) is False

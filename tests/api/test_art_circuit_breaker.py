@@ -5,6 +5,7 @@ its network stack keeps the WebSocket open and answering PINGs, so the
 heartbeat never fires, the receive loop never exits, and every request just
 times out until the integration is reloaded.
 """
+
 import asyncio
 
 

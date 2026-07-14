@@ -359,6 +359,7 @@ async def async_setup_entry(
                 vol.Coerce(float), vol.Range(min=0, max=30)
             ),
             vol.Optional("skip_unchanged", default=True): cv.boolean,
+            vol.Optional("dedup", default=False): cv.boolean,
         },
         "async_art_upload_batch",
         supports_response=SupportsResponse.OPTIONAL,
@@ -3636,16 +3637,20 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         matte_id: str = "shadowbox_polar",
         throttle: float = 2.0,
         skip_unchanged: bool = True,
+        dedup: bool = False,
     ) -> dict:
         """Upload every image in a folder, cheaply and idempotently.
 
         Re-running the same folder uploads only new/changed files (a per-folder
         sidecar tracks what was uploaded), and uploads are throttled so large
-        batches complete instead of failing partway through.
+        batches complete instead of failing partway through. With ``dedup``,
+        also skip a candidate that perceptually matches art already on the TV
+        (compared against the downloaded thumbnails), robust to the TV's
+        re-encode, with a strict anti-false-skip threshold.
         """
         import os
 
-        self._log.info("Frame Art: batch upload from %s", folder)
+        self._log.info("Frame Art: batch upload from %s (dedup=%s)", folder, dedup)
 
         if not await self._ensure_frame_tv_check():
             return {"error": "Frame TV not supported"}
@@ -3665,6 +3670,12 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         sidecar_path = (
             os.path.join(folder, ".samsungtv_upload.json") if skip_unchanged else None
         )
+        # Reference = the personal thumbnails already downloaded from the TV.
+        dedup_dir = None
+        if dedup:
+            dedup_dir = self.hass.config.path(
+                "www", "frame_art", self._entry_id, "personal"
+            )
 
         result = await self._art_api.upload_batch(
             files,
@@ -3672,6 +3683,7 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             hass=self.hass,
             throttle=throttle,
             sidecar_path=sidecar_path,
+            dedup_dir=dedup_dir,
         )
 
         # Reflect the new art and fetch the (delayed) TV-side thumbnails.

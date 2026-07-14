@@ -166,6 +166,16 @@ art_upload_batch:
       default: true
       selector:
         boolean:
+    dedup:
+      name: Skip perceptual duplicates
+      description: >-
+        Also skip a file that visually matches art already on the TV (compared
+        against the downloaded thumbnails). Strict match to avoid false skips.
+        Requires thumbnails to have been downloaded first.
+      required: false
+      default: false
+      selector:
+        boolean:
 
 art_delete:
   name: Delete Artwork

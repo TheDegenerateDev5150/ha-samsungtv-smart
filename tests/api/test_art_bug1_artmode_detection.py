@@ -1,4 +1,5 @@
 """Bug 1: 2025 Frame reports REST PowerState=standby while Art Mode is ON."""
+
 import pytest
 
 

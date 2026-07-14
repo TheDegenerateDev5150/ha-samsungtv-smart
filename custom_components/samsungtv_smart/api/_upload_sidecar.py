@@ -11,11 +11,19 @@ executor (``hass.async_add_executor_job``), never directly on the event loop.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 
 # Image extensions the batch uploader considers.
 IMAGE_EXTS = (".jpg", ".jpeg", ".png")
+
+# Perceptual dedup: a 64-bit dHash (row-difference hash) is robust to the TV's
+# re-encode/resize of an uploaded image, so a candidate can be matched against
+# the thumbnails already downloaded from the TV. The threshold is deliberately
+# STRICT (a few bits) to protect against false skips: re-uploading a duplicate
+# is harmless, but wrongly skipping means a photo silently never reaches the TV.
+DHASH_MAX_DISTANCE = 4
 
 
 def list_images(folder: str) -> list[str]:
@@ -69,3 +77,65 @@ def needs_upload(filename: str, mtime: float, sidecar: dict) -> bool:
     if not entry:
         return True
     return entry.get("modified") != mtime
+
+
+# ── Perceptual dedup (opt-in) ──────────────────────────────────────────────
+
+
+def dhash(data: bytes, size: int = 8) -> int | None:
+    """Return a 64-bit row-difference perceptual hash, or None on any failure.
+
+    None (unreadable bytes, or Pillow absent) means "can't fingerprint" — the
+    caller must treat that as NOT a duplicate, never skipping on uncertainty.
+    Pillow is imported lazily so a missing Pillow can't break the module.
+    """
+    try:
+        from PIL import Image  # noqa: PLC0415 - lazy: keep PIL off the import path
+
+        with Image.open(io.BytesIO(data)) as im:
+            small = im.convert("L").resize((size + 1, size))
+            px = list(small.getdata())
+    except Exception:  # noqa: BLE001 - best effort; None disables the skip
+        return None
+    bits = 0
+    for row in range(size):
+        base = row * (size + 1)
+        for col in range(size):
+            bits = (bits << 1) | (1 if px[base + col] > px[base + col + 1] else 0)
+    return bits
+
+
+def hash_file(path: str) -> int | None:
+    """dHash of a file's contents, or None if it can't be read/fingerprinted."""
+    try:
+        with open(path, "rb") as f:
+            return dhash(f.read())
+    except OSError:
+        return None
+
+
+def fingerprint_dir(folder: str) -> list[int]:
+    """dHash of every readable image directly in ``folder`` (for reference)."""
+    out: list[int] = []
+    for path in list_images(folder):
+        h = hash_file(path)
+        if h is not None:
+            out.append(h)
+    return out
+
+
+def _hamming(a: int, b: int) -> int:
+    return bin(a ^ b).count("1")
+
+
+def is_duplicate_hash(
+    candidate: int | None, refs: list[int], threshold: int = DHASH_MAX_DISTANCE
+) -> bool:
+    """True only if ``candidate`` is confidently a near-duplicate of a ref.
+
+    Returns False when the candidate can't be fingerprinted (``None``) — the
+    anti-false-skip rule: never skip an upload on uncertainty.
+    """
+    if candidate is None:
+        return False
+    return any(_hamming(candidate, r) <= threshold for r in refs)
