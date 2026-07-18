@@ -56,6 +56,11 @@ from .const import (
     AUTH_METHOD_OAUTH,
     AUTH_METHOD_ST_ENTRY,
     CONF_APP_LIST,
+    CONF_ART_IDENTIFY_PERSONAL,
+    CONF_ART_LLM_API_KEY,
+    CONF_ART_LLM_MODEL,
+    CONF_ART_LLM_PROVIDER,
+    CONF_ART_VISION_API_KEY,
     CONF_AUTH_METHOD,
     CONF_CHANNEL_LIST,
     CONF_DEVICE_NAME,
@@ -1192,7 +1197,18 @@ _RELOAD_OPTIONS = (
 # settings: writing them must NOT reload the integration (a reload would tear
 # down the very clients that just learned the fact — and reloads are exactly
 # what the verify-and-fallback logic runs right after a user action).
-_NO_RELOAD_DATA_KEYS = (CONF_ST_PICTURE_MODE_CAPABILITY,)
+_NO_RELOAD_DATA_KEYS = (
+    CONF_ST_PICTURE_MODE_CAPABILITY,
+    # Art-identification config read live by the service/sensor: persisting it
+    # shouldn't tear the integration down. NOTE: CONF_ART_IDENTIFY_ENABLE is
+    # deliberately NOT here — toggling it creates/removes the Art Metadata
+    # sensor, which requires a reload.
+    CONF_ART_IDENTIFY_PERSONAL,
+    CONF_ART_VISION_API_KEY,
+    CONF_ART_LLM_PROVIDER,
+    CONF_ART_LLM_API_KEY,
+    CONF_ART_LLM_MODEL,
+)
 
 
 def _reload_fingerprint(entry: ConfigEntry) -> tuple:

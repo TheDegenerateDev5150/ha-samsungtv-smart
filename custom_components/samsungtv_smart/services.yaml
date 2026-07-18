@@ -60,6 +60,25 @@ art_get_current:
     entity:
       integration: samsungtv_smart
 
+art_identify:
+  name: Identify Artwork
+  description: >-
+    Identify the artwork currently displayed on a Frame TV via reverse image
+    search (Google Vision) confirmed by an LLM. Requires the opt-in Art
+    Identification options to be configured. Returns the metadata (use a
+    response variable). Results are cached per artwork.
+  target:
+    entity:
+      integration: samsungtv_smart
+  fields:
+    force:
+      name: Force refresh
+      description: Ignore the cache and re-run the identification for this artwork.
+      required: false
+      default: false
+      selector:
+        boolean:
+
 art_select_image:
   name: Select Artwork
   description: Select and display a specific piece of artwork.

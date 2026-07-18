@@ -156,6 +156,7 @@ from .const import (
     SERVICE_ART_GET_PHOTO_FILTER_LIST,
     SERVICE_ART_GET_THUMBNAIL,
     SERVICE_ART_GET_THUMBNAILS_BATCH,
+    SERVICE_ART_IDENTIFY,
     SERVICE_ART_SELECT_IMAGE,
     SERVICE_ART_SET_ARTMODE,
     SERVICE_ART_SET_AUTO_ROTATION,
@@ -331,6 +332,12 @@ async def async_setup_entry(
         SERVICE_ART_GET_CURRENT,
         {},
         "async_art_get_current",
+    )
+    platform.async_register_entity_service(
+        SERVICE_ART_IDENTIFY,
+        {vol.Optional("force", default=False): cv.boolean},
+        "async_art_identify",
+        supports_response=SupportsResponse.OPTIONAL,
     )
     platform.async_register_entity_service(
         SERVICE_ART_SELECT_IMAGE,
@@ -3393,6 +3400,31 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
             result = {"service": "art_get_current", "error": str(ex)}
             self._store_art_result(result)
             return result
+
+    async def async_art_identify(self, force: bool = False) -> dict:
+        """Identify the currently displayed artwork (reverse search + LLM).
+
+        Opt-in pipeline (v8.4). Resolves the current content_id, then delegates
+        to the shared entry point (config resolve + cache-first identification
+        on the byte-stable current.jpg). Returns the result dict, usable via a
+        service ``response_variable``. The automatic per-artwork trigger lives
+        on the Art Metadata sensor.
+        """
+        from .art_identify import async_identify_for_entry, get_shared_cache
+
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None:
+            return {"error": "config entry not found"}
+        try:
+            current = await self._art_api.get_current()
+        except Exception as ex:  # noqa: BLE001 — surfaced to the caller
+            return {"error": f"could not read current artwork: {ex}"}
+        content_id = (current or {}).get("content_id")
+
+        cache = get_shared_cache(self.hass, self._entry_id)
+        return await async_identify_for_entry(
+            self.hass, entry, content_id, cache=cache, force=force
+        )
 
     async def _ensure_art_mode_ready(self) -> bool:
         """Ensure TV is on and in Art Mode. Turn it on and activate Art Mode if needed.

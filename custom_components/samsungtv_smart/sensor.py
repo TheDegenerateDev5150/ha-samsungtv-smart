@@ -29,10 +29,12 @@ from homeassistant.const import (
     UnitOfEnergy,
     UnitOfPower,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
@@ -48,7 +50,9 @@ from .api.ipcontrol import (
     SamsungIPControlTransportError,
 )
 from .const import (
+    ART_IDENTIFY_DEBOUNCE,
     CONF_API_KEY,
+    CONF_ART_IDENTIFY_ENABLE,
     CONF_DEVICE_ID,
     CONF_ENABLE_IP_CONTROL,
     CONF_IP_CONTROL_TOKEN,
@@ -140,18 +144,21 @@ def _tv_in_art_mode(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 def _st_child_gate(entity) -> bool:
     """Return True if a per-child ST sensor (illuminance/brightness) may poll now.
 
-    Skips while the TV is off (the local WebSocket is the primary power source
-    and the child readings only feed art-brightness features, which don't apply
-    in standby) and throttles to the configured ST cadence so the child light
-    sensors stop polling every 15 s. ``entity`` must expose ``hass``, ``_entry``
-    and a mutable ``_st_last_poll`` float.
+    The Frame's ambient LIGHT sensor is active independently of TV power — it
+    drives the panel's art auto-dimming and is genuinely useful for room-light
+    automations — and SmartThings keeps publishing it while the TV is off. So
+    do NOT stop polling in standby (that froze the light sensor at its last
+    value / left it unavailable after a restart while the TV was off); instead
+    fall back to the slow OFF keepalive cadence. When the TV is on, throttle to
+    the configured ST cadence rather than the 15 s module scan interval.
+    ``entity`` must expose ``hass``, ``_entry`` and a mutable ``_st_last_poll``.
     """
     if _tv_powered_off(entity.hass, entity._entry):
-        return False
+        interval = ST_POLL_OFF_INTERVAL
+    else:
+        interval = _st_poll_on_interval(entity._entry)
     now = time.monotonic()
-    if now - getattr(entity, "_st_last_poll", 0.0) < _st_poll_on_interval(
-        entity._entry
-    ):
+    if now - getattr(entity, "_st_last_poll", 0.0) < interval:
         return False
     entity._st_last_poll = now
     return True
@@ -251,7 +258,7 @@ SCAN_INTERVAL = timedelta(seconds=15)
 FRAME_ART_SCAN_INTERVAL = timedelta(seconds=5)
 
 
-async def async_setup_entry(
+async def async_setup_entry(  # noqa: C901
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
@@ -376,6 +383,13 @@ async def async_setup_entry(
         entities.append(
             FrameArtSensor(coordinator, entry, art_api, device_name, device_unique_id)
         )
+
+        # Art metadata sensor (opt-in): auto-identifies each artwork.
+        if entry.data.get(CONF_ART_IDENTIFY_ENABLE):
+            entities.append(
+                FrameArtMetadataSensor(entry, device_name, device_unique_id)
+            )
+            _LOGGER.debug("Art metadata sensor created for %s", device_name)
 
         # Add folder sensors for each thumbnail subdirectory.
         # These mirror HA's platform:folder format (file_list, path, bytes…)
@@ -1554,6 +1568,176 @@ class FrameArtCoordinator(DataUpdateCoordinator):
             self.async_set_updated_data(self.data)
 
         return promoted
+
+
+class FrameArtMetadataSensor(SensorEntity):
+    """Auto-identify the artwork on screen and expose its metadata (opt-in).
+
+    Watches the Frame Art sensor's ``current_content_id`` and, on a (debounced)
+    change, runs the reverse-search + LLM pipeline via the shared entry point.
+    State = artwork title (or "Unidentified"); the artist, date, biography,
+    confidence, source and content_id land in the attributes (no 255-char
+    limit). No polling — it is driven purely by the Frame Art sensor's state.
+    """
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:image-frame"
+    _attr_should_poll = False
+
+    def __init__(
+        self, entry: ConfigEntry, device_name: str, device_unique_id: str
+    ) -> None:
+        """Initialize the art metadata sensor."""
+        self._entry_id = entry.entry_id
+        self._device_name = device_name
+        self._device_unique_id = device_unique_id
+        self._attr_unique_id = f"{entry.entry_id}_art_metadata"
+        self._attr_name = "Art Metadata"
+        self._attr_native_value: str | None = None
+        self._attr_extra_state_attributes: dict[str, Any] = {}
+        self._frame_art_entity_id: str | None = None
+        # content_id already acted on (any outcome) — dedup guard so unrelated
+        # Frame-Art attribute churn can't re-trigger the same identification.
+        self._handled_content_id: str | None = None
+        # one-shot retry flag for the startup thumbnail-not-ready race.
+        self._retried_content_id: str | None = None
+        self._pending_content_id: str | None = None
+        self._debounce_unsub = None
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Link this entity to the TV device."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._device_unique_id)},
+            name=self._device_name,
+        )
+
+    def _find_frame_art_entity(self) -> str | None:
+        registry = er.async_get(self.hass)
+        return registry.async_get_entity_id(
+            "sensor", DOMAIN, f"{self._entry_id}_frame_art"
+        )
+
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to the Frame Art sensor and kick an initial identification."""
+        await super().async_added_to_hass()
+        self._frame_art_entity_id = self._find_frame_art_entity()
+        if not self._frame_art_entity_id:
+            return
+        self.async_on_remove(
+            async_track_state_change_event(
+                self.hass, [self._frame_art_entity_id], self._async_frame_art_changed
+            )
+        )
+        state = self.hass.states.get(self._frame_art_entity_id)
+        content_id = state.attributes.get("current_content_id") if state else None
+        if content_id:
+            self._schedule_identify(content_id)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Cancel any pending debounced identification."""
+        if self._debounce_unsub is not None:
+            self._debounce_unsub()
+            self._debounce_unsub = None
+
+    @callback
+    def _async_frame_art_changed(self, event) -> None:
+        new_state = event.data.get("new_state")
+        content_id = (
+            new_state.attributes.get("current_content_id") if new_state else None
+        )
+        if not content_id or content_id == self._handled_content_id:
+            return
+        _LOGGER.debug(
+            "Art metadata: artwork changed to %s (was %s) — scheduling identify",
+            content_id,
+            self._handled_content_id,
+        )
+        self._schedule_identify(content_id)
+
+    @callback
+    def _schedule_identify(self, content_id: str) -> None:
+        """Debounce: coalesce rapid slideshow flips into one identification."""
+        self._pending_content_id = content_id
+        if self._debounce_unsub is not None:
+            self._debounce_unsub()
+        self._debounce_unsub = async_call_later(
+            self.hass, ART_IDENTIFY_DEBOUNCE, self._async_debounce_fire
+        )
+        _LOGGER.debug(
+            "Art metadata: identify for %s debounced %ss",
+            content_id,
+            ART_IDENTIFY_DEBOUNCE,
+        )
+
+    @callback
+    def _async_debounce_fire(self, _now) -> None:
+        self._debounce_unsub = None
+        content_id = self._pending_content_id
+        if content_id:
+            self.hass.async_create_task(self._async_run_identify(content_id))
+
+    async def _async_run_identify(self, content_id: str) -> None:
+        from .art_identify import async_identify_for_entry, get_shared_cache
+
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        if entry is None:
+            return
+        # Mark handled BEFORE the call so a persistent error (bad key, quota)
+        # can't be retried on every unrelated Frame-Art attribute change — that
+        # would hammer the API. Recovery paths: the artwork changing, or the
+        # manual art_identify service with force: true.
+        self._handled_content_id = content_id
+        cache = get_shared_cache(self.hass, self._entry_id)
+        result = await async_identify_for_entry(
+            self.hass, entry, content_id, cache=cache
+        )
+        if result.get("skipped"):
+            _LOGGER.debug("Art metadata skipped: %s", result.get("skipped"))
+            return
+        if result.get("error"):
+            _LOGGER.debug("Art metadata error: %s", result.get("error"))
+            # Startup race: current.jpg not downloaded yet — allow ONE delayed
+            # retry for this artwork (no storm: guarded per content_id).
+            if (
+                "thumbnail not available" in result["error"]
+                and self._retried_content_id != content_id
+            ):
+                self._retried_content_id = content_id
+                self._handled_content_id = None
+                self._schedule_identify(content_id)
+            return
+        identified = bool(result.get("identified"))
+        translations = result.get("translations") or {}
+        # Convenience copy in the HA instance language (fallback English) so a
+        # plain Markdown card works; full 'translations' is exposed too so a
+        # frontend card can pick the viewer's own browser/user language.
+        lang = (self.hass.config.language or "en").split("-")[0]
+        local = translations.get(lang) or translations.get("en") or {}
+        _LOGGER.debug(
+            "Art metadata updated: %s -> identified=%s title=%s source=%s langs=%s",
+            content_id,
+            identified,
+            local.get("title"),
+            result.get("source"),
+            list(translations),
+        )
+        self._attr_native_value = local.get("title") if identified else "Unidentified"
+        self._attr_extra_state_attributes = {
+            "identified": identified,
+            "confidence": result.get("confidence"),
+            "artist": result.get("artist"),
+            "date": result.get("date"),
+            "artist_biography": local.get("artist_biography"),
+            "artwork_description": local.get("artwork_description"),
+            "visual_description": local.get("visual_description"),
+            "matched_candidate": result.get("matched_candidate"),
+            "suggested_search_query": result.get("suggested_search_query"),
+            "source": result.get("source"),
+            "content_id": content_id,
+            "translations": translations,
+        }
+        self.async_write_ha_state()
 
 
 class FrameArtFolderSensor(SensorEntity):
