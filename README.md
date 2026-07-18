@@ -32,6 +32,7 @@ This fork brings improved WebSocket stability, full Samsung Frame TV Art Mode su
   - [Frame Art Services](#frame-art-services)
 - [Frame Art Mode](#frame-art-mode)
   - [Thumbnail Downloads](#thumbnail-downloads)
+  - [Artwork Identification](#artwork-identification)
 - [Automations & Tips](#automations--tips)
 - [Troubleshooting](#troubleshooting)
   - [Integration not appearing in Add Integration](#integration-not-appearing-in-add-integration)
@@ -47,6 +48,8 @@ This fork brings improved WebSocket stability, full Samsung Frame TV Art Mode su
 - SmartThings integration for enhanced status polling (channel info, picture mode, sound mode…)
 - **Three SmartThings authentication methods**: OAuth2, Personal Access Token, or existing ST integration
 - **Samsung Frame TV Art Mode** — full artwork management via a dedicated async API
+- **Self-healing Art WebSocket** — auto-reconnect + a zombie-channel circuit breaker fix the long-standing "Art Mode turns off randomly, needs a reload" problem
+- **Artwork identification (opt-in)** — reverse image search (Google Vision) confirmed by an LLM (Claude / OpenAI / Gemini) shows the title, artist, date and bio of the art on your Frame, in 5 languages
 - New dedicated entities: Art Mode switch and Frame Art sensor
 - **Picture mode control** — `select` entity with dual-strategy (SmartThings API + WS fallback for HDMI inputs)
 - **Improved source detection** — REST fallback for Frame 2024 TVs where `supportedInputSources` returns empty; supports custom source names
@@ -62,7 +65,8 @@ This fork brings improved WebSocket stability, full Samsung Frame TV Art Mode su
 ## Requirements
 
 - Home Assistant **≥ 2025.6.0**
-- Python packages (installed automatically): `websocket-client`, `wakeonlan`, `aiofiles`, `casttube`, `pysmartthings>=6.0`
+- Python packages (installed automatically): `websocket-client`, `wakeonlan`, `aiofiles`, `casttube`, `Pillow`, `pysmartthings>=6.0`
+- For Artwork Identification (optional): a Google Cloud Vision API key and an LLM API key (Anthropic, OpenAI or Gemini)
 - A Samsung Smart TV running **Tizen OS** (2016+), reachable on the local network
 - For SmartThings features: a Samsung account and a SmartThings-registered TV
 
@@ -392,6 +396,8 @@ These services require a Samsung **Frame TV** with Art Mode. They are called on 
 | `samsungtv_smart.art_get_current` | Get info about the currently displayed artwork |
 | `samsungtv_smart.art_select_image` | Display a specific artwork by content ID |
 | `samsungtv_smart.art_upload` | Upload a local image to the TV |
+| `samsungtv_smart.art_upload_batch` | Upload every image in a folder — idempotent re-runs (skips unchanged files) + throttle for large batches + optional perceptual duplicate check |
+| `samsungtv_smart.art_identify` | Identify the current artwork (reverse image search + LLM) and return its metadata. Requires the Art Identification option to be configured |
 | `samsungtv_smart.art_delete` | Delete a user-uploaded artwork (MY-* IDs only) |
 | `samsungtv_smart.art_get_thumbnail` | Download a single artwork thumbnail |
 | `samsungtv_smart.art_get_thumbnails_batch` | Batch-download thumbnails for multiple artworks |
@@ -440,6 +446,19 @@ data:
   category_id: MY-C0002
   favorites_only: false
   force_download: false
+```
+
+**Batch upload a folder (idempotent):**
+
+```yaml
+action: samsungtv_smart.art_upload_batch
+target:
+  entity_id: media_player.samsung_frame
+data:
+  folder: /config/www/frame_upload
+  # skip_unchanged: true   # (default) re-running uploads only new/changed files
+  # throttle: 2.0          # (default) seconds between uploads
+  # dedup: true            # also skip photos already on the TV (needs thumbnails downloaded)
 ```
 
 **Configure slideshow:**
@@ -522,6 +541,33 @@ override.
 fails (a transient TV/WebSocket hiccup), the integration reuses a previously
 downloaded copy of that artwork as `current.jpg` instead of showing an error
 placeholder. (Contributed by @prestonmcafee.)
+
+### Artwork Identification
+
+*Opt-in.* Identify the artwork currently on the Frame and show its **title,
+artist, date and a short bio** — in the viewer's language — via a two-stage,
+cache-first pipeline: a **reverse image search** (Google Cloud Vision) proposes
+candidates from the real web, then an **LLM** (Anthropic / OpenAI / Gemini)
+confirms only a genuine match against the image (so it doesn't hallucinate on
+obscure works, and identifies photographs too).
+
+**Enable it** under **Settings → Devices & Services → your TV → Configure →
+Art Identification**: turn it on, paste a Google Vision API key, pick the LLM
+provider and paste its key (an optional model field defaults sensibly). Keys are
+stored in the config entry, never in YAML.
+
+Once enabled, **`sensor.<tv>_art_metadata`** identifies each artwork
+automatically as it changes (debounced) and exposes the metadata as attributes,
+including a `translations` map with **5 languages** (`en`, `fr`, `es`, `it`,
+`pt-BR`) so each viewer can read it in their own UI language. A ready-to-use
+Lovelace card (plain and per-viewer-language variants) is in
+`RELEASE_NOTES_8.4.0.md`. There is also a manual `samsungtv_smart.art_identify`
+service (returns the metadata; `force: true` bypasses the cache).
+
+Results are cached per artwork (by the stable `SAM-*` Art-Store id, or by image
+content for personal uploads), so identification runs once and is then instant
+and free. Google Vision is free under ~1000 requests/month; the LLM is rarely
+called thanks to the cache. Personal-photo identification is off by default.
 
 ## See Also
 
