@@ -795,6 +795,47 @@ async def _register_gallery_card(hass: HomeAssistant) -> None:
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _register_lovelace_resource)
 
 
+async def _register_bundled_card(hass: HomeAssistant, filename: str) -> None:
+    """Serve a bundled Lovelace card JS and auto-add it as a resource.
+
+    Generic version of the gallery-card registration: registers the static
+    path immediately, then adds the Lovelace resource once HA has started.
+    """
+    js_file = Path(__file__).parent / "www" / filename
+    if not js_file.exists():
+        _LOGGER.warning(
+            "SamsungTV Smart: %s not found at %s, skipping", filename, js_file
+        )
+        return
+
+    url = f"/api/{DOMAIN}/{filename}"
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(url, str(js_file), cache_headers=False)]
+    )
+    _LOGGER.debug("SamsungTV Smart: %s registered at %s", filename, url)
+
+    async def _register_resource(event: Event) -> None:
+        try:
+            lovelace_data = hass.data.get("lovelace")
+            resources = getattr(lovelace_data, "resources", None)
+            if resources is None:
+                return
+            await resources.async_get_info()
+            if url not in [r["url"] for r in resources.async_items()]:
+                await resources.async_create_item({"res_type": "module", "url": url})
+                _LOGGER.info(
+                    "SamsungTV Smart: %s registered as Lovelace resource", filename
+                )
+        except Exception as err:  # pylint: disable=broad-except
+            _LOGGER.warning(
+                "SamsungTV Smart: could not register %s as Lovelace resource: %s",
+                filename,
+                err,
+            )
+
+    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _register_resource)
+
+
 async def get_device_info(hostname: str, session: ClientSession) -> dict:
     """Try retrieve device information"""
     try:
@@ -1067,6 +1108,18 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         hass.http.register_view(SamsungTVThumbnailView(hass))
     except Exception as exc:  # pylint: disable=broad-except
         _LOGGER.warning("Could not register thumbnail view: %s", exc)
+
+    # One-click upload endpoint used by the art-upload card (pick a file on any
+    # device → straight to the Frame, no folder sensor needed).
+    try:
+        from .http_upload import SamsungArtUploadView
+
+        hass.http.register_view(SamsungArtUploadView(hass))
+    except Exception as exc:  # pylint: disable=broad-except
+        _LOGGER.warning("Could not register art upload view: %s", exc)
+
+    # Register the art-upload Lovelace card (served + auto-added as a resource).
+    await _register_bundled_card(hass, "samsung-art-upload-card.js")
 
     return True
 

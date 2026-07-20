@@ -59,6 +59,7 @@ This fork brings improved WebSocket stability, full Samsung Frame TV Art Mode su
 - Channel and app list management
 - Logo fetching for apps and sources
 - `folder-gallery-card` Lovelace card bundled — no manual installation required
+- `samsung-art-upload-card` Lovelace card bundled — pick an image on any device (phone, laptop) and push it straight to the Frame in one tap
 
 ---
 
@@ -331,6 +332,17 @@ Each configured TV creates the following entities:
 | `select.<tv_name>_picture_mode` | Select | Change picture mode (Standard, Movie, etc.) |
 
 > **Note:** The `folder-gallery-card` Lovelace card is bundled with this integration and registered automatically. No manual installation or resource configuration required.
+
+> **One-click Frame upload:** The `samsung-art-upload-card` Lovelace card is also bundled and auto-registered. Add it to any dashboard to pick an image on your phone or laptop and push it straight to The Frame — no pre-placed file, no folder sensor, no coding:
+>
+> ```yaml
+> type: custom:samsung-art-upload-card
+> entity: media_player.samsung_frame   # optional; a picker is shown if omitted
+> matte: shadowbox_polar               # optional default matte
+> title: Upload to The Frame           # optional
+> ```
+>
+> The card POSTs the selected image to the integration's authenticated endpoint (`/api/samsungtv_smart/art_upload`), which reuses the `art_upload` service to display and refresh it on the TV.
 
 ### Media Player Attributes
 
