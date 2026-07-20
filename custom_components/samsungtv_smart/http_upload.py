@@ -10,6 +10,7 @@ temp file → call the service → return the content_id.
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 import tempfile
@@ -25,7 +26,6 @@ _LOGGER = logging.getLogger(__name__)
 
 # Guard against absurd uploads (Frame art is a few MB at most).
 _MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-_ALLOWED_SUFFIX = {"image/jpeg": ".jpg", "image/png": ".png"}
 
 
 class SamsungArtUploadView(HomeAssistantView):
@@ -49,7 +49,6 @@ class SamsungArtUploadView(HomeAssistantView):
         entity_id: str | None = None
         matte_id = "shadowbox_polar"
         file_bytes: bytes | None = None
-        content_type = "image/jpeg"
 
         async for part in reader:
             if part.name == "entity_id":
@@ -57,7 +56,6 @@ class SamsungArtUploadView(HomeAssistantView):
             elif part.name == "matte_id":
                 matte_id = (await part.text()).strip() or matte_id
             elif part.name == "file":
-                content_type = (part.headers.get("Content-Type") or "").lower()
                 chunks = bytearray()
                 while chunk := await part.read_chunk():
                     chunks.extend(chunk)
@@ -75,9 +73,19 @@ class SamsungArtUploadView(HomeAssistantView):
         if state is None or not entity_id.startswith("media_player."):
             return self.json_message(f"Unknown entity {entity_id}", 400)
 
-        suffix = _ALLOWED_SUFFIX.get(content_type, ".jpg")
+        # iPhones hand us HEIC/HEIF (often with a .jpeg name and image/jpeg
+        # type) which The Frame rejects. Transcode anything that is not already
+        # JPEG/PNG to JPEG before handing it to the upload service.
+        try:
+            data, suffix = await self._hass.async_add_executor_job(
+                _prepare_image, file_bytes
+            )
+        except Exception as ex:  # noqa: BLE001 - surface a clean error to the card
+            _LOGGER.exception("Art upload: could not decode image")
+            return self.json_message(f"Unsupported or corrupt image: {ex}", 415)
+
         tmp_path = await self._hass.async_add_executor_job(
-            _write_temp_file, file_bytes, suffix
+            _write_temp_file, data, suffix
         )
         try:
             result = await self._hass.services.async_call(
@@ -98,6 +106,36 @@ class SamsungArtUploadView(HomeAssistantView):
         if isinstance(payload, dict) and payload.get("error"):
             return self.json_message(payload["error"], 502)
         return self.json(payload or {"success": True})
+
+
+def _prepare_image(data: bytes) -> tuple[bytes, str]:
+    """Return (bytes, suffix) the Frame will accept, transcoding if needed.
+
+    JPEG/PNG bytes pass through untouched (matched by magic bytes so a HEIC
+    file misnamed ``.jpeg`` is not trusted). Anything else — notably iPhone
+    HEIC/HEIF — is decoded and re-encoded to JPEG. Pillow (and the optional
+    ``pillow-heif`` opener for HEIC) are imported lazily so a missing codec
+    never breaks importing this module. Runs in an executor (blocking PIL).
+    """
+    if data[:3] == b"\xff\xd8\xff":  # JPEG SOI
+        return data, ".jpg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":  # PNG signature
+        return data, ".png"
+
+    from PIL import Image  # noqa: PLC0415 - lazy: keep PIL out of import path
+
+    try:
+        import pillow_heif  # noqa: PLC0415 - optional HEIC codec
+
+        pillow_heif.register_heif_opener()
+    except Exception:  # noqa: BLE001 - HEIC just stays unsupported without it
+        pass
+
+    with Image.open(io.BytesIO(data)) as img:
+        rgb = img.convert("RGB")
+        out = io.BytesIO()
+        rgb.save(out, format="JPEG", quality=92)
+    return out.getvalue(), ".jpg"
 
 
 def _write_temp_file(data: bytes, suffix: str) -> str:

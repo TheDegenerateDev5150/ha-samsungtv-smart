@@ -125,7 +125,7 @@ class SamsungArtUploadCard extends HTMLElement {
       <ha-card header="${cfg.title || "Upload to The Frame"}">
         <div style="padding:16px;display:flex;flex-direction:column;gap:12px">
           ${picker}
-          <input id="stv-file" type="file" accept="image/jpeg,image/png" />
+          <input id="stv-file" type="file" accept="image/*,.heic,.heif" />
           <button id="stv-btn" disabled
             style="padding:10px;border:none;border-radius:10px;cursor:pointer;
                    background:var(--primary-color);color:var(--text-primary-color);
