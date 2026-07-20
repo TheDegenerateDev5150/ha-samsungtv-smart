@@ -814,7 +814,7 @@ async def _register_bundled_card(hass: HomeAssistant, filename: str) -> None:
     )
     _LOGGER.debug("SamsungTV Smart: %s registered at %s", filename, url)
 
-    async def _register_resource(event: Event) -> None:
+    async def _register_resource(event: Event | None = None) -> None:
         try:
             lovelace_data = hass.data.get("lovelace")
             resources = getattr(lovelace_data, "resources", None)
@@ -833,7 +833,12 @@ async def _register_bundled_card(hass: HomeAssistant, filename: str) -> None:
                 err,
             )
 
-    hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _register_resource)
+    # Register right away if HA is already running (e.g. the integration was
+    # reloaded or set up after startup); otherwise wait for the started event.
+    if hass.is_running:
+        await _register_resource()
+    else:
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _register_resource)
 
 
 async def get_device_info(hostname: str, session: ClientSession) -> dict:
