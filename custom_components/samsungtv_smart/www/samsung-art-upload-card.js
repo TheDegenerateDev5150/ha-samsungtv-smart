@@ -108,7 +108,7 @@ class SamsungArtUploadCard extends HTMLElement {
     const cfg = this._config || {};
     const entities = this._frameEntities();
     const picker =
-      !cfg.entity && entities.length
+      !cfg.entity && entities.length > 1
         ? `<select id="stv-entity" style="width:100%;padding:8px;margin-bottom:8px">
              ${entities
                .map(
