@@ -356,6 +356,7 @@ async def async_setup_entry(
             vol.Optional(ATTR_FILE_TYPE, default="jpg"): cv.string,
         },
         "async_art_upload",
+        supports_response=SupportsResponse.OPTIONAL,
     )
     platform.async_register_entity_service(
         SERVICE_ART_UPLOAD_BATCH,
