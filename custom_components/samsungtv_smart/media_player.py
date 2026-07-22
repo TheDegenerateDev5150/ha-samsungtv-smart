@@ -98,6 +98,7 @@ from .const import (
     ATTR_SHOW,
     ATTR_SHUFFLE,
     ATTR_STATUS,
+    ATTR_TEXT,
     AUTH_METHOD_OAUTH,
     AUTH_METHOD_ST_ENTRY,
     CONF_APP_LAUNCH_METHOD,
@@ -168,6 +169,7 @@ from .const import (
     SERVICE_ART_UPLOAD,
     SERVICE_ART_UPLOAD_BATCH,
     SERVICE_SELECT_PICTURE_MODE,
+    SERVICE_SEND_TEXT,
     SIGNAL_CONFIG_ENTITY,
     ST_POLL_OFF_INTERVAL,
     STD_APP_LIST,
@@ -376,6 +378,11 @@ async def async_setup_entry(
         SERVICE_ART_DELETE,
         {vol.Required(ATTR_CONTENT_ID): cv.string},
         "async_art_delete",
+    )
+    platform.async_register_entity_service(
+        SERVICE_SEND_TEXT,
+        {vol.Required(ATTR_TEXT): cv.string},
+        "async_send_text",
     )
     platform.async_register_entity_service(
         SERVICE_ART_GET_THUMBNAIL,
@@ -2195,6 +2202,18 @@ class SamsungTVDevice(SamsungTVEntity, MediaPlayerEntity):
         return await self.hass.async_add_executor_job(
             self.send_command, payload, command_type, key_press_delay, press
         )
+
+    async def async_send_text(self, text: str) -> None:
+        """Type a text string on the TV (e.g. into a focused search box).
+
+        Uses the Samsung WebSocket ``SendInputString`` mechanism. The TV only
+        accepts it when a text field is currently open and focused on screen
+        (a search box, a login form, ...), otherwise the keystrokes go nowhere.
+        This is the same path used by ``media_player.play_media`` with
+        ``media_content_type: send_text``, exposed as a first-class service so
+        it is discoverable and usable by remote-keyboard cards.
+        """
+        await self.async_send_command(text, CMD_SEND_TEXT)
 
     async def _update_media(self):
         """Update media and logo status."""
