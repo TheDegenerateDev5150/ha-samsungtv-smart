@@ -162,6 +162,16 @@ Or manually add the custom repository in HACS:
 > frequency) once Samsung releases the details. See the
 > [SmartThings blog post](https://blog.smartthings.com/smartthings-updates/a-new-enhanced-smartthings-api-experience/)
 > for the announcement.
+>
+> **How this integration already minimises SmartThings calls.** By design it is
+> **local-first**: control (power, apps, sources, keys, volume, and the entire
+> Frame Art Mode) goes over the local WebSocket / IP Control path, and the
+> SmartThings cloud API is only used as a **secondary enrichment/status layer**
+> (and last resort when local state is unavailable). SmartThings polling is
+> throttled and **configurable from 5 to 30 seconds** (with a separate, longer
+> content-list interval), so you can dial the call volume down to stay within a
+> free/cheap tier. If you set the SmartThings poll interval to 30 s, that's at
+> most ~2 calls/minute while the TV is on, and effectively none while it's off.
 
 Three methods are available. Choose **one**.
 
