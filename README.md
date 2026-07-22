@@ -381,6 +381,7 @@ These are called on the `media_player` entity.
 | `media_player.select_source` | Switch input source or launch an app |
 | `media_player.play_media` | Send a key command or launch a URL |
 | `samsungtv_smart.select_picture_mode` | Change picture mode |
+| `samsungtv_smart.send_text` | Type a text string on the TV (e.g. a search box) |
 | `remote.send_command` | Send raw key commands (via remote entity) |
 
 **Sending key commands via `play_media`:**
@@ -393,6 +394,24 @@ data:
   media_content_type: send_key
   media_content_id: KEY_MUTE
 ```
+
+**Typing text (e.g. into a Netflix/YouTube search box):**
+
+```yaml
+action: samsungtv_smart.send_text
+target:
+  entity_id: media_player.samsung_tv
+data:
+  text: "stranger things"
+```
+
+> The TV only accepts typed text while a **text field is open and focused** on
+> screen (a search box, a login form…). If nothing is focused, the keystrokes
+> are ignored. This is also what powers the keyboard of remote-keyboard cards
+> such as the [Universal Remote Card](https://github.com/Nerwyn/universal-remote-card)
+> (select the **Samsung TV** keyboard platform and set the keyboard ID to your
+> `media_player` entity). Equivalent to `media_player.play_media` with
+> `media_content_type: send_text`.
 
 ---
 

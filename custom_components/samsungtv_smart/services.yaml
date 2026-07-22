@@ -14,6 +14,25 @@ select_picture_mode:
       selector:
         text:
 
+send_text:
+  name: Send Text
+  description: >-
+    Type a text string on the TV, e.g. into a search box (Netflix, YouTube...)
+    or a login field. The TV only accepts the text while a text field is open
+    and focused on screen; otherwise the keystrokes are ignored. Enables
+    remote-keyboard cards (such as the Universal Remote Card) to send text.
+  target:
+    entity:
+      integration: samsungtv_smart
+  fields:
+    text:
+      name: Text
+      description: The text to type on the TV.
+      required: true
+      example: "stranger things"
+      selector:
+        text:
+
 # Frame Art Extended Services
 
 art_get_artmode:
