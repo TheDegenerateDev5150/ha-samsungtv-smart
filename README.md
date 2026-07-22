@@ -391,7 +391,7 @@ These are called on the `media_player` entity.
 | `media_player.select_source` | Switch input source or launch an app |
 | `media_player.play_media` | Send a key command or launch a URL |
 | `samsungtv_smart.select_picture_mode` | Change picture mode |
-| `samsungtv_smart.send_text` | Type a text string on the TV (e.g. a search box) |
+| `samsungtv_smart.send_text` | Type a text string into a native Tizen text field |
 | `remote.send_command` | Send raw key commands (via remote entity) |
 
 **Sending key commands via `play_media`:**
@@ -405,23 +405,35 @@ data:
   media_content_id: KEY_MUTE
 ```
 
-**Typing text (e.g. into a Netflix/YouTube search box):**
+**Typing text into a native Tizen text field:**
 
 ```yaml
 action: samsungtv_smart.send_text
 target:
   entity_id: media_player.samsung_tv
 data:
-  text: "stranger things"
+  text: "hello"
 ```
 
-> The TV only accepts typed text while a **text field is open and focused** on
-> screen (a search box, a login form…). If nothing is focused, the keystrokes
-> are ignored. This is also what powers the keyboard of remote-keyboard cards
-> such as the [Universal Remote Card](https://github.com/Nerwyn/universal-remote-card)
-> (select the **Samsung TV** keyboard platform and set the keyboard ID to your
-> `media_player` entity). Equivalent to `media_player.play_media` with
-> `media_content_type: send_text`.
+> **Scope — read this before expecting it to work in streaming apps.** This uses
+> Samsung's `SendInputString` (the native **Tizen IME**). It only produces text
+> while a **native Tizen text field** is open and focused — for example the
+> **Settings search**, the **built-in web browser's** address bar, a **Wi‑Fi
+> password**, or a login form. In those fields the on-screen Tizen keyboard is
+> visible.
+>
+> It does **not** work inside the search screens of Netflix, YouTube, Apple TV,
+> Prime Video, etc. Those apps draw their **own on-screen character grid** (not a
+> Tizen text field), so there is nothing for `SendInputString` to fill. A
+> physical Bluetooth keyboard works there because the TV OS injects it as HID
+> input at a lower level — but **Samsung's WebSocket remote API exposes no
+> alphabet/HID keys** (only directional keys, ENTER, digits, colored and media
+> keys), so this cannot be emulated over the network. This is a Samsung API
+> limitation, and it's why remote-keyboard cards (e.g. the
+> [Universal Remote Card](https://github.com/Nerwyn/universal-remote-card))
+> can't type into those app grids on Samsung either.
+>
+> Equivalent to `media_player.play_media` with `media_content_type: send_text`.
 
 ---
 
