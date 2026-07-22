@@ -17,10 +17,11 @@ select_picture_mode:
 send_text:
   name: Send Text
   description: >-
-    Type a text string on the TV, e.g. into a search box (Netflix, YouTube...)
-    or a login field. The TV only accepts the text while a text field is open
-    and focused on screen; otherwise the keystrokes are ignored. Enables
-    remote-keyboard cards (such as the Universal Remote Card) to send text.
+    Type a text string into a native Tizen text field (Settings search, the
+    built-in web browser address bar, a Wi-Fi password or login field), where
+    the on-screen Tizen keyboard is shown. It does NOT work in the search
+    screens of streaming apps (Netflix, YouTube, Prime...), which draw their
+    own character grid rather than a Tizen text field.
   target:
     entity:
       integration: samsungtv_smart
